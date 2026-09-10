@@ -1,7 +1,7 @@
 # Security
 
 Report vulnerabilities privately through
-[GitHub private vulnerability reporting](https://github.com/atmin-ca/review/security/advisories/new).
+[GitHub private vulnerability reporting](https://github.com/atmin-inc/review/security/advisories/new).
 Private reporting is enabled for this repository.
 
 Include reproduction steps, affected versions, and the expected security boundary.

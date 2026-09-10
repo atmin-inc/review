@@ -34,12 +34,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/atmin-ca/review.git"
+    "url": "git+https://github.com/atmin-inc/review.git"
   },
   "bugs": {
-    "url": "https://github.com/atmin-ca/review/issues"
+    "url": "https://github.com/atmin-inc/review/issues"
   },
-  "homepage": "https://github.com/atmin-ca/review#readme",
+  "homepage": "https://github.com/atmin-inc/review#readme",
   "publishConfig": {
     "access": "public",
     "tag": "alpha"
