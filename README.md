@@ -6,6 +6,30 @@ alpha: model quality and severity calibration are still being measured.
 
 ## Install the alpha
 
+### Homebrew
+
+On macOS or Linux:
+
+```sh
+brew install atmin-inc/tap/atmin
+gh auth login
+cp "$(brew --prefix atmin-inc/tap/atmin)/share/atmin/profiles/smoke-openrouter-free.json" ./review-profile.json
+```
+
+Set `OPENROUTER_API_KEY` in your environment, then run:
+
+```sh
+atmin review https://github.com/OWNER/REPO/pull/123 \
+  --profile ./review-profile.json --out ./private-review
+```
+
+Homebrew installs Node, Git and the GitHub CLI. The
+[tap documentation](https://github.com/atmin-inc/homebrew-tap) also explains how
+to coexist with another `atmin` installation. All commands below are available
+through `atmin-review` and `atmin-review-github` without the `npx` prefix.
+
+### npm
+
 Requires Node 24 or newer, Git, and an authenticated GitHub CLI (`gh auth login`).
 Install the versioned release in a fresh directory:
 
