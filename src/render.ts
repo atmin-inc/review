@@ -1,4 +1,4 @@
-import type { EvidenceAnchor, Packet, Result } from './contracts.js';
+import type { EvidenceAnchor, Finding, Packet, Result } from './contracts.js';
 import type { Assessment } from './assessment.js';
 
 export function escapeMarkdown(value: string): string {
@@ -12,6 +12,14 @@ function sourceLink(packet: Packet, anchor: EvidenceAnchor): string {
   const line = anchor.line === null ? '' : `#L${anchor.line}`;
   const label = escapeMarkdown(anchor.path.replaceAll('\n', '\\n')) + (anchor.line === null ? '' : `:${anchor.line}`);
   return `[${label}](https://github.com/${packet.repository}/blob/${revision}/${path}${line})`;
+}
+export function renderFinding(packet: Packet, f: Finding): string {
+  const e = escapeMarkdown;
+  return [`#### ${f.priority} · ${e(f.title)}${f.priority === 'P4' ? ' (optional)' : ''}`, '',
+    sourceLink(packet, f.anchor), '',
+    `- Trigger: ${e(f.trigger)}`, `- Consequence: ${e(f.consequence)}`, `- Suggested change: ${e(f.suggestion)}`,
+    '', '<details><summary>Reasoning and evidence</summary>', '', `- Priority rationale: ${e(f.priorityReason)}`, `- Counterevidence checked: ${e(f.counterEvidence)}`,
+    `- Evidence: ${f.evidenceIds.map(e).join(', ')}`, '', '</details>', ''].join('\n');
 }
 export function renderMarkdown(packet: Packet, result: Result, assessment: Assessment): string {
   const e = escapeMarkdown;
@@ -33,11 +41,7 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   if (assessment.scope !== 'complete') lines.push('**Review incomplete:** unresolved work remains; zero findings is not a clean result.', '');
   if (assessment.findings.length) lines.push('### Findings', '');
   for (const f of assessment.findings) {
-    lines.push(`#### ${f.priority} · ${e(f.title)}${f.priority === 'P4' ? ' (optional)' : ''}`, '',
-      sourceLink(packet, f.anchor), '',
-      `- Trigger: ${e(f.trigger)}`, `- Consequence: ${e(f.consequence)}`, `- Suggested change: ${e(f.suggestion)}`,
-      '', '<details><summary>Reasoning and evidence</summary>', '', `- Priority rationale: ${e(f.priorityReason)}`, `- Counterevidence checked: ${e(f.counterEvidence)}`,
-      `- Evidence: ${f.evidenceIds.map(e).join(', ')}`, '', '</details>', '');
+    lines.push(renderFinding(packet, f));
   }
   if (assessment.hiddenOptionalCount) lines.push(`${assessment.hiddenOptionalCount} optional P4 suggestion(s) hidden by target-branch policy.`, '');
   lines.push('<details><summary>Validation and review evidence</summary>', '', '### Required validation', '');

@@ -36,6 +36,16 @@ export function webhook(config: PilotConfig, secret: string, store: Store, githu
       }
       if (payload.repository?.id !== config.repositoryId || payload.repository?.full_name !== config.repository) { reply(202, 'ignored repository'); return; }
       if (store.seen(delivery)) { reply(200, 'duplicate'); return; }
+      if (event === 'check_run' && ['created', 'completed'].includes(payload.action)) {
+        const check = payload.check_run;
+        if (typeof check?.head_sha !== 'string' || !/^[a-f0-9]{40}$/.test(check.head_sha)
+          || !config.trustedChecks?.some(c => c.name === check.name && c.appId === check.app?.id)) {
+          reply(202, 'ignored check'); return;
+        }
+        // The payload wakes reconciliation; only the canonical API can attest CI results.
+        store.refreshValidation(delivery, check.head_sha);
+        reply(202, 'validation refresh recorded'); return;
+      }
       if (event === 'push' && typeof payload.ref === 'string' && payload.ref.startsWith('refs/heads/')) {
         for (const number of store.branchPulls(payload.ref.slice(11))) store.enqueue(`${delivery}-${number}`, number);
         reply(202, 'tracked target branches reconciled'); return;

@@ -96,13 +96,17 @@ required validation checks; a PR cannot weaken its own policy:
 
 ## GitHub App worker
 
+The current source adds automatic CI refresh and inline findings. These changes
+are not yet in the npm/Homebrew `0.1.0-alpha.2` package; use a source checkout
+to operate this worker until the next packaged release.
+
 The worker receives signed webhooks, stores jobs in SQLite, updates one bot
 summary per PR, and publishes an `atmin review` check. Maintainers can comment
 `/atmin review` to rerun. Use a dedicated host user; the pilot worker is not a
 sandbox for executing repository code or an isolation boundary for many tenants.
 
 Register an App with repository Contents read, Pull requests write and Checks
-write. Subscribe to Pull request, Push and Issue comment events. Install it only
+write. Subscribe to Pull request, Push, Issue comment and Check run events. Install it only
 on the intended repository. Set its webhook to your HTTPS proxy's
 `/webhooks/github`, forwarding to the worker on loopback port 8787.
 
@@ -133,9 +137,19 @@ unavailable checks remain unverified. A check on a different merge commit is
 not automatically treated as evidence for the head.
 
 Protect CI workflow changes according to your repository's policy: trusting an
-App and check name is not verification of the workflow's code. This alpha reads
-CI at publication and explicit reconciliation; it does not subscribe to CI
-completion events or poll after publication.
+App and check name is not verification of the workflow's code. Trusted Check run
+creation and completion events refresh the saved report and check, including
+events arriving during publication. Events are only wakeups: results are fetched
+from GitHub again. Stale commits, unrelated checks and duplicate deliveries do
+not start reviews. There is no background polling; use explicit reconciliation
+if GitHub cannot deliver an event.
+
+Findings also appear in one commit-bound advisory review per run, with up to 20
+inline comments. Only anchors present in GitHub's diff are attached; the summary
+retains every visible finding. Optional P4 findings follow target-branch policy.
+CI refreshes reuse the batch; an explicit model rerun creates a new review run.
+Unknown publication outcomes require reconciliation and never blindly repeat a
+POST. Historical inline findings retain their original commits and run identity.
 
 ```sh
 npx atmin-review-github check ./pilot.json
@@ -152,7 +166,7 @@ cancels active work. Failed and cancelled starts count toward the rolling daily
 limit. Stop the service before backups; retain the database and spending receipts.
 Provide snapshot retention and disk limits before widening access. Capture
 fetches repository history, so large repositories can exceed the pilot's capacity.
-No hosted signup, billing, inline comments, or repository execution is included.
+No hosted signup, billing, or repository execution is included.
 
 ## Develop
 

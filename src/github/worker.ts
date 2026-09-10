@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parsePacket, parseResult } from '../contracts.js';
+import { parsePacket, parseResult, type Packet, type Finding } from '../contracts.js';
 import { assess } from '../assessment.js';
 import { compareCurrent } from '../snapshot.js';
 import { renderMarkdown } from '../render.js';
@@ -10,13 +10,17 @@ import type { Runner } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
 import { Store, type Job } from './store.js';
+import { InlineReviews } from './inline.js';
 
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
   private checks: Checks;
+  private inline: InlineReviews;
   private abort: AbortController | undefined;
-  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string) { this.checks = new Checks(store, github); }
+  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string) {
+    this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github);
+  }
   stop(): void { this.abort?.abort(); }
   async tick(): Promise<boolean> {
     const job = this.store.next(this.owner);
@@ -101,6 +105,7 @@ export class Worker {
       job = this.store.get(job.id);
     }
     const saved = JSON.parse(job.report!) as { initial: LivePull; body: string; check?: CheckOutput };
+    let inline: { packet: Packet; findings: Finding[] } | undefined;
     if (!same(saved.initial, await this.github.pull(job.pr))) { this.cancel(job); return; }
     // Reconciliation refreshes CI and formatting from saved source evidence, without inference.
     if (job.artifact && existsSync(join(job.artifact, 'packet.json')) && existsSync(join(job.artifact, 'result.json'))) {
@@ -111,6 +116,7 @@ export class Worker {
         || compareCurrent(packet, live).status !== 'current') { this.cancel(job); return; }
       const ci = await this.github.validation(packet.headSha, packet.policy.requiredChecks);
       const assessment = assess(packet, result, compareCurrent(packet, live), ci);
+      inline = { packet, findings: assessment.findings };
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       writeFileSync(join(job.artifact, 'validation.json'), JSON.stringify({ headSha: packet.headSha, baseSha: packet.baseSha,
         checkedAt: new Date().toISOString(), checks: ci }, null, 2), { mode: 0o600 });
@@ -147,6 +153,14 @@ export class Worker {
     if (!this.store.current(job, this.owner) || !same(saved.initial, after)) {
       // This worker owns publication until the request completes. Do not write after losing its lease.
       if (this.store.owns(this.owner)) await this.github.update(comment, `${marker}\n# atmin review — superseded\n\nPR state changed during publication. Findings for head \`${saved.initial.headSha}\` are historical. Await a review of the current commits.`);
+      this.cancel(job); return;
+    }
+    if (inline) await this.inline.publish(job, inline.packet, inline.findings, async () => {
+      const live = await this.github.pull(job.pr);
+      return this.store.current(job, this.owner) && !signal.aborted && same(saved.initial, live);
+    });
+    if (!this.store.current(job, this.owner) || !same(saved.initial, await this.github.pull(job.pr))) {
+      if (this.store.owns(this.owner)) await this.github.update(comment, `${marker}\n# atmin review — superseded\n\nPR state changed during inline publication. Findings for head \`${saved.initial.headSha}\` are historical. Await a review of the current commits.`);
       this.cancel(job); return;
     }
     await this.checks.publish(job, saved.initial.headSha, { ...(saved.check ?? { status: 'completed', conclusion: 'failure', output: { title: 'Review incomplete', summary: 'Saved review has no passing check assessment. See the PR summary.' } }), details_url: `https://github.com/${this.config.repository}/pull/${job.pr}#issuecomment-${comment}` });

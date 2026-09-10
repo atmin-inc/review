@@ -5,6 +5,8 @@ import type { PullState } from '../snapshot.js';
 
 export interface LivePull extends PullState { draft: boolean; }
 export interface Comment { id: number; body: string; user: { login: string; type: string }; }
+export interface PullFile { filename: string; previous_filename?: string; patch?: string; }
+export interface InlineComment { path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; }
 export interface CheckOutput { status: 'in_progress' | 'completed'; conclusion?: 'success' | 'failure' | 'cancelled'; output: { title: string; summary: string }; details_url?: string; }
 export interface GitHub {
   pull(pr: number): Promise<LivePull>;
@@ -14,6 +16,9 @@ export interface GitHub {
   summary(pr: number, marker: string): Promise<Comment | null>;
   create(pr: number, body: string): Promise<number>;
   update(id: number, body: string): Promise<void>;
+  files(pr: number): Promise<PullFile[]>;
+  findReview(pr: number, head: string, marker: string): Promise<number | null>;
+  createReview(pr: number, head: string, body: string, comments: InlineComment[]): Promise<number>;
   findCheck(head: string, externalId: string): Promise<number | null>;
   createCheck(head: string, externalId: string, output: CheckOutput): Promise<number>;
   updateCheck(id: number, output: CheckOutput): Promise<void>;
@@ -108,6 +113,42 @@ export class AppGitHub implements GitHub {
   }
   async update(id: number, body: string): Promise<void> {
     await this.request(`/repos/${this.config.repository}/issues/comments/${id}`, await this.token(true), 'PATCH', { body });
+  }
+  async files(pr: number): Promise<PullFile[]> {
+    const files: PullFile[] = [];
+    for (let page = 1; page <= 11; page++) {
+      const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}/files?per_page=100&page=${page}`, await this.token(false));
+      if (!Array.isArray(data) || data.some(f => typeof f.filename !== 'string'
+        || (f.patch !== undefined && typeof f.patch !== 'string')
+        || (f.previous_filename !== undefined && typeof f.previous_filename !== 'string'))) throw new Error('Invalid PR file listing');
+      files.push(...data);
+      if (files.length > 1000) throw new Error('Inline file scan limit reached');
+      if (data.length < 100) return files;
+    }
+    throw new Error('Inline file scan limit reached');
+  }
+  async findReview(pr: number, head: string, marker: string): Promise<number | null> {
+    const login = await this.botLogin();
+    let found: number | null = null;
+    for (let page = 1; page <= 20; page++) {
+      const reviews = await this.request(`/repos/${this.config.repository}/pulls/${pr}/reviews?per_page=100&page=${page}`, await this.token(false));
+      if (!Array.isArray(reviews)) throw new Error('Invalid review listing');
+      for (const review of reviews) {
+        if (review.user?.login === login && review.user?.type === 'Bot' && review.commit_id === head
+          && typeof review.body === 'string' && review.body.startsWith(`${marker}\n`)) {
+          if (found !== null || !Number.isSafeInteger(review.id) || review.id < 1 || review.state !== 'COMMENTED') throw new Error('Ambiguous inline review');
+          found = review.id;
+        }
+      }
+      if (reviews.length < 100) return found;
+    }
+    throw new Error('Review scan limit reached');
+  }
+  async createReview(pr: number, head: string, body: string, comments: InlineComment[]): Promise<number> {
+    const review = await this.request(`/repos/${this.config.repository}/pulls/${pr}/reviews`, await this.token(true), 'POST',
+      { commit_id: head, event: 'COMMENT', body, comments });
+    if (!Number.isSafeInteger(review.id) || review.id < 1) throw new Error('Uncertain inline review creation');
+    return review.id;
   }
   async validation(head: string, names: string[]): Promise<ValidationCheck[]> {
     if (!/^[a-f0-9]{40}$/.test(head)) throw new Error('Invalid CI commit');

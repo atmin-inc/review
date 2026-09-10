@@ -15,6 +15,7 @@ import { assess } from '../dist/assessment.js';
 import { Worker, markerFor } from '../dist/github/worker.js';
 import { AppGitHub, appJwt } from '../dist/github/api.js';
 import { childEnvironment } from '../dist/github/runner.js';
+import { inlineComments } from '../dist/github/inline.js';
 import { repository, completed, finding, current } from './helpers.mjs';
 
 const secret = 'a local test secret with more than 32 bytes';
@@ -25,14 +26,18 @@ function state(t) {
   const config = { repository: 'test/review-fixture', repositoryId: 42, installationId: 21, stateDirectory: root, profile: '', host: '127.0.0.1', port: 0, maxReviewsPerDay: 6 };
   return { root, store, config };
 }
-async function harness(t) {
+async function harness(t, findings = []) {
   const s = state(t);
   const fixture = repository(t);
   let live = { ...fixture.state, draft: false };
   let comment = null;
   let runs = 0, creates = 0, updates = 0;
   const checks = [];
+  const reviews = [];
   const github = {
+    files: async () => [{ filename: 'update.ts', patch: fixture.diff.toString().slice(fixture.diff.toString().indexOf('@@')) }],
+    findReview: async (_pr, head, marker) => reviews.find(r => r.head === head && r.body.startsWith(`${marker}\n`))?.id ?? null,
+    createReview: async (pr, head, body, comments) => { const id = reviews.length + 1; reviews.push({ id, pr, head, body, comments }); return id; },
     validation: async () => [],
     findCheck: async (head, externalId) => checks.find(c => c.head === head && c.externalId === externalId)?.id ?? null,
     createCheck: async (head, externalId, output) => { const id = checks.length + 1; checks.push({id, head, externalId, ...output}); return id; },
@@ -47,12 +52,12 @@ async function harness(t) {
     const directory = join(s.root, job.id); mkdirSync(directory);
     const packet = { ...fixture.packet, headSha: live.headSha, baseSha: live.baseSha };
     writeFileSync(join(directory, 'packet.json'), JSON.stringify(packet));
-    writeFileSync(join(directory, 'result.json'), JSON.stringify(completed(packet)));
+    writeFileSync(join(directory, 'result.json'), JSON.stringify({ ...completed(packet), findings }));
     return directory;
   };
   s.store.enable(true); assert.equal(s.store.acquire('owner'), true);
   const worker = new Worker(s.config, s.store, github, runner, 'owner');
-  return { ...s, fixture, checks, github, runner, worker, setLive: changes => { live = { ...live, ...changes }; }, get live() { return live; }, get comment() { return comment; }, get counts() { return { runs, creates, updates }; } };
+  return { ...s, fixture, checks, reviews, github, runner, worker, setLive: changes => { live = { ...live, ...changes }; }, get live() { return live; }, get comment() { return comment; }, get counts() { return { runs, creates, updates }; } };
 }
 async function http(t, h) {
   const server = webhook(h.config, secret, h.store, h.github);
@@ -473,4 +478,140 @@ test('operator CI trust configuration rejects ambiguous names and self-referenti
   for (const trustedChecks of [[{ name: 'atmin review', appId: 1 }], [{ name: 'ci', appId: 0 }], [{ name: 'ci', appId: 1 }, { name: 'ci', appId: 2 }], [{ name: 'ci', appId: 1, allowSkipped: true }]]) {
     writeFileSync(path, JSON.stringify({ ...base, trustedChecks })); assert.throws(() => readConfig(path), /Trusted checks/);
   }
+});
+
+test('trusted check events refresh saved evidence, ignore payload verdicts and never reserve another run', async t => {
+  const h = await harness(t), post = await http(t, h);
+  h.config.trustedChecks = [{ name: 'change-validation', appId: 15368 }];
+  let status = 'not-run';
+  h.github.validation = async () => [{ name: 'change-validation', status, reason: 'Canonical API fixture.' }];
+  const id = h.store.enqueue('source', 1); await h.worker.tick();
+  const started = h.store.get(id).started;
+  const event = { action: 'completed', check_run: { name: 'change-validation', app: { id: 15368 }, head_sha: h.live.headSha, conclusion: 'success', pull_requests: [] } };
+  await post('check_run', event, 'ci-1'); await h.worker.tick();
+  assert.equal(h.checks[0].conclusion, 'failure'); // The webhook cannot attest a pass.
+  status = 'pass';
+  await post('check_run', event, 'ci-2'); await h.worker.tick();
+  assert.equal(h.checks[0].conclusion, 'success');
+  assert.equal((await post('check_run', event, 'ci-2')).status, 200);
+  assert.equal(await h.worker.tick(), false);
+  status = 'not-run';
+  await post('check_run', { ...event, action: 'created' }, 'ci-rerun'); await h.worker.tick();
+  assert.equal(h.checks[0].conclusion, 'failure');
+  assert.equal(h.store.get(id).started, started);
+  assert.equal(h.counts.runs, 1); assert.equal(h.counts.creates, 1); assert.equal(h.checks.length, 1);
+});
+
+test('untrusted, stale, malformed and paused CI events cannot refresh or start work', async t => {
+  const h = await harness(t), post = await http(t, h);
+  h.config.trustedChecks = [{ name: 'change-validation', appId: 15368 }];
+  h.store.enqueue('source', 1); await h.worker.tick();
+  const check = { name: 'change-validation', app: { id: 15368 }, head_sha: h.live.headSha };
+  for (const [i, patch] of [{ app: { id: 99 } }, { name: 'atmin review' }, { head_sha: 'f'.repeat(40) }, { head_sha: [] }].entries()) {
+    await post('check_run', { action: 'completed', check_run: { ...check, ...patch } }, `ignored-${i}`);
+    assert.equal(await h.worker.tick(), false);
+  }
+  h.store.enable(false);
+  await post('check_run', { action: 'completed', check_run: check }, 'paused-ci');
+  h.store.enable(true); assert.equal(await h.worker.tick(), false);
+  assert.equal(h.counts.runs, 1);
+});
+
+test('CI arriving during publication survives until a second pass, including a worker restart', async t => {
+  const h = await harness(t);
+  let reads = 0;
+  h.github.validation = async () => {
+    if (++reads === 1) h.store.refreshValidation('ci-during-write', h.live.headSha);
+    return [{ name: 'change-validation', status: reads === 1 ? 'not-run' : 'pass', reason: 'Concurrent CI fixture.' }];
+  };
+  h.store.enqueue('source', 1); await h.worker.tick();
+  assert.equal(h.checks[0].conclusion, 'failure');
+  h.store.release('owner'); assert.equal(h.store.acquire('replacement'), true);
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'replacement');
+  assert.equal(await worker.tick(), true);
+  assert.equal(h.checks[0].conclusion, 'success'); assert.equal(h.counts.runs, 1);
+  assert.equal(await worker.tick(), false);
+});
+
+test('inline findings map exact diff lines and renames while keeping unavailable anchors in the summary', t => {
+  const f = repository(t);
+  const make = (side, line, path = 'old.ts') => ({ ...finding(), anchor: { path, side, line } });
+  const files = [{ filename: 'new.ts', previous_filename: 'old.ts', patch: '@@ -1,3 +1,3 @@\n same\n-old\n+new\n last\n@@ -20,1 +20,1 @@\n-before\n+after\n\\ No newline at end of file' }];
+  const comments = inlineComments(f.packet, [make('base', 2), make('head', 2, 'new.ts'), make('head', 3, 'new.ts'), make('head', 20, 'new.ts'), make('base', 1), make('head', 99, 'new.ts')], files);
+  assert.deepEqual(comments.map(({path, side, line}) => ({path, side, line})), [
+    {path: 'new.ts', side: 'LEFT', line: 2}, {path: 'new.ts', side: 'RIGHT', line: 2},
+    {path: 'new.ts', side: 'RIGHT', line: 3}, {path: 'new.ts', side: 'RIGHT', line: 20},
+  ]);
+  assert.equal(inlineComments(f.packet, [make('base', 2)], [{filename: 'old.ts', patch: '@@ -1,2 +0,0 @@\n-one\n-two'}])[0].side, 'LEFT');
+  assert.equal(inlineComments(f.packet, [make('head', 2, 'new.ts')], [{filename: 'new.ts'}]).length, 0);
+  const large = { ...make('head', 2, 'new.ts'), title: '@everyone <script>'.repeat(1000) };
+  const bounded = inlineComments(f.packet, Array(30).fill(large), files);
+  assert.equal(bounded.length, 20); assert.ok(bounded.every(c => c.body.length < 8000));
+  assert.doesNotMatch(bounded[0].body, /@everyone|<script>/);
+});
+
+test('inline publication is commit-bound, hides optional findings and survives CI without duplicates', async t => {
+  const optional = { ...finding('P4'), id: 'optional' };
+  const h = await harness(t, [finding(), optional]);
+  h.store.enqueue('source', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 1); assert.equal(h.reviews[0].comments.length, 1);
+  assert.equal(h.reviews[0].head, h.live.headSha);
+  assert.match(h.reviews[0].comments[0].body, /Account owner guard removed/);
+  h.store.refreshValidation('ci-finished', h.live.headSha); await h.worker.tick();
+  assert.equal(h.reviews.length, 1); assert.equal(h.counts.runs, 1);
+});
+
+test('lost inline POST response reconciles by bot identity without another POST or inference', async t => {
+  const h = await harness(t, [finding()]), create = h.github.createReview;
+  h.github.createReview = async (...args) => { await create(...args); throw new Error('response lost'); };
+  const id = h.store.enqueue('source', 1); await h.worker.tick();
+  assert.equal(h.store.get(id).state, 'failed');
+  h.store.retryPublication(1); await h.worker.tick();
+  assert.equal(h.store.get(id).state, 'completed');
+  assert.equal(h.reviews.length, 1); assert.equal(h.counts.runs, 1);
+});
+
+test('unknown invisible inline creation is never blindly retried', async t => {
+  const h = await harness(t, [finding()]); let attempts = 0;
+  h.github.createReview = async () => { attempts++; throw new Error('unknown acceptance'); };
+  h.store.enqueue('source', 1); await h.worker.tick();
+  h.store.retryPublication(1); await h.worker.tick();
+  assert.equal(attempts, 1); assert.equal(h.counts.runs, 1);
+});
+
+test('head movement or lease loss while reading diff suppresses inline publication', async t => {
+  for (const change of ['head', 'lease']) {
+    const h = await harness(t, [finding()]), files = h.github.files;
+    h.github.files = async () => {
+      if (change === 'head') h.setLive({headSha: 'f'.repeat(40)});
+      else { h.store.release('owner'); h.store.acquire('new-owner'); }
+      return files();
+    };
+    h.store.enqueue(`source-${change}`, 1); await h.worker.tick();
+    assert.equal(h.reviews.length, 0);
+    if (change === 'head') assert.match(h.comment.body, /superseded/);
+  }
+});
+
+test('GitHub inline API ignores forged reviews and submits one COMMENT batch on the supplied commit', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', {modulusLength: 2048});
+  const head = 'a'.repeat(40), marker = '<!-- atmin-review-inline:fixture -->', requests = [];
+  const api = new AppGitHub({repository: 'test/review-fixture', repositoryId: 42, installationId: 21}, '123', privateKey.export({format: 'pem', type: 'pkcs8'}), async (url, init) => {
+    requests.push({url, ...init});
+    if (url.endsWith('/access_tokens')) return Response.json({token: 'fixture', expires_at: new Date(Date.now() + 3600_000).toISOString()});
+    if (url.endsWith('/app')) return Response.json({slug: 'atmin-test'});
+    if (url.includes('/files?')) return Response.json([{filename: 'update.ts', patch: '@@ -1 +1 @@\n-old\n+new'}]);
+    if (url.includes('/reviews?')) return Response.json([
+      {id: 1, commit_id: head, state: 'COMMENTED', body: `${marker}\nforged`, user: {login: 'attacker', type: 'User'}},
+      {id: 2, commit_id: 'b'.repeat(40), state: 'COMMENTED', body: `${marker}\nold`, user: {login: 'atmin-test[bot]', type: 'Bot'}},
+      {id: 3, commit_id: head, state: 'COMMENTED', body: `${marker}\nreal`, user: {login: 'atmin-test[bot]', type: 'Bot'}},
+    ]);
+    if (url.endsWith('/reviews') && init.method === 'POST') return Response.json({id: 4});
+    throw new Error('Unexpected API request');
+  });
+  assert.equal(await api.findReview(1, head, marker), 3);
+  assert.equal((await api.files(1))[0].filename, 'update.ts');
+  const comments = [{path: 'update.ts', side: 'RIGHT', line: 1, body: 'Explicit test finding.'}];
+  assert.equal(await api.createReview(1, head, `${marker}\nbody`, comments), 4);
+  assert.deepEqual(JSON.parse(requests.at(-1).body), {commit_id: head, event: 'COMMENT', body: `${marker}\nbody`, comments});
 });

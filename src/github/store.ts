@@ -20,6 +20,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, received INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, pr INTEGER NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL, started INTEGER, artifact TEXT, report TEXT, error TEXT, createStarted INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS pulls (pr INTEGER PRIMARY KEY, desired TEXT NOT NULL, comment INTEGER, baseRef TEXT, active INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS ci_refreshes (job TEXT PRIMARY KEY);
       CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, created);`);
   }
   close(): void { this.db.close(); }
@@ -69,6 +70,15 @@ export class Store {
   next(owner: string): Job | null {
     return this.transaction(() => {
       if (!this.enabled() || !this.owns(owner)) return null;
+      this.db.exec(`DELETE FROM ci_refreshes WHERE job NOT IN (
+        SELECT jobs.id FROM jobs JOIN pulls ON jobs.id=pulls.desired
+        WHERE pulls.active=1 AND jobs.state IN ('running','publishing','completed'))`);
+      // Keep events arriving during publication until a second pass can observe them.
+      const refresh = this.db.prepare("SELECT job FROM ci_refreshes JOIN jobs ON job=jobs.id WHERE jobs.state='completed' LIMIT 1").get();
+      if (refresh) {
+        this.db.prepare('DELETE FROM ci_refreshes WHERE job=?').run(refresh.job!);
+        this.db.prepare("UPDATE jobs SET state='publishing' WHERE id=?").run(refresh.job!);
+      }
       const resume = this.db.prepare("SELECT * FROM jobs WHERE state='publishing' ORDER BY created LIMIT 1").get() as unknown as Job | undefined;
       if (resume) return resume;
       const job = this.db.prepare("SELECT * FROM jobs WHERE state='queued' ORDER BY created LIMIT 1").get() as unknown as Job | undefined;
@@ -110,6 +120,18 @@ export class Store {
     if (!job) return false;
     this.update(job.id, { state: 'publishing', error: null });
     return true;
+  }
+  refreshValidation(delivery: string, head: string): void {
+    this.transaction(() => {
+      if (this.seen(delivery)) return;
+      this.db.prepare('INSERT INTO deliveries VALUES(?,?)').run(delivery, Date.now());
+      if (!this.enabled()) return;
+      // Match our saved snapshot, including fork PRs whose event has no pull_requests array.
+      this.db.prepare(`INSERT OR IGNORE INTO ci_refreshes(job)
+        SELECT jobs.id FROM jobs JOIN pulls ON jobs.id=pulls.desired
+        WHERE pulls.active=1 AND jobs.state IN ('running','publishing','completed')
+          AND json_extract(jobs.report,'$.initial.headSha')=?`).run(head);
+    });
   }
   status(): unknown {
     return { enabled: this.enabled(), jobs: this.db.prepare('SELECT id,pr,state,created,started,error,artifact FROM jobs ORDER BY created DESC LIMIT 30').all() };
