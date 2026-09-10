@@ -1,0 +1,10 @@
+{
+  "provider": "openai",
+  "model": "gpt-5.4-2026-03-05",
+  "maxUsd": 2,
+  "maxTurns": 30,
+  "maxToolCalls": 60,
+  "maxInputTokens": 50000,
+  "maxOutputTokens": 4096,
+  "deadlineMs": 600000
+}

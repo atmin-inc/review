@@ -1,0 +1,47 @@
+{
+  "name": "@atmin/review",
+  "version": "0.1.0-alpha.1",
+  "private": false,
+  "type": "module",
+  "description": "atmin review — immutable review evidence and deterministic verdicts",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "atmin-review": "dist/cli.js",
+    "atmin-review-github": "dist/github/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "openai": "7.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "5.9.3"
+  },
+  "files": [
+    "dist",
+    "profiles",
+    "LICENSE",
+    "NOTICE",
+    "DEPENDENCIES.md"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atmin-ca/review.git"
+  },
+  "bugs": {
+    "url": "https://github.com/atmin-ca/review/issues"
+  },
+  "homepage": "https://github.com/atmin-ca/review#readme",
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  }
+}

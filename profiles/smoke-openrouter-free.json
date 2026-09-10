@@ -1,0 +1,10 @@
+{
+  "provider": "openrouter",
+  "model": "cohere/north-mini-code:free",
+  "maxUsd": 0,
+  "maxTurns": 8,
+  "maxToolCalls": 40,
+  "maxInputTokens": 80000,
+  "maxOutputTokens": 4096,
+  "deadlineMs": 600000
+}
