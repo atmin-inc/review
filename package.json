@@ -1,6 +1,6 @@
 {
-  "name": "@atmin/review",
-  "version": "0.1.0-alpha.1",
+  "name": "@atmin.ai/review",
+  "version": "0.1.0-alpha.2",
   "private": false,
   "type": "module",
   "description": "atmin review — immutable review evidence and deterministic verdicts",

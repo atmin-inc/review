@@ -10,9 +10,9 @@ Requires Node 24 or newer, Git, and an authenticated GitHub CLI (`gh auth login`
 Install the versioned release in a fresh directory:
 
 ```sh
-npm install https://github.com/atmin-ca/review/releases/download/v0.1.0-alpha.1/atmin-review-0.1.0-alpha.1.tgz
+npm install @atmin.ai/review@0.1.0-alpha.2
 npx atmin-review --help
-cp node_modules/@atmin/review/profiles/smoke-openrouter-free.json ./review-profile.json
+cp node_modules/@atmin.ai/review/profiles/smoke-openrouter-free.json ./review-profile.json
 ```
 
 Set `OPENROUTER_API_KEY` in your environment, then review a PR:

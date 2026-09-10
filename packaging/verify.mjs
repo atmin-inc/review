@@ -19,7 +19,7 @@ try {
     assert.ok(/^(dist\/.*\.(js|d\.ts)|profiles\/(smoke-openai|smoke-openrouter-free|baseline-deepseek)\.json|package\.json|README\.md|LICENSE|NOTICE|DEPENDENCIES\.md)$/.test(entry.path), `Unexpected package file: ${entry.path}`);
   }
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', temporary, join(root, 'artifacts', packed.filename)], temporary);
-  const installed = join(temporary, 'node_modules/@atmin/review');
+  const installed = join(temporary, 'node_modules/@atmin.ai/review');
   const cli = join(installed, 'dist/cli.js');
   assert.match(run(process.execPath, [cli, '--help'], temporary), /atmin-review review/);
   assert.match(run(process.execPath, [join(installed, 'dist/github/cli.js'), '--help'], temporary), /reconcile/);
