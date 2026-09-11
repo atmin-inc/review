@@ -35,3 +35,5 @@ The proposal tool requires the exact original text as well as its line range.
 A mismatch is rejected with feedback so a miscounted line cannot silently replace
 unrelated source. A failing isolated patch check suppresses the native GitHub
 apply button; the finding and attempted replacement remain visible for inspection.
+Replacement code is supplied to the proposal tool as an array of lines. The
+controller inserts line breaks without decoding escape sequences inside code.

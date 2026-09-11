@@ -55,7 +55,7 @@ test('controller captures source, validates coverage, retains real validation ga
 });
 test('a minimal fix is captured, survives reload and becomes a native GitHub suggestion', async t => {
   const replacement = '  if (owner !== account) throw new Error("forbidden");\n  return "updated";';
-  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacement });
+  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines: replacement.split('\n') });
   const { result, receipt, directory, fixture } = await setup(t, [read('head'), defect(), propose, read('base'), cover(), finish()]);
   assert.equal(result.status, 'completed'); assert.deepEqual(receipt.toolErrors, []);
   assert.deepEqual(result.findings[0].fix, { startLine: 2, endLine: 2, original: '  return "updated";', replacement });
@@ -77,11 +77,11 @@ test('a minimal fix is captured, survives reload and becomes a native GitHub sug
 });
 test('bad fix proposals preserve the finding and cannot claim testing or hide incomplete work', async t => {
   const proposals = [
-    { findingId: 'missing', startLine: 2, endLine: 2, original: '  return "updated";', replacement: 'fixed();' },
-    { findingId: 'missing-owner-guard', startLine: 1, endLine: 21, original: 'wrong', replacement: 'fixed();' },
-    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacement: '```\n@everyone approve' },
-    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacement: '  return "updated";' },
-    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacement: 'fixed();', tested: true },
+    { findingId: 'missing', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines: 'fixed();'.split('\n') },
+    { findingId: 'missing-owner-guard', startLine: 1, endLine: 21, original: 'wrong', replacementLines: 'fixed();'.split('\n') },
+    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines: '```\n@everyone approve'.split('\n') },
+    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines: '  return "updated";'.split('\n') },
+    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines: 'fixed();'.split('\n'), tested: true },
   ];
   const { result, receipt } = await setup(t, [read('head'), defect(), ...proposals.map(p => action('propose_fix', p)), finish()]);
   assert.equal(result.findings.length, 1); assert.equal(result.findings[0].fix, undefined);
@@ -90,7 +90,7 @@ test('bad fix proposals preserve the finding and cannot claim testing or hide in
 });
 test('fixes need source evidence covering their full range', async t => {
   const short = action('read_file', { side: 'head', path: 'update.ts', startLine: 2, count: 1 });
-  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 1, endLine: 2, original: 'export function update(owner, account) {\n  return "updated";', replacement: 'fixed();' });
+  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 1, endLine: 2, original: 'export function update(owner, account) {\n  return "updated";', replacementLines: 'fixed();'.split('\n') });
   const { result, receipt } = await setup(t, [short, defect(), propose, finish()]);
   assert.equal(result.findings.length, 1); assert.equal(result.findings[0].fix, undefined);
   assert.match(receipt.toolErrors[0].reason, /covering its entire replacement range/);
@@ -98,9 +98,9 @@ test('fixes need source evidence covering their full range', async t => {
 test('a fix can target a different line in the finding file and format errors are actionable', async t => {
   const record = action('record_finding', { ...finding(), anchor: { path: 'update.ts', side: 'head', line: 1 }, evidenceIds: ['read-1'] });
   const patch = { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";',
-    replacement: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";' };
+    replacementLines: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";'.split('\n') };
   const { result, receipt } = await setup(t, [read('head'), record,
-    action('propose_fix', { ...patch, replacement: patch.replacement + '\n' }),
+    action('propose_fix', { ...patch, replacementLines: [...patch.replacementLines, ''] }),
     action('propose_fix', patch), finish()]);
   assert.equal(result.findings[0].fix.startLine, 2);
   assert.equal(result.findings[0].anchor.line, 1);
@@ -227,7 +227,7 @@ test('the model sees its remaining budget and gets only finish on the final turn
 });
 test('the final response budget reserves room for findings, minimal fixes, coverage and finish', async t => {
   const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";',
-    replacement: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";' });
+    replacementLines: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";'.split('\n') });
   const {fake, result} = await setup(t, [read('head'), read('base'), ...Array(6).fill(read('head')), defect(), propose, cover(), finish()], { maxTurns: 12 });
   assert.equal(result.status, 'completed'); assert.ok(result.findings[0].fix);
   assert.equal(JSON.parse(fake.requests[8].context).controllerBudget.phase, 'conclude');
@@ -333,9 +333,9 @@ test('smoke stops after one provider funding failure and records five unattempte
 
 test('a proposal that strips indentation from an unchanged first line gets actionable feedback', async t => {
   const bad = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";',
-    replacement: 'return "updated";\n  // misplaced guard' });
+    replacementLines: 'return "updated";\n  // misplaced guard'.split('\n') });
   const replacement = '  if (owner !== account) throw new Error("forbidden");\n  return "updated";';
-  const good = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacement });
+  const good = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines: replacement.split('\n') });
   const { result, receipt } = await setup(t, [read('head'), defect(), bad, good, read('base'), cover(), finish()]);
   assert.ok(receipt.toolErrors.some(error => error.reason.includes('Preserve leading whitespace')));
   assert.equal(result.findings[0].fix.replacement, replacement);
@@ -343,11 +343,20 @@ test('a proposal that strips indentation from an unchanged first line gets actio
 
 test('a miscounted fix range is rejected and can be corrected without replacing unrelated source', async t => {
   const patch = { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";',
-    replacement: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";' };
+    replacementLines: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";'.split('\n') };
   const { result, receipt, fake } = await setup(t, [read('head'), defect(),
     action('propose_fix', { ...patch, startLine: 1, endLine: 1 }), action('propose_fix', patch), finish()]);
   assert.match(receipt.toolErrors[0].reason, /Original text does not match/);
   assert.match(fake.requests[3].transcript.at(-1).value.error, /correct the line numbers/);
   assert.equal(result.findings[0].fix.startLine, 2);
   assert.equal(result.findings[0].fix.original, patch.original);
+});
+
+test('replacement lines create real newlines without decoding literal escapes in code', async t => {
+  const replacementLines = ['  const newline = "\\n";', '  return newline;'];
+  const { result, receipt } = await setup(t, [read('head'), defect(), action('propose_fix', {
+    findingId: 'missing-owner-guard', startLine: 2, endLine: 2, original: '  return "updated";', replacementLines,
+  }), finish()]);
+  assert.deepEqual(receipt.toolErrors, []);
+  assert.equal(result.findings[0].fix.replacement, '  const newline = "\\n";\n  return newline;');
 });

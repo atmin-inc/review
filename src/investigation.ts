@@ -38,8 +38,8 @@ export const toolDefinitions = [
     parameters: obj({ side, path: str, query: { ...str, maxLength: 200 } }) },
   { name: 'record_finding', description: 'Checkpoint one substantiated defect or opted-in improvement. Cite evidence IDs returned by read_file. Reusing an ID replaces that finding.',
     parameters: findingSchema },
-  { name: 'propose_fix', description: 'Optionally attach a minimal head-side replacement to a recorded finding. First read and cite the entire range. At most 20 original and replacement lines; no trailing newline. Preserve leading whitespace on every line, including the first. Supply original as the exact text you intend to replace, matching the head range including whitespace. The controller verifies it against captured source. This does not execute or test the fix.',
-    parameters: obj({ findingId: str, startLine: fixSchema.properties.startLine, endLine: fixSchema.properties.endLine, original: fixSchema.properties.original, replacement: fixSchema.properties.replacement }) },
+  { name: 'propose_fix', description: 'Optionally attach a minimal head-side replacement to a recorded finding. First read and cite the entire range. At most 20 original and replacement lines. Supply replacementLines as separate code lines; the controller joins them with real line breaks. Use an empty array to delete the range. Do not encode line breaks inside an array item. Preserve leading whitespace on every line, including the first. Supply original as the exact text you intend to replace, matching the head range including whitespace. The controller verifies it against captured source. This does not execute or test the fix.',
+    parameters: obj({ findingId: str, startLine: fixSchema.properties.startLine, endLine: fixSchema.properties.endLine, original: fixSchema.properties.original, replacementLines: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 12000, pattern: '^[^\\r\\n]*$' } } }) },
   { name: 'reviewed_file', description: 'Record reasoned review coverage after reading all of both versions of a changed text file. Reading alone is not review.',
     parameters: obj({ path: str }) },
   { name: 'record_quality', description: 'Checkpoint a subjective assessment of the whole change. Cite captured reads for every assessed criterion; use unknown where evidence is insufficient. This cannot claim test execution or set the final published score.',
@@ -75,7 +75,7 @@ export interface Model {
   toolOutput(id: string, value: unknown): unknown;
 }
 export interface Receipt {
-  schemaVersion: 1; engineVersion: 'r02-16'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
+  schemaVersion: 1; engineVersion: 'r02-17'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
   inputCountKind: 'exact' | 'conservative-estimate';
   providerFailure: ProviderFailure | null;
   rateCard: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; outputPerMillionUsd: number; checkedAt: string; source: string; providerRoute?: string };
@@ -106,7 +106,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
   result.reviewer = { name: 'atmin review', model: profile.model, context: 'independent' };
   result.summary = 'Investigation started but has not finished.';
   result.limitations = ['Source inspection only. Required execution has not run. Source reads do not prove the model’s conclusions.'];
-  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-16', profile, contextHash: null, providerFailure: null,
+  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-17', profile, contextHash: null, providerFailure: null,
     inputCountKind: model.inputCountKind ?? 'exact',
     rateCard: profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
@@ -225,16 +225,17 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
             result.findings = candidate.findings;
             output = { accepted: finding.id };
           } else if (tool.name === 'propose_fix') {
-            const args = data as { findingId: string; startLine: number; endLine: number; original: string; replacement: string };
+            const args = data as { findingId: string; startLine: number; endLine: number; original: string; replacementLines: string[] };
             const finding = result.findings.find(f => f.id === args.findingId);
             if (!finding || args.endLine < args.startLine || args.endLine - args.startLine >= 20) throw new ReviewInputError('Choose a recorded finding and a replacement range of 1–20 lines');
             const { text: original } = sourceSlice(repository, packet.headSha, finding.anchor.path, args.startLine, args.endLine - args.startLine + 1);
             if (args.original !== original) throw new ReviewInputError('Original text does not match the selected head range. Re-read the source and correct the line numbers or original text before proposing again.');
-            const originalFirst = original.split('\n')[0]!, replacementFirst = args.replacement.split('\n')[0]!;
+            const replacement = args.replacementLines.join('\n');
+            const originalFirst = original.split('\n')[0]!, replacementFirst = args.replacementLines[0] ?? '';
             if (/^[ \t]+\S/.test(originalFirst) && replacementFirst === originalFirst.trimStart()) {
               throw new ReviewInputError('Preserve leading whitespace on the unchanged first line of the replacement');
             }
-            const candidate = { ...finding, fix: { startLine: args.startLine, endLine: args.endLine, original, replacement: args.replacement } };
+            const candidate = { ...finding, fix: { startLine: args.startLine, endLine: args.endLine, original, replacement } };
             validateFixSource(repository, packet, candidate);
             const next = { ...result, findings: result.findings.map(f => f.id === candidate.id ? candidate : f) };
             parseResult(next); validateEvidence(packet, next);
