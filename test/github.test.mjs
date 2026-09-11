@@ -674,3 +674,16 @@ test('local execution is scoped by repository and cannot replace trusted CI name
   writeFileSync(path, JSON.stringify({ ...config, trustedChecks: [{ name: 'ownership', appId: 15368 }] }));
   assert.throws(() => readConfig(path), /Local checks/);
 });
+
+test('a failed isolated fix check withholds the apply button while retaining the finding', t => {
+  const f = repository(t), item = { ...finding(), fix: { startLine: 2, endLine: 2,
+    original: '  return "updated";', replacement: '  throw new Error("broken");' } };
+  const files = [{ filename: 'update.ts', patch: f.diff.toString() }];
+  for (const status of ['fail', 'pass', 'not-run']) {
+    const verification = { fixes: [{ findingId: item.id, checks: [{ name: 'ownership', status }] }] };
+    const [comment] = inlineComments(f.packet, [item], files, verification);
+    assert.match(comment.body, /Account owner guard removed/);
+    assert.equal(comment.body.includes('```suggestion'), status !== 'fail');
+    if (status === 'fail') assert.match(comment.body, /Proposed fix withheld/);
+  }
+});

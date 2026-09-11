@@ -52,7 +52,9 @@ output stays out of comments and dashboard responses.
 
 Head results affect required validation. Patch results describe only that
 proposal and never turn a failing head into a passing PR. Reports and native
-GitHub suggestions show the observed check status; passing tests are evidence,
+GitHub suggestions show the observed check status. A recorded failing patch check
+withholds the native apply button while retaining the finding and attempted
+replacement in the full report. Passing tests are evidence,
 not proof of correctness. Missing/unsupported execution never implies a pass.
 The dashboard shows the actual stored code replacement and any matching check
 results. Accepting a suggestion remains a GitHub action that creates a new head.

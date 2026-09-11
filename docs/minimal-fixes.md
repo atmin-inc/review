@@ -30,3 +30,8 @@ suggestions expose GitHub's Apply suggestion and Commit changes controls.
 A live generated ownership fix was published and passed three regression checks
 when applied to its captured head in a disposable checkout. This does not mean
 other generated fixes have been executed or tested.
+
+The proposal tool requires the exact original text as well as its line range.
+A mismatch is rejected with feedback so a miscounted line cannot silently replace
+unrelated source. A failing isolated patch check suppresses the native GitHub
+apply button; the finding and attempted replacement remain visible for inspection.

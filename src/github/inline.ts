@@ -43,7 +43,9 @@ export function inlineComments(packet: Packet, findings: Finding[], files: PullF
         const checks = verification?.fixes.find(f => f.findingId === finding.id)?.checks;
         const execution = checks?.length ? `Isolated fix checks: ${checks.map(c => `${c.name}: ${c.status}`).join(', ')}. Passing checks do not prove correctness.` : 'Source range verified; fix not executed or tested.';
         const suggestion = `\n\n**Proposed minimal fix** · ${execution}\n\n\`\`\`suggestion\n${fix.replacement}\n\`\`\`\n\nUse GitHub’s **Apply suggestion** or add it to a batch. Review the change before committing; the new commit is reviewed through the repository’s normal GitHub triggers and limits.`;
-        if (range.every(line => line && line.hunk === range[0]?.hunk)
+        if (checks?.some(check => check.status === 'fail')) {
+          comment.body += '\n\n**Proposed fix withheld:** an isolated check failed. See the full review for the attempted replacement and check results.';
+        } else if (range.every(line => line && line.hunk === range[0]?.hunk)
           && range.map(line => line!.text).join('\n') === fix.original
           && !file.patch.includes('\\ No newline at end of file')
           && !keys.some(key => proposed.has(key)) && rendered.length + suggestion.length <= 8000) {
