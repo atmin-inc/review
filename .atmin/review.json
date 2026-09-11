@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "rubricVersion": "1",
+  "includeOptional": false,
+  "requiredChecks": ["ownership"],
+  "rating": { "preset": "balanced" }
+}
