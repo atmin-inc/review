@@ -3,6 +3,7 @@
 export function renameAccount(accounts, actorId, accountId, displayName) {
   const account = accounts.get(accountId);
   if (!account) throw new Error('Account not found');
+  if (account.ownerId !== actorId) throw new Error('Forbidden');
   account.displayName = displayName;
   return account;
 }
