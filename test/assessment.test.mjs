@@ -110,7 +110,7 @@ test('strict schema rejects extra score, empty reasoning and false attestation',
   assert.throws(() => parseResult({ ...result, summary: '   ' }), /Invalid result/);
   result.evidence[0].provenance = 'controller-captured';
   assert.throws(() => parseResult(result), /Invalid result/);
-  assert.throws(() => parsePolicy({ ...defaultPolicy(), requiredChecks: [] }), /Invalid policy/);
+  assert.deepEqual(parsePolicy({ ...defaultPolicy(), requiredChecks: [] }).requiredChecks, []);
   assert.throws(() => parsePolicy({ ...defaultPolicy(), blockThrough: 'P0' }), /Invalid policy/);
 });
 
@@ -159,14 +159,31 @@ test('scan-first report separates clean source from missing CI and never hides i
     for (const freshness of ['current', 'superseded', 'unverified']) {
       const result = completed(packet); result.status = status; result.validation = [];
       const report = renderMarkdown(packet, result, assess(packet, result, { ...current(), status: freshness }));
-      assert.equal(report.startsWith('## ✅ No issues found'), status === 'completed' && freshness === 'current');
-      assert.match(report, /Required validation: ⏳ Not verified/);
-      assert.match(report, /<details><summary>Validation and review evidence/);
+      assert.match(report, /^## <img[^>]+> Not rated/);
+      assert.ok(!report.includes('/review-icons/5.svg'));
+      assert.match(report, /Required checks not verified/);
+      assert.match(report, /<details><summary>Run summary and checks/);
       assert.equal((report.match(/<details>/g) ?? []).length, (report.match(/<\/details>/g) ?? []).length);
     }
   }
   const result = completed(packet); result.findings = [finding('P1')];
   const report = renderMarkdown(packet, result, assess(packet, result, current()));
-  assert.match(report, /^## 🔴 Changes needed/);
-  assert.ok(report.indexOf('Suggested change') < report.indexOf('<details>'));
+  assert.match(report, /^## <img[^>]+> Not rated — 1 fix before merge/);
+  assert.ok(report.indexOf('**Fix:**') < report.indexOf('<details>'));
+});
+
+
+test('report links to the owned dashboard and keeps the model summary below actionable findings', t => {
+  const { packet } = repository(t), result = completed(packet);
+  result.findings = [finding('P2')];
+  const assessment = assess(packet, result, current());
+  const url = 'https://review.atmin.ai/?repository=42#review/abc-123';
+  const report = renderMarkdown(packet, result, assessment, url);
+  assert.ok(report.includes(`[View full review on atmin](${url})`));
+  assert.ok(report.includes('| P0 | P1 | P2 | P3 | P4 |'));
+  assert.ok(report.includes('| 0 | 0 | **1** | 0 | 0 |'));
+  assert.ok(report.indexOf('**Fix:**') < report.indexOf('<summary>Review details'));
+  assert.ok(report.indexOf('<summary>Run summary and checks') < report.indexOf(result.summary));
+  assert.ok(!renderMarkdown(packet, result, assessment, 'javascript:alert(1)').includes('javascript:'));
+  assert.ok(renderMarkdown(packet, result, assessment, 'https://reviews.example.test/?repository=42#review/abc').includes('[View full review on atmin](https://reviews.example.test/'));
 });

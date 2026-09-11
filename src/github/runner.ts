@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parsePacket } from '../contracts.js';
 import { readProfile } from '../run.js';
 import type { PilotConfig } from './config.js';
 import type { GitHub } from './api.js';
+import type { ReviewSettings } from './settings.js';
 import type { Job } from './store.js';
 
 export type Runner = (job: Job, signal: AbortSignal) => Promise<string>;
@@ -34,20 +36,29 @@ export function child(args: string[], env: NodeJS.ProcessEnv, signal: AbortSigna
     proc.once('exit', code => { cleanup(); if (code === 0 && !stopped) resolve(); else reject(new Error('Review child interrupted or failed')); });
   });
 }
-export function engineRunner(config: PilotConfig, github: GitHub): Runner {
+export function engineRunner(config: PilotConfig, github: GitHub, settings?: ReviewSettings): Runner {
   const runs = join(config.stateDirectory, 'runs');
   mkdirSync(runs, { recursive: true, mode: 0o700 });
   return async (job, signal) => {
     const directory = join(runs, job.id);
+    const profile = settings?.profile() ?? readProfile(config.profile);
     const home = mkdtempSync(join(config.stateDirectory, 'job-home-'));
     try {
       const token = await github.readToken();
       await child(['capture', `https://github.com/${config.repository}/pull/${job.pr}`, directory], childEnvironment(home, { GH_TOKEN: token }), signal, 130_000);
-      const profile = readProfile(config.profile);
+      const profilePath = join(directory, 'profile.json');
+      writeFileSync(profilePath, JSON.stringify(profile), { mode: 0o600, flag: 'wx' });
       const keyName = profile.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
       const key = process.env[keyName];
       if (!key) throw new Error('Configured model credential unavailable');
-      await child(['investigate', directory, config.profile], childEnvironment(home, { [keyName]: key }), signal, profile.deadlineMs + 30_000);
+      await child(['investigate', directory, profilePath], childEnvironment(home, { [keyName]: key }), signal, profile.deadlineMs + 30_000);
+      const packet = parsePacket(JSON.parse(readFileSync(join(directory, 'packet.json'), 'utf8')));
+      const checks = config.localChecks?.filter(check => check.repositoryId === config.repositoryId && packet.policy.requiredChecks.includes(check.name)) ?? [];
+      if (checks.length) {
+        const checksPath = join(directory, 'local-checks.json');
+        writeFileSync(checksPath, JSON.stringify(checks), { mode: 0o600, flag: 'wx' });
+        await child(['verify', directory, checksPath], childEnvironment(home, {}), signal, checks.length * 120_000 + 30_000);
+      }
       return directory;
     } finally { rmSync(home, { recursive: true, force: true }); }
   };

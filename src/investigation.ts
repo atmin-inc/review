@@ -1,9 +1,10 @@
 import { Ajv } from 'ajv';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { ReviewInputError, text as str, initialResult, parseResult, resultSchema, type Packet, type Result, type Finding } from './contracts.js';
+import { ReviewInputError, text as str, fixSchema, findingSchema, qualitySchema, initialResult, parseResult, type Packet, type Result, type Finding, type QualityReview } from './contracts.js';
 import { validateEvidence } from './assessment.js';
-import { hash, sourcePaths, sourceSlice, sourceText, validateAnchor, withGitDeadline } from './snapshot.js';
+import { hash, sourcePaths, sourceSlice, sourceText, validateAnchor, validateFixSource, validateConventionRules, withGitDeadline } from './snapshot.js';
+import { resolveRatingPolicy } from './rating.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 
 interface Limits {
@@ -36,9 +37,13 @@ export const toolDefinitions = [
   { name: 'search', description: 'Find a literal string in a single immutable text file, returning up to 50 matching line numbers. Read matching ranges to obtain evidence.',
     parameters: obj({ side, path: str, query: { ...str, maxLength: 200 } }) },
   { name: 'record_finding', description: 'Checkpoint one substantiated defect or opted-in improvement. Cite evidence IDs returned by read_file. Reusing an ID replaces that finding.',
-    parameters: resultSchema.properties.findings.items },
+    parameters: findingSchema },
+  { name: 'propose_fix', description: 'Optionally attach a minimal head-side replacement to a recorded finding. First read and cite the entire range. At most 20 original and replacement lines; no trailing newline. Preserve leading whitespace on every line, including the first. The controller captures original text. This does not execute or test the fix.',
+    parameters: obj({ findingId: str, startLine: fixSchema.properties.startLine, endLine: fixSchema.properties.endLine, replacement: fixSchema.properties.replacement }) },
   { name: 'reviewed_file', description: 'Record reasoned review coverage after reading all of both versions of a changed text file. Reading alone is not review.',
     parameters: obj({ path: str }) },
+  { name: 'record_quality', description: 'Checkpoint a subjective assessment of the whole change. Cite captured reads for every assessed criterion; use unknown where evidence is insufficient. This cannot claim test execution or set the final published score.',
+    parameters: qualitySchema },
   { name: 'finish', description: 'Finish investigation. Set complete=false for material unresolved questions, and explain them in limitations. Required execution remains not-run.',
     parameters: obj({ summary: str, complete: { type: 'boolean' }, limitations: { type: 'array', items: str, maxItems: 50 } }) },
 ];
@@ -51,7 +56,9 @@ P2: meaningful localized functional defect with a plausible concrete trigger; fi
 P3: established minor low-impact defect; nonblocking follow-up.
 P4: optional behavior-preserving improvement, no established defect; report only when policy.includeOptional is true.
 Do not downgrade an uncertain severe suspicion to P3; investigate it or disclose it as an unresolved limitation. Missing tests are validation gaps, not automatically defects. Do not flag style preferences or pre-existing problems. Explain trigger, consequence, priority rationale and actual counterevidence inspected. One stable ID per root cause; update rather than duplicate.
-Only controller read_file IDs may support findings. Your reasoning is a judgment, not execution proof. There is no shell or test tool. Never claim a test ran. Record findings as soon as substantiated so interruption preserves them. Call reviewed_file after reasoning through the full changed file and its dependencies. Call finish with an honest summary and limitations. Use tools, not a free-text final response. No numeric average and no merge approval.`;
+Only controller read_file IDs may support findings. Your reasoning is a judgment, not execution proof. There is no shell or test tool. Never claim a test ran. Record findings as soon as substantiated so interruption preserves them. When evidence supports a complete localized fix, use propose_fix afterward. Severity does not imply confidence in a fix: P0–P4 may receive a fix, but never guess. Replace the smallest complete line range in the finding file, preserving unrelated behavior and formatting. The replacement range can differ from the finding anchor line; do not include unrelated lines merely to encompass that anchor. Inspect callers and tests before proposing. No partial multi-file fixes, new dependencies, unrelated cleanup, or invented APIs. Omit a fix when uncertain or when coordinated edits are required. No fix is executed or tested here. Call reviewed_file after reasoning through the full changed file and its dependencies. Call finish with an honest summary and limitations. Use tools, not a free-text final response. No numeric average and no merge approval.
+Before finish, use record_quality to assess the whole change, separately from defect severity. Score anchors: 5 strong net-positive change ready on available evidence; 4 good change with a minor actionable concern; 3 useful direction needing meaningful changes; 2 substantial problems undermine the change; 1 fundamentally unsafe or incorrect. This is subjective, not certainty. Do not mechanically translate priorities to scores; the controller enforces serious-defect caps. Never reduce the quality score merely for optional P4 preferences or a missing proposed patch. Each score below 5 needs a concrete actionable concern in its rationale, not personal taste.
+Assess codebaseFit (architecture, repository patterns and conventions), simplicity (complexity justified by the change), verification (evidence appropriate to this change and repository, never a blanket test count), and documentedConventions. Cite read_file evidence for every satisfied or concern judgment; unknown needs an explanation and prevents a rating when the policy requires that criterion. Inferred stylistic preferences alone must not lower the rating or become convention violations. For a documentedConventions concern, quote the exact explicit rule in conventionRules with its target-branch path, plus source reads showing the violation. Target guidance above can supply those rule quotes. If there are no explicit conventions, say so; assess existing patterns without inventing requirements. Check types, lint configuration, existing tests, and relevant failure paths as appropriate. Source inspection can judge testing adequacy but cannot establish that checks passed. A preference to avoid tests does not excuse a concretely unverified risky change. Always preserve findings regardless of the chosen rating preset. Correctness-first ignores the subjective quality score and rates on P0–P2 unless its perfectRequires overrides require more.`;
 
 export interface TurnInput { instructions: string; context: string; transcript: unknown[]; tools: typeof toolDefinitions }
 export interface ModelReply {
@@ -68,7 +75,7 @@ export interface Model {
   toolOutput(id: string, value: unknown): unknown;
 }
 export interface Receipt {
-  schemaVersion: 1; engineVersion: 'r02-10'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
+  schemaVersion: 1; engineVersion: 'r02-15'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
   inputCountKind: 'exact' | 'conservative-estimate';
   providerFailure: ProviderFailure | null;
   rateCard: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; outputPerMillionUsd: number; checkedAt: string; source: string; providerRoute?: string };
@@ -99,7 +106,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
   result.reviewer = { name: 'atmin review', model: profile.model, context: 'independent' };
   result.summary = 'Investigation started but has not finished.';
   result.limitations = ['Source inspection only. Required execution has not run. Source reads do not prove the model’s conclusions.'];
-  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-10', profile, contextHash: null, providerFailure: null,
+  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-15', profile, contextHash: null, providerFailure: null,
     inputCountKind: model.inputCountKind ?? 'exact',
     rateCard: profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
@@ -126,7 +133,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
     }
     const diff = readFileSync(join(directory, 'change.diff'));
     if (diff.length > 128000) throw new Error('Diff exceeds 128 KB investigation limit; review remains partial');
-    const context = { packet, targetGuidance: guidance, diff: diff.toString('utf8') };
+    const context = { packet, ratingPolicy: resolveRatingPolicy(packet.policy.rating), targetGuidance: guidance, diff: diff.toString('utf8') };
     receipt.contextHash = hash(JSON.stringify(context)); save();
     const transcript: unknown[] = [];
     let interruptionRetried = false;
@@ -136,9 +143,15 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
       guard();
       // A retry replays its original budget notice and tool set unchanged.
       const remainingResponses = profile.maxTurns - turn + (receipt.calls.at(-1)?.status === 'interrupted' ? 1 : 0);
+      const concluding = remainingResponses <= Math.min(6, Math.floor(profile.maxTurns / 3));
+      const availableTools = remainingResponses === 1 ? toolDefinitions.filter(tool => tool.name === 'finish')
+        : concluding ? toolDefinitions.filter(tool => !['list_files', 'search'].includes(tool.name)) : toolDefinitions;
       const input = { instructions, context: JSON.stringify({ ...context, controllerBudget: {
-        remainingResponses, instruction: 'Prioritize changed code and relevant callers. Record reviewed_file coverage as you go. Reserve the last response for finish; disclose unresolved questions with complete=false.',
-      } }), transcript, tools: remainingResponses === 1 ? toolDefinitions.filter(tool => tool.name === 'finish') : toolDefinitions };
+        remainingResponses, phase: concluding ? 'conclude' : 'investigate',
+        instruction: concluding
+          ? 'Conclude from the evidence collected. Broad exploration is finished. Record substantiated findings now, then propose the smallest complete fix when supported, record coverage and quality, and finish. You may read an exact file range to resolve a remaining question. Never invent a fix or claim complete coverage to meet the deadline; disclose unresolved work with complete=false. Reserve the last response for finish.'
+          : 'Prioritize changed code and relevant callers. Record findings, supported minimal fixes and reviewed_file coverage as you go. Reserve the final responses for findings, fixes, coverage, quality and finish; disclose unresolved questions with complete=false.',
+      } }), transcript, tools: availableTools };
       if (Buffer.byteLength(JSON.stringify(input)) > 1000000) throw new Error('Conversation exceeds 1 MB limit');
       const inputTokens = await model.count(input, signal);
       guard();
@@ -179,7 +192,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
         try {
           const data: unknown = JSON.parse(tool.arguments);
           const validator = validators.get(tool.name);
-          if (!validator || !validator(data)) throw new ReviewInputError('Invalid tool name or arguments');
+          if (!validator || !input.tools.some(available => available.name === tool.name) || !validator(data)) throw new ReviewInputError('Invalid or unavailable tool name or arguments');
           if (tool.name === 'read_file') {
             const args = data as { side: 'head' | 'base'; path: string; startLine: number; count: number };
             const capture = sourceSlice(repository, revisionFor(args.side), args.path, args.startLine, args.count);
@@ -211,6 +224,27 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
             parseResult(candidate); validateEvidence(packet, candidate);
             result.findings = candidate.findings;
             output = { accepted: finding.id };
+          } else if (tool.name === 'propose_fix') {
+            const args = data as { findingId: string; startLine: number; endLine: number; replacement: string };
+            const finding = result.findings.find(f => f.id === args.findingId);
+            if (!finding || args.endLine < args.startLine || args.endLine - args.startLine >= 20) throw new ReviewInputError('Choose a recorded finding and a replacement range of 1–20 lines');
+            const { text: original } = sourceSlice(repository, packet.headSha, finding.anchor.path, args.startLine, args.endLine - args.startLine + 1);
+            const originalFirst = original.split('\n')[0]!, replacementFirst = args.replacement.split('\n')[0]!;
+            if (/^[ \t]+\S/.test(originalFirst) && replacementFirst === originalFirst.trimStart()) {
+              throw new ReviewInputError('Preserve leading whitespace on the unchanged first line of the replacement');
+            }
+            const candidate = { ...finding, fix: { startLine: args.startLine, endLine: args.endLine, original, replacement: args.replacement } };
+            validateFixSource(repository, packet, candidate);
+            const next = { ...result, findings: result.findings.map(f => f.id === candidate.id ? candidate : f) };
+            parseResult(next); validateEvidence(packet, next);
+            result.findings = next.findings;
+            output = { proposed: finding.id, validation: 'Source range verified. Fix not executed or tested.' };
+          } else if (tool.name === 'record_quality') {
+            const quality = data as QualityReview;
+            validateConventionRules(repository, packet, quality);
+            validateEvidence(packet, { ...result, quality });
+            result.quality = quality;
+            output = { recorded: true, validation: 'Subjective source assessment; no tests executed.' };
           } else if (tool.name === 'reviewed_file') {
             const args = data as { path: string };
             const file = packet.changedFiles.find(f => f.path === args.path);

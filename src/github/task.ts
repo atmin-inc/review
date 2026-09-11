@@ -1,4 +1,6 @@
 // Controlled child entry point: source credentials and inference credentials never coexist.
+import { readFileSync } from 'node:fs';
+import { verifyReview } from '../verification.js';
 import { prepare, loadReview, withGitDeadline } from '../snapshot.js';
 import { runReview, readProfile } from '../run.js';
 
@@ -14,7 +16,8 @@ try {
   else if (phase === 'investigate') {
     await runReview(input, readProfile(output), undefined, abort.signal);
     withGitDeadline(30_000, () => loadReview(input));
-  } else throw new Error('Invalid child phase');
+  } else if (phase === 'verify') await verifyReview(input, JSON.parse(readFileSync(output, 'utf8')), abort.signal);
+  else throw new Error('Invalid child phase');
 } catch {
   // The supervisor records phase failure; model/provider bodies and source stay in private artifacts.
   process.exitCode = 1;

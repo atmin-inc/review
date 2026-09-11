@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parsePacket, parseResult, type Packet, type Finding } from '../contracts.js';
 import { assess } from '../assessment.js';
 import { compareCurrent } from '../snapshot.js';
+import { readVerification, type Verification } from '../verification.js';
 import { renderMarkdown } from '../render.js';
 import type { PilotConfig } from './config.js';
 import type { GitHub, LivePull } from './api.js';
@@ -10,6 +11,7 @@ import type { Runner } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
 import { Store, type Job } from './store.js';
+import type { ReviewSettings } from './settings.js';
 import { InlineReviews } from './inline.js';
 
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
@@ -18,7 +20,7 @@ export class Worker {
   private checks: Checks;
   private inline: InlineReviews;
   private abort: AbortController | undefined;
-  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string) {
+  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve = (job: Job, limit: number) => store.reserve(job, owner, limit), private dashboardOrigin?: string) {
     this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github);
   }
   stop(): void { this.abort?.abort(); }
@@ -49,6 +51,7 @@ export class Worker {
   }
   private async work(job: Job, signal: AbortSignal): Promise<void> {
     const initial = await this.github.pull(job.pr);
+    const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
     if (!this.store.current(job, this.owner) || signal.aborted) return;
     this.store.track(job.pr, initial.baseRef, initial.state === 'open' && !initial.draft);
     const marker = markerFor(this.config.repositoryId, job.pr);
@@ -73,7 +76,7 @@ export class Worker {
       await this.checks.publish(job, initial.headSha, { status: 'in_progress', output: { title: 'Review in progress', summary: `Reviewing head ${initial.headSha} against target ${initial.baseSha}.` } });
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       let artifact: string | null = null;
-      if (!this.store.reserve(job, this.owner, this.config.maxReviewsPerDay)) {
+      if (!this.reserve(job, this.settings?.current().maxReviewsPerDay ?? this.config.maxReviewsPerDay)) {
         report = '# atmin review — review not run\n\nThe operator’s rolling 24-hour review limit was reached. A maintainer can rerun after capacity is available. No inference was started.';
       } else {
         artifact = join(this.config.stateDirectory, 'runs', job.id);
@@ -91,7 +94,7 @@ export class Worker {
             this.cancel(job); return;
           }
           const assessment = assess(packet, result, compareCurrent(packet, live));
-          report = renderMarkdown(packet, result, assessment);
+          report = renderMarkdown(packet, result, assessment, detailsUrl);
           check = assessmentCheck(assessment);
         } catch {
           if (!this.store.current(job, this.owner) || signal.aborted) return;
@@ -105,7 +108,7 @@ export class Worker {
       job = this.store.get(job.id);
     }
     const saved = JSON.parse(job.report!) as { initial: LivePull; body: string; check?: CheckOutput };
-    let inline: { packet: Packet; findings: Finding[] } | undefined;
+    let inline: { packet: Packet; findings: Finding[]; verification: Verification } | undefined;
     if (!same(saved.initial, await this.github.pull(job.pr))) { this.cancel(job); return; }
     // Reconciliation refreshes CI and formatting from saved source evidence, without inference.
     if (job.artifact && existsSync(join(job.artifact, 'packet.json')) && existsSync(join(job.artifact, 'result.json'))) {
@@ -115,12 +118,13 @@ export class Worker {
       if (packet.repository !== this.config.repository || packet.pr !== job.pr || !same(saved.initial, live)
         || compareCurrent(packet, live).status !== 'current') { this.cancel(job); return; }
       const ci = await this.github.validation(packet.headSha, packet.policy.requiredChecks);
-      const assessment = assess(packet, result, compareCurrent(packet, live), ci);
-      inline = { packet, findings: assessment.findings };
+      const verification = readVerification(job.artifact, packet, result.findings);
+      const assessment = assess(packet, result, compareCurrent(packet, live), [...ci, ...verification.checks]);
+      inline = { packet, findings: assessment.findings, verification };
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       writeFileSync(join(job.artifact, 'validation.json'), JSON.stringify({ headSha: packet.headSha, baseSha: packet.baseSha,
-        checkedAt: new Date().toISOString(), checks: ci }, null, 2), { mode: 0o600 });
-      saved.body = `${renderMarkdown(packet, result, assessment)}\nRun: \`${job.id}\`\n`;
+        checkedAt: new Date().toISOString(), checks: [...ci, ...verification.checks] }, null, 2), { mode: 0o600 });
+      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification)}\nRun: \`${job.id}\`\n`;
       saved.check = assessmentCheck(assessment);
       this.store.update(job.id, { report: JSON.stringify(saved) });
     }
@@ -158,7 +162,7 @@ export class Worker {
     if (inline) await this.inline.publish(job, inline.packet, inline.findings, async () => {
       const live = await this.github.pull(job.pr);
       return this.store.current(job, this.owner) && !signal.aborted && same(saved.initial, live);
-    });
+    }, inline.verification);
     if (!this.store.current(job, this.owner) || !same(saved.initial, await this.github.pull(job.pr))) {
       if (this.store.owns(this.owner)) await this.github.update(comment, `${marker}\n# atmin review — superseded\n\nPR state changed during inline publication. Findings for head \`${saved.initial.headSha}\` are historical. Await a review of the current commits.`);
       this.cancel(job); return;

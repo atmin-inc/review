@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import type { LocalCheck } from '../verification.js';
 import { readProfile } from '../run.js';
 
 export interface PilotConfig {
@@ -11,11 +12,12 @@ export interface PilotConfig {
   host: string;
   port: number;
   maxReviewsPerDay: number;
+  localChecks?: LocalCheck[];
   trustedChecks?: { name: string; appId: number }[];
 }
 export function readConfig(path: string): PilotConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8'));
-  const keys = ['repository', 'repositoryId', 'installationId', 'profile', 'stateDirectory', 'host', 'port', 'maxReviewsPerDay', 'trustedChecks'];
+  const keys = ['repository', 'repositoryId', 'installationId', 'profile', 'stateDirectory', 'host', 'port', 'maxReviewsPerDay', 'trustedChecks', 'localChecks'];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !keys.includes(k))) throw new Error('Invalid pilot configuration');
   if (typeof raw.repository !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(raw.repository)) throw new Error('Invalid pilot repository');
   for (const key of ['repositoryId', 'installationId', 'port', 'maxReviewsPerDay']) {
@@ -32,6 +34,18 @@ export function readConfig(path: string): PilotConfig {
         || !Number.isSafeInteger(c.appId) || c.appId < 1)
       || new Set(raw.trustedChecks.map((c: any) => c.name)).size !== raw.trustedChecks.length) {
       throw new Error('Trusted checks require unique names and positive GitHub App IDs');
+    }
+  }
+  if (raw.localChecks !== undefined) {
+    if (!Array.isArray(raw.localChecks) || raw.localChecks.length > 5 || raw.localChecks.some((c: LocalCheck) =>
+      !c || Object.keys(c).some(k => !['repositoryId', 'name', 'argv'].includes(k))
+      || !Number.isSafeInteger(c.repositoryId) || c.repositoryId < 1
+      || typeof c.name !== 'string' || !/^[a-zA-Z0-9._-]{1,80}$/.test(c.name)
+      || !Array.isArray(c.argv) || !c.argv.length || c.argv.length > 20
+      || c.argv.some(a => typeof a !== 'string' || !a || a.length > 500 || /[\u0000-\u001f]/.test(a))
+      || raw.trustedChecks?.some((trusted: { name: string }) => trusted.name === c.name))
+      || new Set(raw.localChecks.map((c: LocalCheck) => `${c.repositoryId}:${c.name}`)).size !== raw.localChecks.length) {
+      throw new Error('Local checks need a repository ID, unique name and bounded operator-owned argv; CI names must not overlap');
     }
   }
   const config: PilotConfig = { ...raw, profile: resolve(dirname(path), raw.profile), stateDirectory: resolve(dirname(path), raw.stateDirectory) };

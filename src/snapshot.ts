@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ReviewInputError, defaultPolicy, initialResult, parsePacket, parsePolicy, parseResult, type EvidenceAnchor, type ChangedFile, type Packet } from './contracts.js';
-import { validateEvidence, type Freshness } from './assessment.js';
+import { ReviewInputError, defaultPolicy, initialResult, parsePacket, parsePolicy, parseResult, type Finding, type EvidenceAnchor, type ChangedFile, type Packet } from './contracts.js';
+import { validateEvidence, validateFix, type Freshness } from './assessment.js';
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const commandDeadline = new AsyncLocalStorage<number>();
@@ -223,6 +223,19 @@ export function validateCapturedEvidence(repository: string, packet: Packet, ite
   requireValue(isDeepStrictEqual(capture, item.capture) && anchor.line === (capture.totalLines ? capture.startLine : null),
     'Captured source evidence does not match its immutable range and digest');
 }
+export function validateFixSource(repository: string, packet: Packet, finding: Finding): void {
+  validateFix(finding);
+  if (!finding.fix) return;
+  const { startLine, endLine, original } = finding.fix;
+  const source = sourceSlice(repository, packet.headSha, finding.anchor.path, startLine, endLine - startLine + 1);
+  requireValue(source.endLine === endLine && source.text === original, 'Fix source does not match the captured head');
+}
+export function validateConventionRules(repository: string, packet: Packet, quality: import('./contracts.js').QualityReview): void {
+  for (const rule of quality.conventionRules) {
+    const source = sourceText(repository, packet.baseSha, rule.path);
+    requireValue(source !== null && source.includes(rule.quote), 'Convention rule must quote exact text from the target branch');
+  }
+}
 export function loadReview(directory: string) {
   const packet = parsePacket(jsonFile(join(directory, 'packet.json')));
   const result = parseResult(jsonFile(join(directory, 'result.json')));
@@ -233,7 +246,11 @@ export function loadReview(directory: string) {
   requireValue(isDeepStrictEqual(recorded, recomputed), 'Packet differs from immutable Git inventory, diff or target-branch policy');
   requireValue(hash(readFileSync(join(directory, 'change.diff'))) === packet.diffHash, 'Saved diff differs from its captured digest');
   validateEvidence(packet, result);
-  for (const finding of result.findings) validateAnchor(repository, packet, finding.anchor);
+  if (result.quality) validateConventionRules(repository, packet, result.quality);
+  for (const finding of result.findings) {
+    validateAnchor(repository, packet, finding.anchor);
+    validateFixSource(repository, packet, finding);
+  }
   for (const item of result.evidence) for (const anchor of item.anchors) validateAnchor(repository, packet, anchor);
   for (const item of result.evidence) validateCapturedEvidence(repository, packet, item);
   return { packet, result };

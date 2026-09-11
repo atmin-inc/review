@@ -1,9 +1,25 @@
-import { parsePacket, parseResult, PRIORITIES, type Packet, type Result, type Finding } from './contracts.js';
+import { ReviewInputError, parsePacket, parseResult, PRIORITIES, type Packet, type Result, type Finding } from './contracts.js';
+import { rate, type Rating } from './rating.js';
+
+export function validateFix(finding: Finding): void {
+  const fix = finding.fix;
+  if (!fix) return;
+  if (finding.anchor.side !== 'head') throw new ReviewInputError('Fixes must replace source in the head version of the finding file');
+  if (fix.endLine < fix.startLine || fix.endLine - fix.startLine >= 20
+    || fix.original.split('\n').length !== fix.endLine - fix.startLine + 1) throw new ReviewInputError('The fix range must contain 1–20 existing source lines');
+  if (fix.replacement.split('\n').length > 20) throw new ReviewInputError('The replacement must contain at most 20 lines');
+  if (fix.original === fix.replacement) throw new ReviewInputError('The replacement is identical to the original source; no change was proposed');
+  if (fix.replacement.endsWith('\n')) throw new ReviewInputError('Omit the terminating newline from replacement; GitHub adds the line ending');
+  if ([fix.original, fix.replacement].some(text => /[\u0000-\u0008\u000b-\u001f\u007f\u202a-\u202e\u2066-\u2069]|`{3}/.test(text))) {
+    throw new ReviewInputError('Control characters, CRLF and Markdown code fences are unsupported in a fix');
+  }
+}
 
 export type Freshness = { status: 'current' | 'superseded' | 'unverified'; reason: string; checkedAt: string | null };
 export const unverified = (): Freshness => ({ status: 'unverified', reason: 'Live PR state has not been checked for this rendering.', checkedAt: null });
 export type ValidationCheck = { name: string; status: Result['validation'][number]['status']; reason: string; url?: string };
 export interface Assessment {
+  rating: Rating;
   outcome: 'Changes needed' | 'Review incomplete' | 'Validation needed' | 'Superseded' | 'Unverified' | 'Suggestions' | 'No issues found';
   findingsVerdict: 'Changes needed' | 'Review incomplete' | 'Suggestions' | 'No issues found';
   scope: 'complete' | 'partial' | 'unavailable';
@@ -40,6 +56,19 @@ export function validateEvidence(packet: Packet, result: Result): void {
   const checkRefs = (refs: string[]) => {
     if (refs.some(id => !evidence.has(id))) throw new Error('Unknown evidence reference');
   };
+  if (result.quality) {
+    if (result.status === 'not-started') throw new ReviewInputError('A not-started investigation cannot contain a quality assessment');
+    for (const criterion of Object.values(result.quality.criteria)) {
+      checkRefs(criterion.evidenceIds);
+      if (criterion.status !== 'unknown' && (!criterion.evidenceIds.length
+        || criterion.evidenceIds.some(id => evidence.get(id)?.provenance !== 'controller-captured'))) {
+        throw new ReviewInputError('Quality judgments must cite captured source reads; use unknown when evidence is missing');
+      }
+    }
+    if (result.quality.criteria.documentedConventions.status === 'concern' && !result.quality.conventionRules.length) {
+      throw new ReviewInputError('A documented-convention violation must quote an explicit target-branch rule');
+    }
+  }
   for (const coverage of result.coverage) {
     checkRefs(coverage.evidenceIds);
     if (coverage.status === 'reviewed') {
@@ -56,12 +85,19 @@ export function validateEvidence(packet: Packet, result: Result): void {
     }
   }
   for (const finding of result.findings) {
+    validateFix(finding);
     checkRefs(finding.evidenceIds);
     if (!inventory.has(finding.anchor.path)) throw new Error('Finding must anchor to a changed path; callers belong in supporting evidence');
     if ((finding.priority === 'P4') !== (finding.kind === 'improvement')) throw new Error('P4 is an optional improvement; P0–P3 are defects');
     if (!finding.evidenceIds.some(id => evidence.get(id)?.anchors.some(a => a.path === finding.anchor.path && a.side === finding.anchor.side))) {
       throw new Error('Finding needs evidence anchored to its changed path and side');
     }
+    if (finding.fix && !finding.evidenceIds.some(id => {
+      const item = evidence.get(id);
+      return item?.provenance === 'controller-captured' && item.anchors[0]?.path === finding.anchor.path
+        && item.anchors[0]?.side === 'head' && item.capture.revision === packet.headSha
+        && item.capture.startLine <= finding.fix!.startLine && item.capture.endLine >= finding.fix!.endLine;
+    })) throw new ReviewInputError('A fix must cite a captured head source read covering its entire replacement range');
   }
 }
 
@@ -91,5 +127,6 @@ export function assess(packet: Packet, result: Result, freshness: Freshness = un
   if (blocking) reasons.push('At least one substantiated P0–P2 defect needs a change under rubric v1.');
   if (scope !== 'complete') reasons.push('Investigation is not complete across the captured changed-file inventory.');
   if (validation === 'failed' || validation === 'missing') reasons.push(`Required validation is ${validation}.`);
-  return { outcome, findingsVerdict, scope, validation, freshness, validationChecks: checks, findings, hiddenOptionalCount: result.findings.length - findings.length, reasons };
+  return { outcome, findingsVerdict, scope, validation, freshness, validationChecks: checks, findings, hiddenOptionalCount: result.findings.length - findings.length, reasons,
+    rating: rate(packet, result, { scope, freshness, validation }) };
 }

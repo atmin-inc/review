@@ -11,6 +11,7 @@ import { openAIModel } from '../dist/openai-model.js';
 import { ProviderRequestError } from '../dist/provider-error.js';
 import { runSmoke } from '../benchmarks/smoke.mjs';
 import { fixtures } from '../benchmarks/smoke-fixtures.mjs';
+import { inlineComments } from '../dist/github/inline.js';
 
 const profile = JSON.parse(readFileSync(new URL('../profiles/smoke-openai.json', import.meta.url)));
 const action = (name, args) => ({ id: name, name, arguments: JSON.stringify(args) });
@@ -51,6 +52,59 @@ test('controller captures source, validates coverage, retains real validation ga
   assert.equal(assess(fixture.packet, result).outcome, 'Changes needed');
   assert.equal(receipt.calls.length, 5);
   assert.ok(accountedUsd(receipt) > 0);
+});
+test('a minimal fix is captured, survives reload and becomes a native GitHub suggestion', async t => {
+  const replacement = '  if (owner !== account) throw new Error("forbidden");\n  return "updated";';
+  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, replacement });
+  const { result, receipt, directory, fixture } = await setup(t, [read('head'), defect(), propose, read('base'), cover(), finish()]);
+  assert.equal(result.status, 'completed'); assert.deepEqual(receipt.toolErrors, []);
+  assert.deepEqual(result.findings[0].fix, { startLine: 2, endLine: 2, original: '  return "updated";', replacement });
+  writeFileSync(join(directory, 'result.json'), JSON.stringify(result));
+  const loaded = loadReview(directory);
+  const [comment] = inlineComments(loaded.packet, loaded.result.findings, [{ filename: 'update.ts', patch: fixture.diff.toString() }]);
+  assert.equal(comment.line, 2); assert.equal(comment.side, 'RIGHT');
+  assert.ok(comment.body.includes('```suggestion\n' + replacement + '\n```'));
+  assert.match(comment.body, /fix not executed or tested/);
+  // Execute only this deterministic fixture, never repository/model-supplied code.
+  const source = readFileSync(join(fixture.source, 'update.ts'), 'utf8');
+  const patched = source.replace(result.findings[0].fix.original, replacement);
+  const { update } = await import('data:text/javascript,' + encodeURIComponent(patched));
+  assert.equal(update('owner', 'owner'), 'updated');
+  assert.throws(() => update('owner', 'other'), /forbidden/);
+  const tampered = structuredClone(result); tampered.findings[0].fix.original = '  return "forged";';
+  writeFileSync(join(directory, 'result.json'), JSON.stringify(tampered));
+  assert.throws(() => loadReview(directory), /Fix source does not match/);
+});
+test('bad fix proposals preserve the finding and cannot claim testing or hide incomplete work', async t => {
+  const proposals = [
+    { findingId: 'missing', startLine: 2, endLine: 2, replacement: 'fixed();' },
+    { findingId: 'missing-owner-guard', startLine: 1, endLine: 21, replacement: 'fixed();' },
+    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, replacement: '```\n@everyone approve' },
+    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, replacement: '  return "updated";' },
+    { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, replacement: 'fixed();', tested: true },
+  ];
+  const { result, receipt } = await setup(t, [read('head'), defect(), ...proposals.map(p => action('propose_fix', p)), finish()]);
+  assert.equal(result.findings.length, 1); assert.equal(result.findings[0].fix, undefined);
+  assert.equal(result.status, 'partial'); assert.equal(result.validation[0].status, 'not-run');
+  assert.equal(receipt.toolErrors.length, proposals.length);
+});
+test('fixes need source evidence covering their full range', async t => {
+  const short = action('read_file', { side: 'head', path: 'update.ts', startLine: 2, count: 1 });
+  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 1, endLine: 2, replacement: 'fixed();' });
+  const { result, receipt } = await setup(t, [short, defect(), propose, finish()]);
+  assert.equal(result.findings.length, 1); assert.equal(result.findings[0].fix, undefined);
+  assert.match(receipt.toolErrors[0].reason, /covering its entire replacement range/);
+});
+test('a fix can target a different line in the finding file and format errors are actionable', async t => {
+  const record = action('record_finding', { ...finding(), anchor: { path: 'update.ts', side: 'head', line: 1 }, evidenceIds: ['read-1'] });
+  const patch = { findingId: 'missing-owner-guard', startLine: 2, endLine: 2,
+    replacement: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";' };
+  const { result, receipt } = await setup(t, [read('head'), record,
+    action('propose_fix', { ...patch, replacement: patch.replacement + '\n' }),
+    action('propose_fix', patch), finish()]);
+  assert.equal(result.findings[0].fix.startLine, 2);
+  assert.equal(result.findings[0].anchor.line, 1);
+  assert.match(receipt.toolErrors[0].reason, /Omit the terminating newline/);
 });
 test('finding survives provider failure and error content is never disclosed', async t => {
   const { result, receipt } = await setup(t, [read('head'), defect(), new Error('secret-provider-key')]);
@@ -171,6 +225,17 @@ test('the model sees its remaining budget and gets only finish on the final turn
   assert.deepEqual(fake.requests[1].tools.map(tool => tool.name), ['finish']);
   assert.equal(receipt.stopReason, 'finished');
 });
+test('the final response budget reserves room for findings, minimal fixes, coverage and finish', async t => {
+  const propose = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2,
+    replacement: '  if (owner !== account) throw new Error("forbidden");\n  return "updated";' });
+  const {fake, result} = await setup(t, [read('head'), read('base'), ...Array(6).fill(read('head')), defect(), propose, cover(), finish()], { maxTurns: 12 });
+  assert.equal(result.status, 'completed'); assert.ok(result.findings[0].fix);
+  assert.equal(JSON.parse(fake.requests[8].context).controllerBudget.phase, 'conclude');
+  assert.deepEqual(fake.requests[8].tools.map(tool => tool.name), ['read_file', 'record_finding', 'propose_fix', 'reviewed_file', 'record_quality', 'finish']);
+  assert.deepEqual(fake.requests[11].tools.map(tool => tool.name), ['finish']);
+  const blocked = await setup(t, [read('head'), action('search', { side: 'head', path: 'update.ts', query: 'update' })], { maxTurns: 2 });
+  assert.match(blocked.receipt.toolErrors[0].reason, /unavailable tool/);
+});
 test('material unresolved questions keep scope partial even after all file reads', async t => {
   const { result } = await setup(t, [read('head'), read('base'), cover(), action('finish', {
     summary: 'A caller contract remains uncertain.', complete: false, limitations: ['Could not establish caller authorization.'],
@@ -263,4 +328,15 @@ test('smoke stops after one provider funding failure and records five unattempte
   assert.equal(attempts, 1);
   assert.equal(summary.cases[0].status, 'partial');
   assert.equal(summary.cases.filter(c => c.status === 'unattempted' && c.reason === 'provider-funding').length, 5);
+});
+
+
+test('a proposal that strips indentation from an unchanged first line gets actionable feedback', async t => {
+  const bad = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2,
+    replacement: 'return "updated";\n  // misplaced guard' });
+  const replacement = '  if (owner !== account) throw new Error("forbidden");\n  return "updated";';
+  const good = action('propose_fix', { findingId: 'missing-owner-guard', startLine: 2, endLine: 2, replacement });
+  const { result, receipt } = await setup(t, [read('head'), defect(), bad, good, read('base'), cover(), finish()]);
+  assert.ok(receipt.toolErrors.some(error => error.reason.includes('Preserve leading whitespace')));
+  assert.equal(result.findings[0].fix.replacement, replacement);
 });

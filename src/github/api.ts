@@ -6,7 +6,7 @@ import type { PullState } from '../snapshot.js';
 export interface LivePull extends PullState { draft: boolean; }
 export interface Comment { id: number; body: string; user: { login: string; type: string }; }
 export interface PullFile { filename: string; previous_filename?: string; patch?: string; }
-export interface InlineComment { path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; }
+export interface InlineComment { path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; start_line?: number; start_side?: 'RIGHT'; }
 export interface CheckOutput { status: 'in_progress' | 'completed'; conclusion?: 'success' | 'failure' | 'cancelled'; output: { title: string; summary: string }; details_url?: string; }
 export interface GitHub {
   pull(pr: number): Promise<LivePull>;

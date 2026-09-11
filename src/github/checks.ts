@@ -6,7 +6,7 @@ export function assessmentCheck(assessment: Assessment): CheckOutput {
   const success = assessment.freshness.status === 'current' && assessment.scope === 'complete'
     && ['passed', 'not-applicable'].includes(assessment.validation) && assessment.findingsVerdict !== 'Changes needed';
   return { status: 'completed', conclusion: success ? 'success' : 'failure', output: {
-    title: assessment.outcome, summary: `Scope: ${assessment.scope}. Required validation: ${assessment.validation}.\n\n${assessment.reasons.join('\n')}\n\nP0–P2 block this check; P3 and optional P4 do not. This is a review result, not merge approval.`,
+    title: assessment.outcome, summary: `Rating: ${assessment.rating.score === null ? 'Not rated' : `${assessment.rating.score}/5`} · ${assessment.rating.policy.label}.\n\nScope: ${assessment.scope}. Required validation: ${assessment.validation}.\n\n${assessment.reasons.join('\n')}\n\nP0–P2 block this check; P3 and optional P4 do not. This is a review result, not merge approval.`,
   } };
 }
 

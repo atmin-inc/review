@@ -102,8 +102,10 @@ to operate this worker until the next packaged release.
 
 The worker receives signed webhooks, stores jobs in SQLite, updates one bot
 summary per PR, and publishes an `atmin review` check. Maintainers can comment
-`/atmin review` to rerun. Use a dedicated host user; the pilot worker is not a
-sandbox for executing repository code or an isolation boundary for many tenants.
+`/atmin review` to rerun. Use a dedicated host user. Source review does not execute repository code.
+Optional [isolated checks](docs/isolated-checks.md) run selected commands and
+verify proposed patches on a configured Linux worker. This private pilot is not
+a hardened isolation boundary for many tenants.
 
 Register an App with repository Contents read, Pull requests write and Checks
 write. Subscribe to Pull request, Push, Issue comment and Check run events. Install it only
@@ -180,3 +182,34 @@ Tests use local repositories, fake provider responses and temporary databases;
 they do not consume model credits or establish model quality. Package verification
 installs the actual tarball in a clean directory and exercises both CLI entry
 points and snapshot rendering. Apache-2.0; see LICENSE and NOTICE.
+
+## Rating presets (current source)
+
+Set `rating` inside target-branch `.atmin/review.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "rubricVersion": "1",
+  "includeOptional": true,
+  "requiredChecks": ["change-validation"],
+  "rating": {
+    "preset": "strict-conventions",
+    "perfectRequires": { "noP3": true }
+  }
+}
+```
+
+Presets: `balanced` (default: fit, simplicity, appropriate verification and required
+checks), `correctness-first` (5/5 for a complete current review without P0–P2), and
+`strict-conventions` (Balanced plus documented rules). Overrides are booleans:
+`codebaseFit`, `simplicity`, `verification`, `documentedConventions`, `passingChecks`,
+`noP3`. A concern in a required criterion caps the score at 4; missing evidence
+makes it unrated. P0/P1 cap at 1 and P2 at 3. Balanced and Strict conventions also
+require a supported subjective quality assessment. No average, test-count quota,
+or automatic penalty for optional P4 suggestions or unavailable patches.
+
+Ratings are subjective and independent from finding severity and GitHub check
+conclusions. An incomplete or stale review cannot be rated. Repository policy is
+captured from the target branch; a PR cannot relax its own rules. These additions
+are available in current source and await the next versioned package release.

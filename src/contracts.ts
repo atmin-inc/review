@@ -5,11 +5,25 @@ export class ReviewInputError extends Error {}
 
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
 export type Priority = typeof PRIORITIES[number];
+export const RATING_PRESETS = ['balanced', 'correctness-first', 'strict-conventions'] as const;
+export const QUALITY_CRITERIA = ['codebaseFit', 'simplicity', 'verification', 'documentedConventions'] as const;
+export type QualityCriterion = typeof QUALITY_CRITERIA[number];
+export interface RatingPolicy {
+  preset: typeof RATING_PRESETS[number];
+  perfectRequires?: Partial<Record<QualityCriterion | 'passingChecks' | 'noP3', boolean>>;
+}
+export interface QualityReview {
+  score: number;
+  rationale: string;
+  criteria: Record<QualityCriterion, { status: 'satisfied' | 'concern' | 'unknown'; reason: string; evidenceIds: string[] }>;
+  conventionRules: { path: string; quote: string }[];
+}
 export interface Policy {
   schemaVersion: 1;
   rubricVersion: '1';
   includeOptional: boolean;
   requiredChecks: string[];
+  rating?: RatingPolicy;
 }
 export interface ChangedFile {
   path: string;
@@ -60,6 +74,7 @@ export interface Finding {
   suggestion: string;
   anchor: Anchor;
   evidenceIds: string[];
+  fix?: { startLine: number; endLine: number; original: string; replacement: string };
 }
 export interface Result {
   schemaVersion: 1;
@@ -74,6 +89,7 @@ export interface Result {
   evidence: Evidence[];
   findings: Finding[];
   limitations: string[];
+  quality?: QualityReview;
 }
 
 // Small schema constructors keep every object closed without a second schema framework.
@@ -88,11 +104,27 @@ const object = <T extends Record<string, object>>(properties: T) => ({
 });
 const refs = { ...array(text), uniqueItems: true };
 const anchor = object({ path: text, side: choice(['head', 'base']), line: { type: 'integer', minimum: 1 } });
-const evidenceAnchor = object({ path: text, side: choice(['head', 'base']), line: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] } });
-export const policySchema = object({
-  schemaVersion: { const: 1 }, rubricVersion: { const: '1' },
-  includeOptional: { type: 'boolean' }, requiredChecks: { ...array(text, 1), uniqueItems: true },
+export const fixSchema = object({
+  startLine: { type: 'integer', minimum: 1 }, endLine: { type: 'integer', minimum: 1 },
+  original: { type: 'string', maxLength: 4000 }, replacement: { type: 'string', maxLength: 4000 },
 });
+const evidenceAnchor = object({ path: text, side: choice(['head', 'base']), line: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }] } });
+export const ratingPolicySchema = { ...object({
+  preset: choice(RATING_PRESETS),
+  perfectRequires: { ...object(Object.fromEntries([...QUALITY_CRITERIA, 'passingChecks', 'noP3'].map(key => [key, { type: 'boolean' }]))), required: [] },
+}), required: ['preset'] };
+export const qualitySchema = object({
+  score: { type: 'integer', minimum: 1, maximum: 5 }, rationale: text,
+  criteria: object(Object.fromEntries(QUALITY_CRITERIA.map(key => [key, object({
+    status: choice(['satisfied', 'concern', 'unknown']), reason: text, evidenceIds: refs,
+  })]))),
+  conventionRules: { ...array(object({ path: text, quote: { ...text, maxLength: 2000 } })), maxItems: 20 },
+});
+const policyFields = object({
+  schemaVersion: { const: 1 }, rubricVersion: { const: '1' },
+  includeOptional: { type: 'boolean' }, requiredChecks: { ...array(text), uniqueItems: true },
+});
+export const policySchema = { ...policyFields, properties: { ...policyFields.properties, rating: ratingPolicySchema } };
 export const packetSchema = object({
   schemaVersion: { const: 1 },
   repository: { type: 'string', pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' },
@@ -102,7 +134,13 @@ export const packetSchema = object({
   policy: policySchema, policyHash: digest, diffHash: digest,
   changedFiles: array(object({ path: text, change: choice(['added', 'modified', 'deleted']), kind: choice(['text', 'binary', 'symlink', 'submodule']) })),
 });
-export const resultSchema = object({
+export const findingSchema = object({
+  id: text, priority: choice(PRIORITIES), kind: choice(['defect', 'improvement']),
+  category: choice(['correctness', 'security', 'data-integrity', 'reliability', 'validation', 'simplicity']),
+  title: text, trigger: text, consequence: text, priorityReason: text, counterEvidence: text,
+  suggestion: text, anchor, evidenceIds: { ...refs, minItems: 1 },
+});
+const resultFields = object({
   schemaVersion: { const: 1 }, headSha: sha, baseSha: sha, policyHash: digest,
   status: choice(['not-started', 'partial', 'completed']),
   reviewer: object({ name: text, model: text, context: choice(['independent', 'author', 'unknown']) }),
@@ -118,14 +156,10 @@ export const resultSchema = object({
     capture: object({ revision: sha, startLine: { type: 'integer', minimum: 1 },
       endLine: { type: 'integer', minimum: 0 }, totalLines: { type: 'integer', minimum: 0 }, contentHash: digest }),
   })] }),
-  findings: array(object({
-    id: text, priority: choice(PRIORITIES), kind: choice(['defect', 'improvement']),
-    category: choice(['correctness', 'security', 'data-integrity', 'reliability', 'validation', 'simplicity']),
-    title: text, trigger: text, consequence: text, priorityReason: text, counterEvidence: text,
-    suggestion: text, anchor, evidenceIds: { ...refs, minItems: 1 },
-  })),
+  findings: array({ ...findingSchema, properties: { ...findingSchema.properties, fix: fixSchema } }),
   limitations: array(text),
 });
+export const resultSchema = { ...resultFields, properties: { ...resultFields.properties, quality: qualitySchema } };
 
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validatePacketSchema = ajv.compile<Packet>(packetSchema);
@@ -142,7 +176,16 @@ export function parseResult(value: unknown): Result {
 export function parsePolicy(value: unknown): Policy {
   if (!validatePolicySchema(value)) throw new Error(`Invalid policy: ${ajv.errorsText(validatePolicySchema.errors)}`);
   // Fixed ordering provides stable hashing independent of JSON property order.
-  return { schemaVersion: 1, rubricVersion: '1', includeOptional: value.includeOptional, requiredChecks: value.requiredChecks };
+  const policy: Policy = { schemaVersion: 1, rubricVersion: '1', includeOptional: value.includeOptional, requiredChecks: value.requiredChecks };
+  if (value.rating) {
+    policy.rating = { preset: value.rating.preset };
+    const overrides = value.rating.perfectRequires;
+    if (overrides) {
+      const keys = [...QUALITY_CRITERIA, 'passingChecks', 'noP3'] as const;
+      policy.rating.perfectRequires = Object.fromEntries(keys.filter(key => overrides[key] !== undefined).map(key => [key, overrides[key]]));
+    }
+  }
+  return policy;
 }
 export const defaultPolicy = (): Policy => ({ schemaVersion: 1, rubricVersion: '1', includeOptional: false, requiredChecks: ['change-validation'] });
 

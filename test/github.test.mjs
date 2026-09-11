@@ -14,6 +14,7 @@ import { assessmentCheck } from '../dist/github/checks.js';
 import { assess } from '../dist/assessment.js';
 import { Worker, markerFor } from '../dist/github/worker.js';
 import { AppGitHub, appJwt } from '../dist/github/api.js';
+import { ReviewSettings } from '../dist/github/settings.js';
 import { childEnvironment } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
 import { repository, completed, finding, current } from './helpers.mjs';
@@ -458,12 +459,12 @@ test('CI reconciliation refreshes the same report and check without inference or
   };
   h.store.enqueue('ci-first', 1); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'failure');
-  assert.match(h.comment.body, /## ✅ No issues found/);
+  assert.match(h.comment.body, /Not rated — Waiting for required checks/);
   status = 'pass'; h.store.retryPublication(1); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'success');
   status = 'fail'; h.store.retryPublication(1); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'failure');
-  assert.match(h.comment.body, /Required validation: ❌ Failed/);
+  assert.match(h.comment.body, /Required checks failed/);
   assert.equal(h.counts.runs, 1); assert.equal(h.counts.creates, 1); assert.equal(h.checks.length, 1);
 });
 
@@ -560,6 +561,35 @@ test('inline publication is commit-bound, hides optional findings and survives C
   h.store.refreshValidation('ci-finished', h.live.headSha); await h.worker.tick();
   assert.equal(h.reviews.length, 1); assert.equal(h.counts.runs, 1);
 });
+test('native fixes use exact head ranges, preserve code and suppress unsafe or conflicting suggestions', t => {
+  const f = repository(t);
+  const fix = { startLine: 2, endLine: 3, original: 'new\nlast', replacement: 'guard();\nnew\nlast' };
+  const make = changes => ({ ...finding('P0'), anchor: { path: 'new.ts', side: 'head', line: 2 }, fix, ...changes });
+  const files = [{ filename: 'new.ts', previous_filename: 'old.ts', patch: '@@ -1,3 +1,3 @@\n same\n-old\n+new\n last' }];
+  const [comment] = inlineComments(f.packet, [make({})], files);
+  assert.equal(comment.start_line, 2); assert.equal(comment.start_side, 'RIGHT'); assert.equal(comment.line, 3);
+  assert.match(comment.body, /P0/); assert.ok(comment.body.includes('```suggestion\nguard();\nnew\nlast\n```'));
+  const rejected = [
+    make({ fix: { ...fix, original: 'forged\nlast' } }),
+    make({ fix: { ...fix, endLine: 4, original: 'new\nlast\nmissing' } }),
+    make({ fix: { ...fix, replacement: '```\n@everyone <script>' } }),
+    make({ fix: { ...fix, replacement: 'unchanged\r\nline' } }),
+    make({ title: 'oversized'.repeat(1000) }),
+    make({ anchor: { path: 'old.ts', side: 'base', line: 2 } }),
+  ];
+  for (const item of rejected) {
+    const [plain] = inlineComments(f.packet, [item], files);
+    assert.ok(plain); assert.doesNotMatch(plain.body, /```suggestion/); assert.equal(plain.start_line, undefined);
+  }
+  const overlap = inlineComments(f.packet, [make({}), make({ id: 'second-cause' })], files);
+  assert.equal(overlap.filter(c => c.body.includes('```suggestion')).length, 1); assert.equal(overlap.length, 2);
+  const splitHunks = [{ ...files[0], patch: '@@ -2 +2 @@\n-old\n+new\n@@ -3 +3 @@\n last' }];
+  assert.doesNotMatch(inlineComments(f.packet, [make({})], splitHunks)[0].body, /```suggestion/);
+  const noNewline = [{ ...files[0], patch: files[0].patch + '\n\\ No newline at end of file' }];
+  assert.doesNotMatch(inlineComments(f.packet, [make({})], noNewline)[0].body, /```suggestion/);
+  const [deletion] = inlineComments(f.packet, [make({ fix: { ...fix, replacement: '' } })], files);
+  assert.ok(deletion.body.includes('```suggestion\n\n```'));
+});
 
 test('lost inline POST response reconciles by bot identity without another POST or inference', async t => {
   const h = await harness(t, [finding()]), create = h.github.createReview;
@@ -614,4 +644,33 @@ test('GitHub inline API ignores forged reviews and submits one COMMENT batch on 
   const comments = [{path: 'update.ts', side: 'RIGHT', line: 1, body: 'Explicit test finding.'}];
   assert.equal(await api.createReview(1, head, `${marker}\nbody`, comments), 4);
   assert.deepEqual(JSON.parse(requests.at(-1).body), {commit_id: head, event: 'COMMENT', body: `${marker}\nbody`, comments});
+});
+
+
+test('worker enforces the dashboard daily ceiling before another model run', async t => {
+  const h = await harness(t);
+  h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
+  const settings = new ReviewSettings(h.config, h.store);
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1 });
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
+  h.store.enqueue('first-dashboard-run', 1); await worker.tick();
+  h.store.enqueue('second-dashboard-run', 1); await worker.tick();
+  assert.equal(h.counts.runs, 1);
+  assert.match(h.comment.body, /24-hour review limit/);
+  assert.equal(h.checks.at(-1).conclusion, 'failure');
+});
+
+
+test('local execution is scoped by repository and cannot replace trusted CI names', async t => {
+  const { readConfig } = await import('../dist/github/config.js');
+  const h = state(t), path = join(h.root, 'config.json');
+  const config = { ...h.config, port: 8787, profile: fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url)),
+    localChecks: [{ repositoryId: 42, name: 'ownership', argv: ['node', '--test', 'test/ownership.mjs'] }] };
+  writeFileSync(path, JSON.stringify(config)); assert.equal(readConfig(path).localChecks[0].repositoryId, 42);
+  for (const localChecks of [[{ ...config.localChecks[0], repositoryId: 0 }], [{ ...config.localChecks[0], argv: [] }],
+    [{ ...config.localChecks[0], argv: ['node', 'bad\u0000arg'] }], [config.localChecks[0], config.localChecks[0]]]) {
+    writeFileSync(path, JSON.stringify({ ...config, localChecks })); assert.throws(() => readConfig(path), /Local checks/);
+  }
+  writeFileSync(path, JSON.stringify({ ...config, trustedChecks: [{ name: 'ownership', appId: 15368 }] }));
+  assert.throws(() => readConfig(path), /Local checks/);
 });
