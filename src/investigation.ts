@@ -1,10 +1,11 @@
 import { Ajv } from 'ajv';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
-import { ReviewInputError, text as str, fixSchema, findingSchema, qualitySchema, initialResult, parseResult, type Packet, type Result, type Finding, type QualityReview } from './contracts.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { ReviewInputError, text as str, fixSchema, findingSchema, qualitySchema, initialResult, parseResult, type Packet, type Result, type Finding, type Priority, type QualityReview } from './contracts.js';
 import { validateEvidence } from './assessment.js';
 import { hash, changedSourceRanges, searchSource, sourcePaths, sourceSlice, sourceText, validateAnchor, validateFixSource, validateConventionRules, withGitDeadline } from './snapshot.js';
 import { resolveRatingPolicy } from './rating.js';
+import { parseRepositoryState, selectRepositoryState, verifyStateEvidence, type StateContext } from './repository-state.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import { startSpan, traceEvent, traceHash, traceId, traceOperation } from './trace.js';
 
@@ -44,6 +45,8 @@ export const toolDefinitions = [
     parameters: obj({ side, query: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\u0000\\r\\n]+$' } }) },
   { name: 'record_finding', description: 'Checkpoint one substantiated defect or opted-in improvement. Cite evidence IDs returned by read_file. Reusing an ID replaces that finding.',
     parameters: findingSchema },
+  { name: 'withdraw_finding', description: 'Withdraw a recorded finding after counterevidence disproves it or shows the behavior already exists at the merge base. State the counterevidence. Withdrawals are retained for audit.',
+    parameters: obj({ id: str, reason: str }) },
   { name: 'end_investigation', description: 'Checkpoint the end of bug discovery, alone in its response. Record all substantiated findings first. complete=true means the change and relevant dependencies were investigated with no unresolved work; source reads alone cannot establish this. The controller checks changed-range reads. Otherwise set complete=false and explain missing evidence or unresolved suspicions. Quality and optional fixes follow separately.',
     parameters: obj({ complete: { type: 'boolean' }, limitations: { type: 'array', items: str, maxItems: 50 } }) },
   { name: 'propose_fix', description: 'Optionally attach a minimal head-side replacement to a recorded finding. First read and cite the entire range. At most 20 original and replacement lines. Supply replacementLines as separate code lines; the controller joins them with real line breaks. Use an empty array to delete the range. Do not encode line breaks inside an array item. Preserve leading whitespace on every line, including the first. Supply original as the exact text you intend to replace, matching the head range including whitespace. The controller verifies it against captured source. This does not execute or test the fix.',
@@ -63,7 +66,7 @@ P1: serious realistically reachable security, data or core functionality failure
 P2: meaningful localized functional defect with a plausible concrete trigger; fix before merge.
 P3: established minor low-impact defect; nonblocking follow-up.
 P4: optional behavior-preserving improvement, no established defect; report only when policy.includeOptional is true.
-Do not downgrade an uncertain severe suspicion to P3; investigate it or disclose it as an unresolved limitation. Missing tests are validation gaps, not automatically defects. Do not flag style preferences or pre-existing problems. Explain trigger, consequence, priority rationale and actual counterevidence inspected. One stable ID per root cause; update rather than duplicate.
+Do not downgrade an uncertain severe suspicion to P3; investigate it or disclose it as an unresolved limitation. Missing tests are validation gaps, not automatically defects. Do not flag style preferences or pre-existing problems. Explain trigger, consequence, priority rationale and actual counterevidence inspected. One stable ID per root cause; update rather than duplicate. If counterevidence disproves a recorded finding or shows it pre-exists at the merge base, withdraw it with withdraw_finding.
 Only controller read_file IDs may support findings. There is no shell or test tool; never claim a test ran. Checkpoint substantiated findings immediately. Read changed ranges on both existing sides, plus surrounding code and dependencies as needed. The controller tracks those reads; they are a minimum inspection floor, not a reason to stop exploring. End discovery with end_investigation and honest limitations. Use complete=false for missing evidence or unresolved suspicions. Quality and optional fixes are separate downstream work. Use tools, not a free-text final response.`;
 
 const assessmentInstructions = `Assess the whole change separately from defect severity. Score anchors: 5 strong net-positive change ready on available evidence; 4 good change with a minor actionable concern; 3 useful direction needing meaningful changes; 2 substantial problems undermine the change; 1 fundamentally unsafe or incorrect. This is subjective, not certainty. Do not mechanically translate priorities to scores; the controller enforces serious-defect caps. Never reduce the quality score merely for optional P4 preferences or a missing proposed patch. Each score below 5 needs a concrete actionable concern in its rationale, not personal taste.
@@ -71,7 +74,8 @@ When evidence supports a complete localized fix, use propose_fix afterward. Seve
 Assess specific verification gaps: identify changed behavior lacking appropriate evidence, coverage inspected and the smallest useful check. Missing tests alone are not functional defects. Record quality before optional fixes; finish promptly when done. No patch is required. Never claim merge approval.
 Assess codebaseFit (architecture, repository patterns and conventions), simplicity (complexity justified by the change), verification (evidence appropriate to this change and repository, never a blanket test count), and documentedConventions. Cite read_file evidence for every satisfied or concern judgment; unknown needs an explanation and prevents a rating when the policy requires that criterion. Inferred stylistic preferences alone must not lower the rating or become convention violations. For a documentedConventions concern, quote the exact explicit rule in conventionRules with its target-branch path, plus source reads showing the violation. Target guidance above can supply those rule quotes. If there are no explicit conventions, say so; assess existing patterns without inventing requirements. Check types, lint configuration, existing tests, and relevant failure paths as appropriate. Source inspection can judge testing adequacy but cannot establish that checks passed. A preference to avoid tests does not excuse a concretely unverified risky change. Always preserve findings regardless of the chosen rating preset. Correctness-first ignores the subjective quality score and rates on P0–P2 unless its perfectRequires overrides require more.`;
 
-export interface TurnInput { instructions: string; context: string; transcript: unknown[]; tools: typeof toolDefinitions }
+export interface ToolDefinition { name: string; description: string; parameters: Record<string, unknown> }
+export interface TurnInput { instructions: string; context: string; transcript: unknown[]; tools: ToolDefinition[] }
 export interface ModelReply {
   model: string; inputTokens: number; outputTokens: number; cachedInputTokens: number;
   status: string; continuation: unknown[];
@@ -86,7 +90,9 @@ export interface Model {
   toolOutput(id: string, value: unknown): unknown;
 }
 export interface Receipt {
-  schemaVersion: 1; engineVersion: 'r02-27'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
+  schemaVersion: 1; engineVersion: 'r02-28'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
+  repositoryState: { status: 'current' | 'stale'; commit: string; sections: number } | null;
+  withdrawals: { id: string; priority: Priority; reason: string; at: string }[];
   discovery: { complete: boolean; limitations: string[]; finishedAt: string } | null;
   inputCountKind: 'exact' | 'conservative-estimate';
   providerFailure: ProviderFailure | null;
@@ -118,7 +124,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
   result.reviewer = { name: 'atmin review', model: profile.model, context: 'independent' };
   result.summary = 'Investigation started but has not finished.';
   result.limitations = ['Source inspection only. Required execution has not run. Source reads do not prove the model’s conclusions.'];
-  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-27', discovery: null, profile, contextHash: null, providerFailure: null,
+  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-28', discovery: null, profile, contextHash: null, repositoryState: null, withdrawals: [], providerFailure: null,
     inputCountKind: model.inputCountKind ?? 'exact',
     rateCard: profile.provider === 'codex-local' ? { billing: 'subscription', inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-11', source: 'https://developers.openai.com/codex/auth/' }
@@ -178,9 +184,23 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
     }
     const diff = readFileSync(join(directory, 'change.diff'));
     if (diff.length > 128000) throw new Error('Diff exceeds 128 KB investigation limit; review remains partial');
+    // Repository state is optional context. Without a file the context is
+    // byte-identical to a review without state, so one build serves both
+    // experiment arms. State for another commit is withheld, not substituted.
+    let repositoryState: StateContext | undefined;
+    if (existsSync(join(directory, 'repository-state.json'))) {
+      guard();
+      const state = parseRepositoryState(JSON.parse(readFileSync(join(directory, 'repository-state.json'), 'utf8')));
+      repositoryState = selectRepositoryState(state, packet);
+      if (repositoryState.status === 'current') verifyStateEvidence(repository, state);
+      else result.limitations.push(repositoryState.reason);
+      if (Buffer.byteLength(JSON.stringify(repositoryState)) > 96000) throw new Error('Repository state selection exceeds 96 KB; review remains partial');
+      receipt.repositoryState = { status: repositoryState.status, commit: repositoryState.commit, sections: repositoryState.status === 'current' ? repositoryState.sections.length : 0 };
+    }
     const ranges = packet.changedFiles.flatMap(file => file.kind === 'text' ? changedSourceRanges(repository, packet, file) : []);
     const missingRanges = () => ranges.filter(range => !inspected(range.path, range.side, range.startLine, range.endLine));
-    const context = { packet, ratingPolicy: resolveRatingPolicy(packet.policy.rating), targetGuidance: guidance, diff: diff.toString('utf8') };
+    const context = { packet, ratingPolicy: resolveRatingPolicy(packet.policy.rating), targetGuidance: guidance, diff: diff.toString('utf8'),
+      ...(repositoryState ? { repositoryState } : {}) };
     receipt.contextHash = hash(JSON.stringify(context)); save();
     const transcript: unknown[] = [];
     let interruptionRetried = false;
@@ -317,6 +337,14 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
             const finding = data as Finding;
             recordFinding(finding);
             output = { accepted: finding.id };
+          } else if (tool.name === 'withdraw_finding') {
+            const args = data as { id: string; reason: string };
+            const finding = result.findings.find(f => f.id === args.id);
+            if (!finding) throw new ReviewInputError('No recorded finding has that ID');
+            result.findings = result.findings.filter(f => f.id !== args.id);
+            receipt.withdrawals.push({ id: args.id, priority: finding.priority, reason: args.reason, at: new Date().toISOString() });
+            traceEvent('review.withdrawal', { request, toolIndex: receipt.toolCalls, findingIdHash: traceHash(args.id), priority: finding.priority, findings: result.findings.length });
+            output = { withdrawn: args.id };
           } else if (tool.name === 'end_investigation') {
             if (reply.calls.length !== 1) throw new ReviewInputError('end_investigation must be the only tool call in its response');
             const args = data as { complete: boolean; limitations: string[] };
@@ -388,7 +416,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
   } catch (error) {
     result.status = 'partial';
     // Controlled engine errors only. SDK/network messages can contain request content.
-    const allowed = /^(Review deadline|Target guidance|Diff exceeds|Conversation exceeds|Input token|Budget cannot|Provider usage|Provider returned|Provider exceeded|Provider response|Provider free-only|Provider cost confirmation|Duplicate tool|Tool call limit|Model turn limit)/;
+    const allowed = /^(Review deadline|Target guidance|Diff exceeds|Repository state|Invalid repository state|Conversation exceeds|Input token|Budget cannot|Provider usage|Provider returned|Provider exceeded|Provider response|Provider free-only|Provider cost confirmation|Duplicate tool|Tool call limit|Model turn limit)/;
     if (error instanceof ProviderRequestError && !signal.aborted) receipt.providerFailure = error.failure;
     const reason = signal.aborted ? 'Review cancelled or deadline reached'
       : error instanceof ProviderRequestError || (error instanceof Error && allowed.test(error.message)) ? error.message

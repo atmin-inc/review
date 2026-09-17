@@ -5,8 +5,9 @@ import { resolve } from 'node:path';
 import { assess, unverified } from './assessment.js';
 import { checkCurrent, loadReview, prepare } from './snapshot.js';
 import { renderMarkdown } from './render.js';
-import { readProfile, runReview } from './run.js';
+import { readProfile, runReview, runStateBuild } from './run.js';
 import { accountedUsd } from './investigation.js';
+import { stateAccountedUsd } from './state-builder.js';
 import { costReport } from './cost-report.js';
 
 const help = `atmin review — source investigation and evidence tools
@@ -16,11 +17,13 @@ const help = `atmin review — source investigation and evidence tools
   atmin-review render <directory> [--format markdown|json] [--check-current] [--out <new-file>]
   atmin-review investigate <directory> --profile <profile.json>
   atmin-review cost <directory> [--out <new-json-file>]
+  atmin-review build-state <directory> --profile <profile.json> --out <new-directory>
 
 prepare uses read-only GitHub/Git access and writes a private snapshot.
 render validates all evidence references against captured Git objects.
 --check-current checks live head/target; without it freshness is unverified.
 investigate sends frozen source to the configured API, with bounded reads and usage reservations.
+build-state describes the snapshot's target commit as RepositoryState v1 context; copy repository-state.json beside packet.json before investigate to supply it.
 No repository scripts, GitHub writes or merge approvals. Required execution remains not-run.
 `;
 
@@ -49,7 +52,20 @@ async function main(): Promise<void> {
     } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
     return;
   }
-  if (values.profile) throw new Error('--profile is only valid for review or investigate');
+  if (operation === 'build-state') {
+    if (!values.profile || !values.out || values.format || values['check-current']) throw new Error('build-state requires --profile and --out');
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
+    try {
+      const { state, receipt } = await runStateBuild(resolve(input), resolve(values.out), readProfile(resolve(values.profile)), undefined, controller.signal);
+      process.stdout.write(`${JSON.stringify({ directory: resolve(values.out), commit: state.commit, complete: state.complete, sections: state.sections.length,
+        accountedUsd: stateAccountedUsd(receipt), stopReason: receipt.stopReason }, null, 2)}\n`);
+      if (receipt.stopReason !== 'finished' || !state.complete) process.exitCode = 2;
+    } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+    return;
+  }
+  if (values.profile) throw new Error('--profile is only valid for review, investigate or build-state');
   if (operation === 'cost') {
     if (values.format || values['check-current']) throw new Error('cost accepts only --out');
     const output = `${JSON.stringify(costReport(resolve(input)), null, 2)}\n`;
@@ -63,7 +79,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify({ directory, headSha: packet.headSha, baseSha: packet.baseSha, changedFiles: packet.changedFiles.length, investigation: 'not-started' }, null, 2)}\n`);
     return;
   }
-  if (operation !== 'render') throw new Error('Unknown command; use prepare, investigate or render.');
+  if (operation !== 'render') throw new Error('Unknown command; use prepare, investigate, build-state or render.');
   if (values.format && !['markdown', 'json'].includes(values.format)) throw new Error('Format must be markdown or json');
   const { packet, result } = loadReview(resolve(input));
   const assessment = assess(packet, result, values['check-current'] ? checkCurrent(packet) : unverified());

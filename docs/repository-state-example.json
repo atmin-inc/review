@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "repository": "atmin-inc/review",
+  "branch": "codex/repository-state-handoff",
+  "commit": "ef3e98ef05f85734f5be8866c26856d5c6e99968",
+  "generator": {
+    "name": "manual",
+    "version": "2026-09-17"
+  },
+  "createdAt": "2026-09-17T18:00:00.000Z",
+  "complete": false,
+  "limitations": [
+    "Hand-authored prototype from a partial source read of the public alpha; not produced by the state builder. The GitHub worker, dashboard and settings modules were not described."
+  ],
+  "sections": [
+    {
+      "id": "purpose",
+      "kind": "purpose",
+      "title": "What atmin review does",
+      "summary": "Source code review with evidence, clear verdicts and bounded model spending. Runs as a CLI or as a GitHub App worker; experimental alpha whose model quality and severity calibration are still being measured.",
+      "paths": [],
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 3
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "engine-entry-points",
+      "kind": "subsystem",
+      "title": "Review engine and CLI",
+      "summary": "package.json exposes two binaries: atmin-review (dist/cli.js: prepare, investigate, review, render, cost) and atmin-review-github (dist/github/cli.js). The engine is src/*.ts; the GitHub App worker lives under src/github/.",
+      "paths": [
+        "src/"
+      ],
+      "evidence": [
+        {
+          "path": "package.json",
+          "line": 10
+        },
+        {
+          "path": "src/cli.ts",
+          "line": 20
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "review-flow",
+      "kind": "flow",
+      "title": "Prepare, investigate, render",
+      "summary": "prepare captures an immutable snapshot (bare source.git, packet.json, change.diff, initial result.json) with read-only GitHub access. investigate runs the model against that snapshot with bounded reads and usage reservations; a run that has started or spent cannot be reset or resumed. render validates every evidence reference against captured Git objects.",
+      "paths": [
+        "src/"
+      ],
+      "evidence": [
+        {
+          "path": "src/cli.ts",
+          "line": 20
+        },
+        {
+          "path": "src/run.ts",
+          "line": 15
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "finding-evidence",
+      "kind": "contract",
+      "title": "Findings cite controller-captured source",
+      "summary": "A finding is accepted only when it cites controller-captured read_file evidence for its exact anchor path, side and line; declared reasoning cannot support a finding. Results are advisory: never GitHub approvals or a protected merge check.",
+      "paths": [
+        "src/"
+      ],
+      "evidence": [
+        {
+          "path": "src/investigation.ts",
+          "line": 143
+        },
+        {
+          "path": "src/assessment.ts",
+          "line": 123
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "error-messages",
+      "kind": "convention",
+      "title": "Controller-authored messages only",
+      "summary": "Validation and failure messages are written by the controller; provider, SDK and OS errors are never wrapped or echoed because they can carry request content or private data. Git runs with an isolated environment and configuration.",
+      "paths": [
+        "src/"
+      ],
+      "evidence": [
+        {
+          "path": "src/contracts.ts",
+          "line": 3
+        },
+        {
+          "path": "src/snapshot.ts",
+          "line": 29
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "contributing",
+      "kind": "convention",
+      "title": "Contribution rules",
+      "summary": "Use Node 24+, run npm ci and npm test, and include a focused regression for behavior changes. Keep source review separate from repository execution; preserve bounded spending, credential separation and honest incomplete verdicts.",
+      "paths": [],
+      "evidence": [
+        {
+          "path": "CONTRIBUTING.md",
+          "line": 3
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "commands",
+      "kind": "commands",
+      "title": "Build and test",
+      "summary": "npm run build compiles with tsc; npm test builds and then runs node --test test/*.test.mjs; npm run typecheck runs tsc --noEmit.",
+      "paths": [],
+      "evidence": [
+        {
+          "path": "package.json",
+          "line": 16
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "ci",
+      "kind": "deployment",
+      "title": "change-validation workflow",
+      "summary": "The change-validation job runs on push, pull_request and workflow_dispatch with Node 24: npm ci --ignore-scripts, npm test, then node packaging/verify.mjs, which packs and installs the tarball and renders a saved review.",
+      "paths": [
+        ".github/"
+      ],
+      "evidence": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 7
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "reporting-incomplete",
+      "kind": "baseline-risk",
+      "title": "A successful model response can still leave a review incomplete",
+      "summary": "The input-count guard uses a conservative local adapter estimate rather than provider context exhaustion, and reporting-time failures are distinct from transport failures. Accepted in the frozen 2026-09-14 comparison; not a regression to report on unrelated PRs.",
+      "paths": [
+        "src/investigation.ts",
+        "benchmarks/"
+      ],
+      "evidence": [
+        {
+          "path": "benchmarks/paired-comparison-2026-09-14.md",
+          "line": 61
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "reporting-reserve",
+      "kind": "fragile-area",
+      "title": "Reporting reserve heuristic",
+      "summary": "The controller reserves time for discovery closure and reporting from observed request latency. The reserve is headroom, not a guarantee about provider latency; changes here alter when navigation tools disappear.",
+      "paths": [
+        "src/investigation.ts"
+      ],
+      "evidence": [
+        {
+          "path": "src/investigation.ts",
+          "line": 198
+        }
+      ],
+      "basis": "observed"
+    },
+    {
+      "id": "codex-usage-deltas",
+      "kind": "fragile-area",
+      "title": "Local Codex usage accounting",
+      "summary": "The local Codex adapter derives per-turn usage from lifetime session totals reported by CLI 0.145; a CLI change in usage reporting silently breaks token accounting and reservations.",
+      "paths": [
+        "benchmarks/codex-model.mjs"
+      ],
+      "evidence": [
+        {
+          "path": "benchmarks/codex-model.mjs",
+          "line": 88
+        }
+      ],
+      "basis": "observed"
+    }
+  ]
+}

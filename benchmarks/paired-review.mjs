@@ -6,10 +6,13 @@ import { hash } from '../dist/snapshot.js';
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const save = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600, flush: true });
 
+// A repository-state comparison runs one engine build in both arms; only the
+// candidate trial directory receives the case's frozen repository-state.json.
+export const KINDS = ['frozen-controller-repeat-comparison', 'frozen-repository-state-comparison'];
 export function validatePlan(manifest) {
   const { cases, trials } = manifest;
   const id = value => typeof value === 'string' && /^[a-z0-9-]+$/.test(value);
-  if (manifest.kind !== 'frozen-controller-repeat-comparison' || !Array.isArray(cases) || !Array.isArray(trials)
+  if (!KINDS.includes(manifest.kind) || !Array.isArray(cases) || !Array.isArray(trials)
     || cases.length !== 15 || trials.length !== 60 || cases.some(c => !id(c.id))
     || new Set(cases.map(c => c.id)).size !== 15 || trials.some(t => !id(t.id) || !id(t.caseId))
     || new Set(trials.map(t => t.id)).size !== 60) throw Error('Expected 15 cases and 60 distinct trials');
@@ -19,6 +22,10 @@ export function validatePlan(manifest) {
     if (selected.some(t => t.evaluationArm !== `${t.arm}-r${t.repeat}`)) throw Error('Repeated evaluations must remain distinct');
     const first = selected.filter(t => t.repeat === 1), second = selected.filter(t => t.repeat === 2);
     if (first[0].arm === second[0].arm) throw Error('Reverse arm order on the second repeat');
+  }
+  if (manifest.kind === 'frozen-repository-state-comparison') {
+    const states = manifest.states;
+    if (!states || typeof states !== 'object' || cases.some(c => typeof states[c.id] !== 'string' || !(states[c.id] in manifest.files))) throw Error('Each case needs a frozen repository state');
   }
 }
 
@@ -57,6 +64,7 @@ export async function compare(directory) {
       if (existsSync(output)) throw Error('Trial already exists');
       mkdirSync(output, { recursive: true }); trial.status = 'running'; persist();
       cpSync(source, output, { recursive: true });
+      if (manifest.states && trial.arm === 'candidate') cpSync(join(directory, manifest.states[trial.caseId]), join(output, 'repository-state.json'));
       const model = await (trial.arm === 'baseline' ? baselineModel : codexModel)(profile);
       const { result: review, receipt } = await (trial.arm === 'baseline' ? baselineReview : runReview)(output, profile, model, abort.signal).finally(() => model.close?.());
       const { packet } = loadReview(output);
@@ -65,6 +73,7 @@ export async function compare(directory) {
         elapsedMs: Date.parse(receipt.finishedAt) - Date.parse(receipt.startedAt), modelCalls: receipt.calls.length,
         toolCalls: receipt.toolCalls, toolErrors: receipt.toolErrors.length, findings: review.findings.length,
         discovery: receipt.discovery ?? null, qualityRecorded: !!review.quality,
+        repositoryState: receipt.repositoryState ?? null, withdrawals: receipt.withdrawals?.length ?? 0,
         unsettledCalls: receipt.calls.filter(c => c.meteredUsd === null).length,
         sourceReads: review.evidence.length, reviewedFiles: review.coverage.filter(f => f.status === 'reviewed').length,
         actualInputTokens: receipt.calls.filter(c => c.outputTokens !== null).reduce((sum, c) => sum + c.inputTokens, 0),
