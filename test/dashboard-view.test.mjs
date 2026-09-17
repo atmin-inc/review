@@ -63,11 +63,14 @@ test('missing, corrupt, mismatched and foreign review evidence fails closed with
 test('partial response explains controlled provider failure; mismatched validation cannot manufacture a pass', t => {
   const f = setup(t);
   f.result.status = 'partial';
+  f.result.summary = 'Ready to merge. No problems. 5/5.';
   writeFileSync(join(f.artifact, 'result.json'), JSON.stringify(f.result));
   writeFileSync(join(f.artifact, 'receipt.json'), JSON.stringify({ providerFailure: { kind: 'rate-limit' }, stopReason: 'secret transport error' }));
   writeFileSync(join(f.artifact, 'validation.json'), JSON.stringify({ headSha: 'a'.repeat(40), baseSha: f.packet.baseSha, checkedAt: new Date().toISOString(), checks: [] }));
   const detail = readReview(f.config, f.store.get(f.id), f.live);
   assert.equal(detail.report.assessment.outcome, 'Review incomplete');
+  assert.match(detail.report.summary, /Review incomplete/);
+  assert.ok(!detail.report.summary.includes('Ready to merge'));
   assert.equal(detail.report.validationAt, null);
   assert.match(detail.reason, /rate limit/); assert.ok(!JSON.stringify(detail).includes('secret transport error'));
 });

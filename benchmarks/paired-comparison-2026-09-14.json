@@ -1,0 +1,2262 @@
+{
+  "manifestHash": "91c7f1682fab794e93d753bf969567c3200f9da6a00d5d3998fa94c5d47f7c81",
+  "benchmarkCommit": "e616e849755441da38f18bf3adba2c9583b03803",
+  "engines": {
+    "baseline": "r02-24; same repaired adapter as candidate",
+    "candidate": "r02-26 / cdd925d"
+  },
+  "model": "gpt-5.6-sol",
+  "reasoning": "medium",
+  "startedAt": "2026-09-14T12:08:29.816Z",
+  "finishedAt": "2026-09-14T16:03:48.777Z",
+  "developmentCases": 15,
+  "reservedCases": 35,
+  "repeats": 2,
+  "arms": {
+    "baseline": {
+      "scheduled": 30,
+      "attempted": 30,
+      "completed": 24,
+      "completedWithinTenMinutes": 21,
+      "statuses": {
+        "completed": 24,
+        "partial": 6
+      },
+      "medianAttemptMs": 332641,
+      "maxAttemptMs": 2576844,
+      "attemptsWithoutDuration": 0,
+      "phaseTiming": {
+        "trials": 0,
+        "medianDiscoveryMs": null,
+        "medianAssessmentMs": null
+      },
+      "actualInputTokens": 41621063,
+      "cachedInputTokens": 37486976,
+      "actualOutputTokens": 279891,
+      "modelCalls": 471,
+      "toolCalls": 3134,
+      "toolErrors": 138,
+      "trialsWithoutCompleteUsage": 0,
+      "unsettledCalls": 0,
+      "repeatAgreement": {
+        "both": 11,
+        "either": 16,
+        "onlyOne": 5,
+        "neither": 20,
+        "casesWithIdenticalMatches": 10
+      },
+      "scores": {
+        "strict": {
+          "repeats": [
+            {
+              "precision": 0.1643835616438356,
+              "recall": 0.36363636363636365,
+              "f1": 0.22641509433962262,
+              "fbeta": 0.2926829268292682,
+              "tp": 12,
+              "fp": 61,
+              "fn": 21,
+              "prs": 15
+            },
+            {
+              "precision": 0.19047619047619047,
+              "recall": 0.36363636363636365,
+              "f1": 0.25,
+              "fbeta": 0.30769230769230765,
+              "tp": 12,
+              "fp": 51,
+              "fn": 21,
+              "prs": 15
+            }
+          ],
+          "pooled": {
+            "tp": 24,
+            "fp": 112,
+            "fn": 42,
+            "prs": 30,
+            "precision": 0.17647058823529413,
+            "recall": 0.36363636363636365,
+            "fbeta": 0.3
+          }
+        },
+        "core": {
+          "repeats": [
+            {
+              "precision": 0.18666666666666668,
+              "recall": 0.3888888888888889,
+              "f1": 0.25225225225225223,
+              "fbeta": 0.319634703196347,
+              "tp": 14,
+              "fp": 61,
+              "fn": 22,
+              "prs": 15
+            },
+            {
+              "precision": 0.203125,
+              "recall": 0.3611111111111111,
+              "f1": 0.26,
+              "fbeta": 0.3125,
+              "tp": 13,
+              "fp": 51,
+              "fn": 23,
+              "prs": 15
+            }
+          ],
+          "pooled": {
+            "tp": 27,
+            "fp": 112,
+            "fn": 45,
+            "prs": 30,
+            "precision": 0.19424460431654678,
+            "recall": 0.375,
+            "fbeta": 0.3161592505854801
+          }
+        },
+        "all": {
+          "repeats": [
+            {
+              "precision": 0.19736842105263158,
+              "recall": 0.36585365853658536,
+              "f1": 0.2564102564102564,
+              "fbeta": 0.3125,
+              "tp": 15,
+              "fp": 61,
+              "fn": 26,
+              "prs": 15
+            },
+            {
+              "precision": 0.203125,
+              "recall": 0.3170731707317073,
+              "f1": 0.2476190476190476,
+              "fbeta": 0.2850877192982456,
+              "tp": 13,
+              "fp": 51,
+              "fn": 28,
+              "prs": 15
+            }
+          ],
+          "pooled": {
+            "tp": 28,
+            "fp": 112,
+            "fn": 54,
+            "prs": 30,
+            "precision": 0.2,
+            "recall": 0.34146341463414637,
+            "fbeta": 0.29914529914529914
+          }
+        }
+      }
+    },
+    "candidate": {
+      "scheduled": 30,
+      "attempted": 30,
+      "completed": 29,
+      "completedWithinTenMinutes": 27,
+      "statuses": {
+        "completed": 29,
+        "partial": 1
+      },
+      "medianAttemptMs": 325353,
+      "maxAttemptMs": 678227,
+      "attemptsWithoutDuration": 0,
+      "phaseTiming": {
+        "trials": 29,
+        "medianDiscoveryMs": 251546,
+        "medianAssessmentMs": 59790
+      },
+      "actualInputTokens": 37677229,
+      "cachedInputTokens": 34539520,
+      "actualOutputTokens": 259565,
+      "modelCalls": 457,
+      "toolCalls": 2639,
+      "toolErrors": 62,
+      "trialsWithoutCompleteUsage": 0,
+      "unsettledCalls": 0,
+      "repeatAgreement": {
+        "both": 10,
+        "either": 17,
+        "onlyOne": 7,
+        "neither": 19,
+        "casesWithIdenticalMatches": 10
+      },
+      "scores": {
+        "strict": {
+          "repeats": [
+            {
+              "precision": 0.1744186046511628,
+              "recall": 0.45454545454545453,
+              "f1": 0.25210084033613445,
+              "fbeta": 0.3440366972477064,
+              "tp": 15,
+              "fp": 71,
+              "fn": 18,
+              "prs": 15
+            },
+            {
+              "precision": 0.15714285714285714,
+              "recall": 0.3333333333333333,
+              "f1": 0.21359223300970873,
+              "fbeta": 0.27227722772277224,
+              "tp": 11,
+              "fp": 59,
+              "fn": 22,
+              "prs": 15
+            }
+          ],
+          "pooled": {
+            "tp": 26,
+            "fp": 130,
+            "fn": 40,
+            "prs": 30,
+            "precision": 0.16666666666666666,
+            "recall": 0.3939393939393939,
+            "fbeta": 0.30952380952380953
+          }
+        },
+        "core": {
+          "repeats": [
+            {
+              "precision": 0.1744186046511628,
+              "recall": 0.4166666666666667,
+              "f1": 0.2459016393442623,
+              "fbeta": 0.3260869565217392,
+              "tp": 15,
+              "fp": 71,
+              "fn": 21,
+              "prs": 15
+            },
+            {
+              "precision": 0.16901408450704225,
+              "recall": 0.3333333333333333,
+              "f1": 0.22429906542056077,
+              "fbeta": 0.27906976744186046,
+              "tp": 12,
+              "fp": 59,
+              "fn": 24,
+              "prs": 15
+            }
+          ],
+          "pooled": {
+            "tp": 27,
+            "fp": 130,
+            "fn": 45,
+            "prs": 30,
+            "precision": 0.17197452229299362,
+            "recall": 0.375,
+            "fbeta": 0.30337078651685395
+          }
+        },
+        "all": {
+          "repeats": [
+            {
+              "precision": 0.1744186046511628,
+              "recall": 0.36585365853658536,
+              "f1": 0.2362204724409449,
+              "fbeta": 0.3,
+              "tp": 15,
+              "fp": 71,
+              "fn": 26,
+              "prs": 15
+            },
+            {
+              "precision": 0.18055555555555555,
+              "recall": 0.3170731707317073,
+              "f1": 0.23008849557522124,
+              "fbeta": 0.2754237288135593,
+              "tp": 13,
+              "fp": 59,
+              "fn": 28,
+              "prs": 15
+            }
+          ],
+          "pooled": {
+            "tp": 28,
+            "fp": 130,
+            "fn": 54,
+            "prs": 30,
+            "precision": 0.17721518987341772,
+            "recall": 0.34146341463414637,
+            "fbeta": 0.2880658436213992
+          }
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "case-032",
+      "url": "https://github.com/keycloak/keycloak/pull/32918",
+      "packetHash": "37ad6e85b121dd6715b27acdac4f42939404ffe22bbeb4969728a19f8369c66d",
+      "diffHash": "74a4b18544b764f398aaa13a4084d004ac5cba6a8c318a15a93aaf52cc90295c",
+      "trials": [
+        {
+          "id": "case-032-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 290473,
+          "reportHash": "74b5dfe9a1411d8926960320c89ad2416db57e18bc3463df32e7d2ea7da6a3c2",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 4,
+          "coreMatches": 0,
+          "coreExpected": 2,
+          "matched": [],
+          "missed": [
+            "Cleanup reference uses incorrect alias - should be 'idp-alias-' + i instead of 'alias'.",
+            "InfinispanIdentityProviderStorageProvider.getForLogin() recursively calls session.identityProviders().getById() instead of idpDelegate.getById(), causing the cache lookup to re-enter the same caching layer."
+          ]
+        },
+        {
+          "id": "case-032-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 327860,
+          "reportHash": "a6c6cb8d8b9e73d9dbdcc5509cc691a9211008c8194a12e6a9aa2a3f892969dc",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 4,
+          "coreMatches": 0,
+          "coreExpected": 2,
+          "matched": [],
+          "missed": [
+            "Cleanup reference uses incorrect alias - should be 'idp-alias-' + i instead of 'alias'.",
+            "InfinispanIdentityProviderStorageProvider.getForLogin() recursively calls session.identityProviders().getById() instead of idpDelegate.getById(), causing the cache lookup to re-enter the same caching layer."
+          ]
+        },
+        {
+          "id": "case-032-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 317866,
+          "reportHash": "6121ea636e064aba80d4530ccefe30ecc24e77cd154bf2d96038ede66c2e3b7e",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 2,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "Cleanup reference uses incorrect alias - should be 'idp-alias-' + i instead of 'alias'."
+          ],
+          "missed": [
+            "InfinispanIdentityProviderStorageProvider.getForLogin() recursively calls session.identityProviders().getById() instead of idpDelegate.getById(), causing the cache lookup to re-enter the same caching layer."
+          ]
+        },
+        {
+          "id": "case-032-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 461917,
+          "reportHash": "286b7fddc0971ec4e746ffe7c00de49cfea2a58f15bfdba390280963c7cf94e6",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 2,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "Cleanup reference uses incorrect alias - should be 'idp-alias-' + i instead of 'alias'."
+          ],
+          "missed": [
+            "InfinispanIdentityProviderStorageProvider.getForLogin() recursively calls session.identityProviders().getById() instead of idpDelegate.getById(), causing the cache lookup to re-enter the same caching layer."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 1,
+          "onlyOne": 1,
+          "neither": 1,
+          "identicalMatches": false
+        },
+        "candidate": {
+          "both": 0,
+          "either": 1,
+          "onlyOne": 1,
+          "neither": 1,
+          "identicalMatches": false
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 37387
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -144051
+        }
+      ],
+      "candidateMinusBaselineMatches": 0
+    },
+    {
+      "id": "case-023",
+      "url": "https://github.com/grafana/grafana/pull/107534",
+      "packetHash": "476dc08179dab23d261d0b3fc7fdc29047946a3014358f3be3c3d1b2704d1149",
+      "diffHash": "962b2817be0453dcc103f7f07ea62f4203e295b800a042a94cf96e743ca3f7e2",
+      "trials": [
+        {
+          "id": "case-023-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 262965,
+          "reportHash": "920c53102598977ecdbd2dba7570f4d3f9f865d960a042504a6f13083a0f6ec1",
+          "findings": 1,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The applyTemplateVariables method is called with request.filters as the third parameter, but this parameter is not used in the corresponding test setup."
+          ]
+        },
+        {
+          "id": "case-023-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 263351,
+          "reportHash": "e583ac544b7149566af28c2c77de770ca7160d8ee71c2ed6adc5d7afee9a7196",
+          "findings": 0,
+          "candidates": 3,
+          "unmatchedCandidates": 2,
+          "coreMatches": 1,
+          "coreExpected": 1,
+          "matched": [
+            "The applyTemplateVariables method is called with request.filters as the third parameter, but this parameter is not used in the corresponding test setup."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-023-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 363966,
+          "reportHash": "fb5ac500cfe2c5a784ab8c91ab21c79d2ce948fc240b521972938a0a7432e822",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 3,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The applyTemplateVariables method is called with request.filters as the third parameter, but this parameter is not used in the corresponding test setup."
+          ]
+        },
+        {
+          "id": "case-023-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 473951,
+          "reportHash": "956f713a26e39c6bd0a40abf85a72688e97f4c6071ef27167a17baf390be2817",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 3,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The applyTemplateVariables method is called with request.filters as the third parameter, but this parameter is not used in the corresponding test setup."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 1,
+          "onlyOne": 1,
+          "neither": 0,
+          "identicalMatches": false
+        },
+        "candidate": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": -1,
+          "candidateMinusBaselineMs": -386
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 109985
+        }
+      ],
+      "candidateMinusBaselineMatches": -1
+    },
+    {
+      "id": "case-050",
+      "url": "https://github.com/getsentry/sentry/pull/95633",
+      "packetHash": "47baa0be9586f9eb8672e17994a35171b3073bb9c514b76724479aa3141a996b",
+      "diffHash": "698a108f9eb58b44decaffc5102b5705d6cfd70e1fa428dd5dc791a442a0ebda",
+      "trials": [
+        {
+          "id": "case-050-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 242024,
+          "reportHash": "afe0b4751809af8afe589ab71e6351352436272d3373483027bdad0225382912",
+          "findings": 3,
+          "candidates": 8,
+          "unmatchedCandidates": 8,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The test test_thread_queue_parallel_error_handling has a docstring that doesn't match the test implementation."
+          ]
+        },
+        {
+          "id": "case-050-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 360628,
+          "reportHash": "f1e7a6dca4b2c2d1931218125e8051019b0068dea43ecbf101156b33f445373b",
+          "findings": 4,
+          "candidates": 13,
+          "unmatchedCandidates": 13,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The test test_thread_queue_parallel_error_handling has a docstring that doesn't match the test implementation."
+          ]
+        },
+        {
+          "id": "case-050-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 387737,
+          "reportHash": "39b0987d6b1bece6604ee4356fcce46a21147815d9af62401040be771b901f8c",
+          "findings": 5,
+          "candidates": 11,
+          "unmatchedCandidates": 11,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The test test_thread_queue_parallel_error_handling has a docstring that doesn't match the test implementation."
+          ]
+        },
+        {
+          "id": "case-050-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "partial",
+          "stopReason": "Provider response incomplete; accepted findings preserved",
+          "elapsedMs": 2576844,
+          "reportHash": "d1c1fd50d2d8fc1f6b715aa774e92bbc07da7bcffed5eb9a4fa769d514c71dcc",
+          "findings": 0,
+          "candidates": 3,
+          "unmatchedCandidates": 3,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The test test_thread_queue_parallel_error_handling has a docstring that doesn't match the test implementation."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 118604
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -2189107
+        }
+      ],
+      "candidateMinusBaselineMatches": 0
+    },
+    {
+      "id": "case-009",
+      "url": "https://github.com/calcom/cal.com/pull/8087",
+      "packetHash": "bb1efb5cfa30abc3d576339d2983def16c7c1905823a4816cc07f32b9dc3d3f3",
+      "diffHash": "5cc529e25308c948fa5d91c99453f7265244e38903f7b64cd005d47d901fd87d",
+      "trials": [
+        {
+          "id": "case-009-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 322846,
+          "reportHash": "1c82d1ea9d56eadb383af9b36969708a06ff666f4f1ce8e67148b1fe28e7bb34",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 1,
+          "matched": [
+            "The code uses forEach with async callbacks, which causes asynchronous operations (e.g., calendar/video event deletions, payment refunds) to run concurrently without being awaited. This 'fire-and-forget' behavior leads to unhandled promise rejections, race conditions, and incomplete cleanup, as surrounding try-catch blocks cannot properly handle errors from these unawaited promises. Replace forEach with for...of loops or Promise.all() with map() to ensure proper sequential execution and error handling."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-009-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 232191,
+          "reportHash": "82ac4a31702717f0a337f751bcd63be98dfbe3a025bd120ea938e3945a2f7f2b",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 1,
+          "matched": [
+            "The code uses forEach with async callbacks, which causes asynchronous operations (e.g., calendar/video event deletions, payment refunds) to run concurrently without being awaited. This 'fire-and-forget' behavior leads to unhandled promise rejections, race conditions, and incomplete cleanup, as surrounding try-catch blocks cannot properly handle errors from these unawaited promises. Replace forEach with for...of loops or Promise.all() with map() to ensure proper sequential execution and error handling."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-009-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 284371,
+          "reportHash": "71e7c875e4151b8ffa3b40de9cb3b48a321feb56f4dfb2c1f3864bffad6048b6",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 1,
+          "matched": [
+            "The code uses forEach with async callbacks, which causes asynchronous operations (e.g., calendar/video event deletions, payment refunds) to run concurrently without being awaited. This 'fire-and-forget' behavior leads to unhandled promise rejections, race conditions, and incomplete cleanup, as surrounding try-catch blocks cannot properly handle errors from these unawaited promises. Replace forEach with for...of loops or Promise.all() with map() to ensure proper sequential execution and error handling."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-009-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 466087,
+          "reportHash": "ecc4189ec952df003f48c746ce61b159ec32e57b2b84f4335a77f9e023a0e189",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 1,
+          "matched": [
+            "The code uses forEach with async callbacks, which causes asynchronous operations (e.g., calendar/video event deletions, payment refunds) to run concurrently without being awaited. This 'fire-and-forget' behavior leads to unhandled promise rejections, race conditions, and incomplete cleanup, as surrounding try-catch blocks cannot properly handle errors from these unawaited promises. Replace forEach with for...of loops or Promise.all() with map() to ensure proper sequential execution and error handling."
+          ],
+          "missed": []
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 0,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 0,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 90655
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 181716
+        }
+      ],
+      "candidateMinusBaselineMatches": 0
+    },
+    {
+      "id": "case-042",
+      "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/2",
+      "packetHash": "57b3e17284026fd57390cc23c61888bd2768ec2d248fb9a99aa8eeaccb966e63",
+      "diffHash": "64d994e28611b90deacc3fd5f0402bda1c96ef139a96d6c05a7c575f086b388b",
+      "trials": [
+        {
+          "id": "case-042-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 425297,
+          "reportHash": "d2d681f6625688a8e425554afd917793fab7286e48121d2e86bbbd705b5a0a6d",
+          "findings": 4,
+          "candidates": 11,
+          "unmatchedCandidates": 9,
+          "coreMatches": 3,
+          "coreExpected": 4,
+          "matched": [
+            "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+            "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+            "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError."
+          ],
+          "missed": [
+            "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users."
+          ]
+        },
+        {
+          "id": "case-042-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 338211,
+          "reportHash": "d5544af721d8abbeb93844afeef6a9418668405d44ae0569fdcaefeb309d05b4",
+          "findings": 4,
+          "candidates": 6,
+          "unmatchedCandidates": 4,
+          "coreMatches": 3,
+          "coreExpected": 4,
+          "matched": [
+            "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+            "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+            "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError."
+          ],
+          "missed": [
+            "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users."
+          ]
+        },
+        {
+          "id": "case-042-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 297805,
+          "reportHash": "c3006a48b070012e6d1004eaea08437b1987e9f93542e8b1128f4e8f4b385b03",
+          "findings": 3,
+          "candidates": 7,
+          "unmatchedCandidates": 5,
+          "coreMatches": 3,
+          "coreExpected": 4,
+          "matched": [
+            "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+            "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+            "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError."
+          ],
+          "missed": [
+            "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users."
+          ]
+        },
+        {
+          "id": "case-042-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 376407,
+          "reportHash": "bda3c10a2d182fec4c0d859613e91eed1c6855831aa55e38085fa41fe10f913b",
+          "findings": 4,
+          "candidates": 11,
+          "unmatchedCandidates": 10,
+          "coreMatches": 1,
+          "coreExpected": 4,
+          "matched": [
+            "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError."
+          ],
+          "missed": [
+            "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users.",
+            "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+            "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 3,
+          "either": 3,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 1,
+          "either": 3,
+          "onlyOne": 2,
+          "neither": 1,
+          "identicalMatches": false
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 87086
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": -2,
+          "candidateMinusBaselineMs": 78602
+        }
+      ],
+      "candidateMinusBaselineMatches": -2
+    },
+    {
+      "id": "case-017",
+      "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/6",
+      "packetHash": "ca197f8928f988078191320df28a009df3170b62a2d4f0ceaf46861eb8dbca94",
+      "diffHash": "2c4bb67356105d1855bc25a69ab34b6d6648a67361821d9ed6420169b5f09f04",
+      "trials": [
+        {
+          "id": "case-017-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 197334,
+          "reportHash": "a36a16a9e41e972937a142a84c53f88f79912a5583f76b144fbb13d708894b0f",
+          "findings": 1,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The include_website_name method is missing the required ? suffix. Rails serializers expect include_ methods to end with ? for conditional attribute inclusion, a convention followed by other methods in this serializer. Without it, the website_name attribute may not be conditionally included as intended. Additionally, the '.' << website_host string concatenation should be replaced with '.' + website_host or '.#{website_host}' to avoid mutating string literals, which can lead to issues."
+          ]
+        },
+        {
+          "id": "case-017-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 191679,
+          "reportHash": "e354c5cfb89634a193f11072bf49085f960ef19d44a30cc7d14967f3e14cca3b",
+          "findings": 1,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The include_website_name method is missing the required ? suffix. Rails serializers expect include_ methods to end with ? for conditional attribute inclusion, a convention followed by other methods in this serializer. Without it, the website_name attribute may not be conditionally included as intended. Additionally, the '.' << website_host string concatenation should be replaced with '.' + website_host or '.#{website_host}' to avoid mutating string literals, which can lead to issues."
+          ]
+        },
+        {
+          "id": "case-017-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 327071,
+          "reportHash": "877a0dbd706cc2cef72e6c80d128610b159ae6a9b66f612fccd5d887de0ce2f7",
+          "findings": 2,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The include_website_name method is missing the required ? suffix. Rails serializers expect include_ methods to end with ? for conditional attribute inclusion, a convention followed by other methods in this serializer. Without it, the website_name attribute may not be conditionally included as intended. Additionally, the '.' << website_host string concatenation should be replaced with '.' + website_host or '.#{website_host}' to avoid mutating string literals, which can lead to issues."
+          ]
+        },
+        {
+          "id": "case-017-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 334322,
+          "reportHash": "ee376fcb31ea13d1edb1ae0378cc3d63fe327a11cf9a3c567ecbaf391c46e82e",
+          "findings": 1,
+          "candidates": 5,
+          "unmatchedCandidates": 5,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "The include_website_name method is missing the required ? suffix. Rails serializers expect include_ methods to end with ? for conditional attribute inclusion, a convention followed by other methods in this serializer. Without it, the website_name attribute may not be conditionally included as intended. Additionally, the '.' << website_host string concatenation should be replaced with '.' + website_host or '.#{website_host}' to avoid mutating string literals, which can lead to issues."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 5655
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": 7251
+        }
+      ],
+      "candidateMinusBaselineMatches": 0
+    },
+    {
+      "id": "case-006",
+      "url": "https://github.com/calcom/cal.com/pull/22345",
+      "packetHash": "7f8b9f67b1b250b171f2bc21405a65d3f251ecaf749df74a5aa7d1b8929dca7c",
+      "diffHash": "0c36b2df571d4c7b2a2e172787e79b0b64d5617c964859ff746c393194457530",
+      "trials": [
+        {
+          "id": "case-006-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 162103,
+          "reportHash": "1fb8d1657b0c6b10a930412b8e1cbfc79d2f44473fefa4e6207b9b10c4f74f61",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 3,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated."
+          ]
+        },
+        {
+          "id": "case-006-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 136229,
+          "reportHash": "0a5d4adf8eb83123a3c19a075503e37e769a8f92b6b1fe8acbda1574d04da7d4",
+          "findings": 0,
+          "candidates": 4,
+          "unmatchedCandidates": 4,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated."
+          ]
+        },
+        {
+          "id": "case-006-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 263370,
+          "reportHash": "7798f6c0124696412ece5d4ac8696fb3e8f9afbb631d06a5c2f403328b74f9a7",
+          "findings": 0,
+          "candidates": 2,
+          "unmatchedCandidates": 2,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated."
+          ]
+        },
+        {
+          "id": "case-006-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 408502,
+          "reportHash": "c00475cb406f0ba278302c87a991e187552547f6cff74a71223bc46d3af4c0ad",
+          "findings": 0,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 1,
+          "matched": [],
+          "missed": [
+            "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -25874
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -145132
+        }
+      ],
+      "candidateMinusBaselineMatches": 0
+    },
+    {
+      "id": "case-038",
+      "url": "https://github.com/keycloak/keycloak/pull/37634",
+      "packetHash": "31043b77097cb3dba24c7dc74c0bd6e974d2c45ac96220739c4e1394186273a9",
+      "diffHash": "b2b9a8589563aa67c7ef36615d288bea2ceb95cab1ff97e33890e869f6c1d7a8",
+      "trials": [
+        {
+          "id": "case-038-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 349206,
+          "reportHash": "b61e439d74fff8e92d06770228ee1b3f7d1ac4b3ae3daa49a0d9716b2b14bf4c",
+          "findings": 4,
+          "candidates": 6,
+          "unmatchedCandidates": 4,
+          "coreMatches": 2,
+          "coreExpected": 4,
+          "matched": [
+            "In AccessTokenContext constructor, the fourth Objects.requireNonNull validates grantType twice instead of validating rawTokenId, allowing null rawTokenId values to pass validation.",
+            "In isAccessTokenId, the substring for the grant shortcut and the equality check look inverted: the grant shortcut occupies indices 4\u20135 (substring(4,6)), and a match should return true (combined with UUID check), not false."
+          ],
+          "missed": [
+            " Catching generic RuntimeException is too broad. The implementation throws IllegalArgumentException specifically - catch that instead for more precise testing.",
+            "Javadoc mentions \"usually like 3-letters shortcut\" but some implementations use 2-letter shortcuts (\"ac\", \"cc\", \"rt\", \"te\", \"pc\", \"ci\", \"ro\"). Consider updating documentation to reflect actual usage pattern."
+          ]
+        },
+        {
+          "id": "case-038-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "partial",
+          "stopReason": "Provider response incomplete; accepted findings preserved",
+          "elapsedMs": 515415,
+          "reportHash": "32a3946c675eb333b8f5b407ac2f493e8bc4c41b4aca93db1f2562330ce442aa",
+          "findings": 4,
+          "candidates": 6,
+          "unmatchedCandidates": 4,
+          "coreMatches": 2,
+          "coreExpected": 4,
+          "matched": [
+            "In isAccessTokenId, the substring for the grant shortcut and the equality check look inverted: the grant shortcut occupies indices 4\u20135 (substring(4,6)), and a match should return true (combined with UUID check), not false.",
+            "Javadoc mentions \"usually like 3-letters shortcut\" but some implementations use 2-letter shortcuts (\"ac\", \"cc\", \"rt\", \"te\", \"pc\", \"ci\", \"ro\"). Consider updating documentation to reflect actual usage pattern."
+          ],
+          "missed": [
+            " Catching generic RuntimeException is too broad. The implementation throws IllegalArgumentException specifically - catch that instead for more precise testing.",
+            "In AccessTokenContext constructor, the fourth Objects.requireNonNull validates grantType twice instead of validating rawTokenId, allowing null rawTokenId values to pass validation."
+          ]
+        },
+        {
+          "id": "case-038-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 1119268,
+          "reportHash": "0d04a8aa7697528945ab261f016aa68ba0f2595f63b67cdb4002c8be6e9aa682",
+          "findings": 3,
+          "candidates": 8,
+          "unmatchedCandidates": 4,
+          "coreMatches": 3,
+          "coreExpected": 4,
+          "matched": [
+            "In AccessTokenContext constructor, the fourth Objects.requireNonNull validates grantType twice instead of validating rawTokenId, allowing null rawTokenId values to pass validation.",
+            "In isAccessTokenId, the substring for the grant shortcut and the equality check look inverted: the grant shortcut occupies indices 4\u20135 (substring(4,6)), and a match should return true (combined with UUID check), not false.",
+            "Javadoc mentions \"usually like 3-letters shortcut\" but some implementations use 2-letter shortcuts (\"ac\", \"cc\", \"rt\", \"te\", \"pc\", \"ci\", \"ro\"). Consider updating documentation to reflect actual usage pattern."
+          ],
+          "missed": [
+            " Catching generic RuntimeException is too broad. The implementation throws IllegalArgumentException specifically - catch that instead for more precise testing."
+          ]
+        },
+        {
+          "id": "case-038-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 678227,
+          "reportHash": "aa5a427bae521f3e3ac33accc078439c34357f2d803db13b52e4068b26bc7905",
+          "findings": 4,
+          "candidates": 8,
+          "unmatchedCandidates": 6,
+          "coreMatches": 2,
+          "coreExpected": 4,
+          "matched": [
+            "In AccessTokenContext constructor, the fourth Objects.requireNonNull validates grantType twice instead of validating rawTokenId, allowing null rawTokenId values to pass validation.",
+            "Javadoc mentions \"usually like 3-letters shortcut\" but some implementations use 2-letter shortcuts (\"ac\", \"cc\", \"rt\", \"te\", \"pc\", \"ci\", \"ro\"). Consider updating documentation to reflect actual usage pattern."
+          ],
+          "missed": [
+            " Catching generic RuntimeException is too broad. The implementation throws IllegalArgumentException specifically - catch that instead for more precise testing.",
+            "In isAccessTokenId, the substring for the grant shortcut and the equality check look inverted: the grant shortcut occupies indices 4\u20135 (substring(4,6)), and a match should return true (combined with UUID check), not false."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 2,
+          "either": 3,
+          "onlyOne": 1,
+          "neither": 1,
+          "identicalMatches": false
+        },
+        "candidate": {
+          "both": 1,
+          "either": 3,
+          "onlyOne": 2,
+          "neither": 1,
+          "identicalMatches": false
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -166209
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": -1,
+          "candidateMinusBaselineMs": -441041
+        }
+      ],
+      "candidateMinusBaselineMatches": -1
+    },
+    {
+      "id": "case-046",
+      "url": "https://github.com/getsentry/sentry/pull/77754",
+      "packetHash": "b07a19d3e8fa3360eb7d81fef26a08a514959ab3a94287d7203259a63a66152b",
+      "diffHash": "12bfc05fbbb012b77fb90db51a65196873de5e28cb42394f9b9918f89b2ada8f",
+      "trials": [
+        {
+          "id": "case-046-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 228302,
+          "reportHash": "9f95e804c4d0909d542f86f64d4b4d809c6084877c0a34d77e6acebbaa8851c1",
+          "findings": 2,
+          "candidates": 4,
+          "unmatchedCandidates": 3,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "The AssignmentSource dataclass uses queued: datetime = timezone.now() as a default field value, which evaluates timezone.now() once at class definition time and shares that single datetime instance across all objects."
+          ],
+          "missed": [
+            "to_dict() returns a datetime for queued; if this dict is passed in task kwargs (e.g., via apply_async), JSON serialization may fail depending on the serializer, which can cause enqueue errors."
+          ]
+        },
+        {
+          "id": "case-046-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 255979,
+          "reportHash": "b20c67ea07c748686db1793331a54f9bbbb1968211841c61cdf9770ddf2c39bd",
+          "findings": 1,
+          "candidates": 2,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "The AssignmentSource dataclass uses queued: datetime = timezone.now() as a default field value, which evaluates timezone.now() once at class definition time and shares that single datetime instance across all objects."
+          ],
+          "missed": [
+            "to_dict() returns a datetime for queued; if this dict is passed in task kwargs (e.g., via apply_async), JSON serialization may fail depending on the serializer, which can cause enqueue errors."
+          ]
+        },
+        {
+          "id": "case-046-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 642787,
+          "reportHash": "00d6c411ae888748fa9b0d0edc290b64a0ebfe3a3a1a1cbc3b4a659d6e592980",
+          "findings": 1,
+          "candidates": 2,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "The AssignmentSource dataclass uses queued: datetime = timezone.now() as a default field value, which evaluates timezone.now() once at class definition time and shares that single datetime instance across all objects."
+          ],
+          "missed": [
+            "to_dict() returns a datetime for queued; if this dict is passed in task kwargs (e.g., via apply_async), JSON serialization may fail depending on the serializer, which can cause enqueue errors."
+          ]
+        },
+        {
+          "id": "case-046-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "partial",
+          "stopReason": "Provider response incomplete; accepted findings preserved",
+          "elapsedMs": 213346,
+          "reportHash": "08279c0ad15f401c2bdd86113f1627c278e5baeb5ef9dcb5d19175ff4b05c154",
+          "findings": 0,
+          "candidates": 3,
+          "unmatchedCandidates": 3,
+          "coreMatches": 0,
+          "coreExpected": 2,
+          "matched": [],
+          "missed": [
+            "The AssignmentSource dataclass uses queued: datetime = timezone.now() as a default field value, which evaluates timezone.now() once at class definition time and shares that single datetime instance across all objects.",
+            "to_dict() returns a datetime for queued; if this dict is passed in task kwargs (e.g., via apply_async), JSON serialization may fail depending on the serializer, which can cause enqueue errors."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 0,
+          "either": 1,
+          "onlyOne": 1,
+          "neither": 1,
+          "identicalMatches": false
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -27677
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": -1,
+          "candidateMinusBaselineMs": -429441
+        }
+      ],
+      "candidateMinusBaselineMatches": -1
+    },
+    {
+      "id": "case-015",
+      "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/4",
+      "packetHash": "9faa31bdbb8fd89e188db14922f1259a2b658827dadc0295c9c92a8f66182808",
+      "diffHash": "5337eaa40b379f1bd00d5a7ff400df5f15aab6cb399de99c2f9b62321f8c40ae",
+      "trials": [
+        {
+          "id": "case-015-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 622983,
+          "reportHash": "67c5f0e83e398ae90917dec5f41b7f25890995d1aa2436b8b62821a2634227a4",
+          "findings": 10,
+          "candidates": 11,
+          "unmatchedCandidates": 10,
+          "coreMatches": 1,
+          "coreExpected": 8,
+          "matched": [
+            "Calling `i.content.scrub` assumes that `i.content` is always populated. However, many RSS feeds do not provide a `content` field, leading to a potential nil pointer exception when `i.content` is nil. A fallback to `description` should be implemented to prevent crashes."
+          ],
+          "missed": [
+            "An unescaped request header (request.referer) is interpolated into JavaScript without proper escaping, which can lead to XSS vulnerabilities if the referer contains malicious content. This issue can allow attackers to execute arbitrary scripts in the context of the application.",
+            "The ERB block closes with end if, which is invalid Ruby/ERB and will raise at render; it should just be end to close the if block.",
+            "The PollFeed job calls open(SiteSetting.feed_polling_url) without validating the URL, allowing an attacker who controls the feed_polling_url site setting to make the server fetch arbitrary internal or external URLs.",
+            "The TopicEmbed.import method is susceptible to a NoMethodError if the contents parameter is nil when attempting to append a string, and an XSS vulnerability due to unescaped url interpolation in the generated HTML.",
+            "The code sets X-Frame-Options: ALLOWALL which completely disables clickjacking protection. The referer validation can be bypassed (referer headers are easily spoofed), and the fallback to empty string for nil referer masks validation failures.",
+            "The current origin validation using indexOf is insufficient and can be bypassed. An attacker could use a malicious domain like evil-discourseUrl.com to pass this check.",
+            "postMessage targetOrigin should be the origin (scheme+host+port), not the full referrer URL; using the full URL will cause the message to be dropped and prevent resizing."
+          ]
+        },
+        {
+          "id": "case-015-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "partial",
+          "stopReason": "Input token count unavailable or exceeds profile limit",
+          "elapsedMs": 944527,
+          "reportHash": "5bed609b80f3eb036122a6ebf98d342ca8fd4e942becd8c85d862a3dee6b7910",
+          "findings": 6,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 8,
+          "matched": [],
+          "missed": [
+            "An unescaped request header (request.referer) is interpolated into JavaScript without proper escaping, which can lead to XSS vulnerabilities if the referer contains malicious content. This issue can allow attackers to execute arbitrary scripts in the context of the application.",
+            "Calling `i.content.scrub` assumes that `i.content` is always populated. However, many RSS feeds do not provide a `content` field, leading to a potential nil pointer exception when `i.content` is nil. A fallback to `description` should be implemented to prevent crashes.",
+            "The ERB block closes with end if, which is invalid Ruby/ERB and will raise at render; it should just be end to close the if block.",
+            "The PollFeed job calls open(SiteSetting.feed_polling_url) without validating the URL, allowing an attacker who controls the feed_polling_url site setting to make the server fetch arbitrary internal or external URLs.",
+            "The TopicEmbed.import method is susceptible to a NoMethodError if the contents parameter is nil when attempting to append a string, and an XSS vulnerability due to unescaped url interpolation in the generated HTML.",
+            "The code sets X-Frame-Options: ALLOWALL which completely disables clickjacking protection. The referer validation can be bypassed (referer headers are easily spoofed), and the fallback to empty string for nil referer masks validation failures.",
+            "The current origin validation using indexOf is insufficient and can be bypassed. An attacker could use a malicious domain like evil-discourseUrl.com to pass this check.",
+            "postMessage targetOrigin should be the origin (scheme+host+port), not the full referrer URL; using the full URL will cause the message to be dropped and prevent resizing."
+          ]
+        },
+        {
+          "id": "case-015-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "partial",
+          "stopReason": "finished",
+          "elapsedMs": 2412104,
+          "reportHash": "b799ab87dd615b167e070bbfe50aeb9d1a7e5fd83e22a49499746f8c04e51f98",
+          "findings": 1,
+          "candidates": 6,
+          "unmatchedCandidates": 6,
+          "coreMatches": 0,
+          "coreExpected": 8,
+          "matched": [],
+          "missed": [
+            "An unescaped request header (request.referer) is interpolated into JavaScript without proper escaping, which can lead to XSS vulnerabilities if the referer contains malicious content. This issue can allow attackers to execute arbitrary scripts in the context of the application.",
+            "Calling `i.content.scrub` assumes that `i.content` is always populated. However, many RSS feeds do not provide a `content` field, leading to a potential nil pointer exception when `i.content` is nil. A fallback to `description` should be implemented to prevent crashes.",
+            "The ERB block closes with end if, which is invalid Ruby/ERB and will raise at render; it should just be end to close the if block.",
+            "The PollFeed job calls open(SiteSetting.feed_polling_url) without validating the URL, allowing an attacker who controls the feed_polling_url site setting to make the server fetch arbitrary internal or external URLs.",
+            "The TopicEmbed.import method is susceptible to a NoMethodError if the contents parameter is nil when attempting to append a string, and an XSS vulnerability due to unescaped url interpolation in the generated HTML.",
+            "The code sets X-Frame-Options: ALLOWALL which completely disables clickjacking protection. The referer validation can be bypassed (referer headers are easily spoofed), and the fallback to empty string for nil referer masks validation failures.",
+            "The current origin validation using indexOf is insufficient and can be bypassed. An attacker could use a malicious domain like evil-discourseUrl.com to pass this check.",
+            "postMessage targetOrigin should be the origin (scheme+host+port), not the full referrer URL; using the full URL will cause the message to be dropped and prevent resizing."
+          ]
+        },
+        {
+          "id": "case-015-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 420204,
+          "reportHash": "6b969ba2d318f8d6fc3f70e50326b3afc6375432908009050b499074db1e979b",
+          "findings": 6,
+          "candidates": 6,
+          "unmatchedCandidates": 5,
+          "coreMatches": 1,
+          "coreExpected": 8,
+          "matched": [
+            "Calling `i.content.scrub` assumes that `i.content` is always populated. However, many RSS feeds do not provide a `content` field, leading to a potential nil pointer exception when `i.content` is nil. A fallback to `description` should be implemented to prevent crashes."
+          ],
+          "missed": [
+            "An unescaped request header (request.referer) is interpolated into JavaScript without proper escaping, which can lead to XSS vulnerabilities if the referer contains malicious content. This issue can allow attackers to execute arbitrary scripts in the context of the application.",
+            "The ERB block closes with end if, which is invalid Ruby/ERB and will raise at render; it should just be end to close the if block.",
+            "The PollFeed job calls open(SiteSetting.feed_polling_url) without validating the URL, allowing an attacker who controls the feed_polling_url site setting to make the server fetch arbitrary internal or external URLs.",
+            "The TopicEmbed.import method is susceptible to a NoMethodError if the contents parameter is nil when attempting to append a string, and an XSS vulnerability due to unescaped url interpolation in the generated HTML.",
+            "The code sets X-Frame-Options: ALLOWALL which completely disables clickjacking protection. The referer validation can be bypassed (referer headers are easily spoofed), and the fallback to empty string for nil referer masks validation failures.",
+            "The current origin validation using indexOf is insufficient and can be bypassed. An attacker could use a malicious domain like evil-discourseUrl.com to pass this check.",
+            "postMessage targetOrigin should be the origin (scheme+host+port), not the full referrer URL; using the full URL will cause the message to be dropped and prevent resizing."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 8,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 7,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 1,
+          "candidateMinusBaselineMs": -321544
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 1,
+          "candidateMinusBaselineMs": -1991900
+        }
+      ],
+      "candidateMinusBaselineMatches": 2
+    },
+    {
+      "id": "case-040",
+      "url": "https://github.com/keycloak/keycloak/pull/40940",
+      "packetHash": "ed34bfe5ce2d82f282c9d6000b33e8cec812ce708e9e68ec79caf2824853bae0",
+      "diffHash": "eb3c4b1fc8f1a4bc20f38ea5980207fce1538835b2c7fc1f8461a5692fa29bdf",
+      "trials": [
+        {
+          "id": "case-040-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 232160,
+          "reportHash": "ac6847bc1c987407e49f211385f39da40b570c2d7c32cc533dc3b742bdce5cd8",
+          "findings": 2,
+          "candidates": 5,
+          "unmatchedCandidates": 2,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "Returning null from getSubGroupsCount() violates the GroupModel contract (Javadoc says it never returns null) and may lead to NPEs in callers that expect a non-null count.",
+            "The reader thread isn\u2019t waited for; flipping deletedAll to true and asserting immediately can race and miss exceptions added just after the flag change, making this test flaky."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-040-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 180117,
+          "reportHash": "31819c3fca5f94d9ff63f9b78ac0629f1a0feea6a3aad2fb581b923ed259ce98",
+          "findings": 2,
+          "candidates": 4,
+          "unmatchedCandidates": 1,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "Returning null from getSubGroupsCount() violates the GroupModel contract (Javadoc says it never returns null) and may lead to NPEs in callers that expect a non-null count.",
+            "The reader thread isn\u2019t waited for; flipping deletedAll to true and asserting immediately can race and miss exceptions added just after the flag change, making this test flaky."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-040-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 151389,
+          "reportHash": "90bc4b5787b2282008c5c85652d39c2fa82445da02c6556aca312ace243e039d",
+          "findings": 2,
+          "candidates": 4,
+          "unmatchedCandidates": 1,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "Returning null from getSubGroupsCount() violates the GroupModel contract (Javadoc says it never returns null) and may lead to NPEs in callers that expect a non-null count.",
+            "The reader thread isn\u2019t waited for; flipping deletedAll to true and asserting immediately can race and miss exceptions added just after the flag change, making this test flaky."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-040-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 216404,
+          "reportHash": "5f23f6b4d15625907b8362980760404b90399d4240a98cbc1d5fe2f7846588b7",
+          "findings": 2,
+          "candidates": 5,
+          "unmatchedCandidates": 3,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "Returning null from getSubGroupsCount() violates the GroupModel contract (Javadoc says it never returns null) and may lead to NPEs in callers that expect a non-null count.",
+            "The reader thread isn\u2019t waited for; flipping deletedAll to true and asserting immediately can race and miss exceptions added just after the flag change, making this test flaky."
+          ],
+          "missed": []
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 2,
+          "either": 2,
+          "onlyOne": 0,
+          "neither": 0,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 2,
+          "either": 2,
+          "onlyOne": 0,
+          "neither": 0,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -52043
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -65015
+        }
+      ],
+      "candidateMinusBaselineMatches": 0
+    },
+    {
+      "id": "case-028",
+      "url": "https://github.com/grafana/grafana/pull/90939",
+      "packetHash": "e88638f1863f360bccfbd4502351967b2768d8059466f8d26de74d522e1ddcd2",
+      "diffHash": "7039c339e05345aa759d4c6c0699e98c970170eab68b93856036f60569339929",
+      "trials": [
+        {
+          "id": "case-028-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 148183,
+          "reportHash": "8e7a935ab0367029b55bbc586db7ad58aab2156fe69f14b5c76a8bd9e1ccf0d6",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 2,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "The GetWebAssets function implements an incomplete double-checked locking pattern for caching web assets. The function first checks if the cache is populated using a read lock (RLock), and if the cache is empty, it acquires a write lock to populate it. However, it fails to re-check whether the cache was populated by another goroutine while waiting to acquire the write lock."
+          ],
+          "missed": [
+            "In addition to the missing double-check, the function has a critical flaw in its error handling: it unconditionally assigns the fetch result to the cache (line 69: entryPointAssetsCache = result) regardless of whether the fetch succeeded or failed. When an error occurs during asset fetching, result is nil, and this nil value overwrites any previously valid cache entry."
+          ]
+        },
+        {
+          "id": "case-028-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 161762,
+          "reportHash": "38903e9afba417abc841a33575529c860bbada3cabfd0f8ebc298587d54c5b74",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 2,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "In addition to the missing double-check, the function has a critical flaw in its error handling: it unconditionally assigns the fetch result to the cache (line 69: entryPointAssetsCache = result) regardless of whether the fetch succeeded or failed. When an error occurs during asset fetching, result is nil, and this nil value overwrites any previously valid cache entry.",
+            "The GetWebAssets function implements an incomplete double-checked locking pattern for caching web assets. The function first checks if the cache is populated using a read lock (RLock), and if the cache is empty, it acquires a write lock to populate it. However, it fails to re-check whether the cache was populated by another goroutine while waiting to acquire the write lock."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-028-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 406826,
+          "reportHash": "9019506afb9e2727030b58674c04edb46f50230e92b57462fcf05305bfad80df",
+          "findings": 1,
+          "candidates": 2,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "The GetWebAssets function implements an incomplete double-checked locking pattern for caching web assets. The function first checks if the cache is populated using a read lock (RLock), and if the cache is empty, it acquires a write lock to populate it. However, it fails to re-check whether the cache was populated by another goroutine while waiting to acquire the write lock."
+          ],
+          "missed": [
+            "In addition to the missing double-check, the function has a critical flaw in its error handling: it unconditionally assigns the fetch result to the cache (line 69: entryPointAssetsCache = result) regardless of whether the fetch succeeded or failed. When an error occurs during asset fetching, result is nil, and this nil value overwrites any previously valid cache entry."
+          ]
+        },
+        {
+          "id": "case-028-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 144929,
+          "reportHash": "221f4fbd54bcec88b58a11409917e2ebfa83f34a9afb49e2de8bc9f1f00403c9",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 1,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "The GetWebAssets function implements an incomplete double-checked locking pattern for caching web assets. The function first checks if the cache is populated using a read lock (RLock), and if the cache is empty, it acquires a write lock to populate it. However, it fails to re-check whether the cache was populated by another goroutine while waiting to acquire the write lock."
+          ],
+          "missed": [
+            "In addition to the missing double-check, the function has a critical flaw in its error handling: it unconditionally assigns the fetch result to the cache (line 69: entryPointAssetsCache = result) regardless of whether the fetch succeeded or failed. When an error occurs during asset fetching, result is nil, and this nil value overwrites any previously valid cache entry."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 1,
+          "either": 2,
+          "onlyOne": 1,
+          "neither": 0,
+          "identicalMatches": false
+        },
+        "candidate": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": -1,
+          "candidateMinusBaselineMs": -13579
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -261897
+        }
+      ],
+      "candidateMinusBaselineMatches": -1
+    },
+    {
+      "id": "case-005",
+      "url": "https://github.com/calcom/cal.com/pull/14943",
+      "packetHash": "1ff767544db171e595a3d32ddeaf0350cd47192cbb565338a8f00b2ff8b3dd63",
+      "diffHash": "e49eb383140060d223c34ef5c41bbf28bcde2e5a97e85fabf6d3be8d889aa115",
+      "trials": [
+        {
+          "id": "case-005-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 260640,
+          "reportHash": "29ed62cb63d06074956ca5f939929411c7f2386e65ae1ecdd91c9404621e104f",
+          "findings": 1,
+          "candidates": 4,
+          "unmatchedCandidates": 3,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "Using retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; consider an atomic increment via Prisma (increment: 1) to avoid race conditions (also applies to the similar update in the catch block)."
+          ],
+          "missed": [
+            "The deletion logic in scheduleSMSReminders.ts incorrectly deletes non-SMS workflow reminders (e.g., Email, WhatsApp) that have retryCount > 1. This occurs because the retryCount condition within the OR clause for deletion lacks a method: WorkflowMethods.SMS filter, causing it to apply to all reminder types instead of only SMS reminders, which is the intended scope of this function."
+          ]
+        },
+        {
+          "id": "case-005-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 398737,
+          "reportHash": "0fdc70896a37d75baaa7d1e6e1a6c4b200b0d221c388b36d4208337d34075744",
+          "findings": 3,
+          "candidates": 5,
+          "unmatchedCandidates": 5,
+          "coreMatches": 0,
+          "coreExpected": 2,
+          "matched": [],
+          "missed": [
+            "The deletion logic in scheduleSMSReminders.ts incorrectly deletes non-SMS workflow reminders (e.g., Email, WhatsApp) that have retryCount > 1. This occurs because the retryCount condition within the OR clause for deletion lacks a method: WorkflowMethods.SMS filter, causing it to apply to all reminder types instead of only SMS reminders, which is the intended scope of this function.",
+            "Using retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; consider an atomic increment via Prisma (increment: 1) to avoid race conditions (also applies to the similar update in the catch block)."
+          ]
+        },
+        {
+          "id": "case-005-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 277518,
+          "reportHash": "ec81ed63d7b7f255a0b6b6a61341dac28001e61a4e2eff95b4ca568fc82d3c4e",
+          "findings": 2,
+          "candidates": 2,
+          "unmatchedCandidates": 2,
+          "coreMatches": 0,
+          "coreExpected": 2,
+          "matched": [],
+          "missed": [
+            "The deletion logic in scheduleSMSReminders.ts incorrectly deletes non-SMS workflow reminders (e.g., Email, WhatsApp) that have retryCount > 1. This occurs because the retryCount condition within the OR clause for deletion lacks a method: WorkflowMethods.SMS filter, causing it to apply to all reminder types instead of only SMS reminders, which is the intended scope of this function.",
+            "Using retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; consider an atomic increment via Prisma (increment: 1) to avoid race conditions (also applies to the similar update in the catch block)."
+          ]
+        },
+        {
+          "id": "case-005-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 199173,
+          "reportHash": "422e1ec95fa6d3e473d4457f41fd1d86672e8da5686f531b0d9799cbff6a1085",
+          "findings": 2,
+          "candidates": 2,
+          "unmatchedCandidates": 2,
+          "coreMatches": 0,
+          "coreExpected": 2,
+          "matched": [],
+          "missed": [
+            "The deletion logic in scheduleSMSReminders.ts incorrectly deletes non-SMS workflow reminders (e.g., Email, WhatsApp) that have retryCount > 1. This occurs because the retryCount condition within the OR clause for deletion lacks a method: WorkflowMethods.SMS filter, causing it to apply to all reminder types instead of only SMS reminders, which is the intended scope of this function.",
+            "Using retryCount: reminder.retryCount + 1 reads a possibly stale value and can lose increments under concurrency; consider an atomic increment via Prisma (increment: 1) to avoid race conditions (also applies to the similar update in the catch block)."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 0,
+          "onlyOne": 0,
+          "neither": 2,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 0,
+          "either": 1,
+          "onlyOne": 1,
+          "neither": 1,
+          "identicalMatches": false
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 1,
+          "candidateMinusBaselineMs": -138097
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -78345
+        }
+      ],
+      "candidateMinusBaselineMatches": 1
+    },
+    {
+      "id": "case-016",
+      "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/5",
+      "packetHash": "698412afb92db8bc99725d8d95bcacbb28d8aa0a8b7ecb638bd904b5d19352eb",
+      "diffHash": "190875cabe5074134860733e0272997e5d31b526e57eb9a2a810254e7f3ed912",
+      "trials": [
+        {
+          "id": "case-016-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 625152,
+          "reportHash": "964ae7d0f894b88fea133ca7097cf3252ea4f149c52c39b53444603d4e0458dd",
+          "findings": 3,
+          "candidates": 5,
+          "unmatchedCandidates": 4,
+          "coreMatches": 1,
+          "coreExpected": 3,
+          "matched": [
+            "Mixing float: left with flexbox causes layout issues. Further this PR removes the float-based right alignment for .d-header .panel, which may cause the login panel in the non-Ember/noscript header (where .panel is nested inside .row and not a flex item) to stack under the title instead of remaining right-aligned."
+          ],
+          "missed": [
+            "-ms-align-items never existed in any version of IE/Edge; the correct legacy property is -ms-flex-align.",
+            "-webkit-box-ordinal-group and -moz-box-ordinal-group require values starting from 1, not 0. If $val is 0, this will cause incorrect rendering in older browsers, leading to layout issues."
+          ]
+        },
+        {
+          "id": "case-016-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 367930,
+          "reportHash": "4cc91e085fdd8899862c1cac02c4b6d53e3e0ed5b6ac88d3f24fa716ea9dea0e",
+          "findings": 3,
+          "candidates": 3,
+          "unmatchedCandidates": 2,
+          "coreMatches": 1,
+          "coreExpected": 3,
+          "matched": [
+            "Mixing float: left with flexbox causes layout issues. Further this PR removes the float-based right alignment for .d-header .panel, which may cause the login panel in the non-Ember/noscript header (where .panel is nested inside .row and not a flex item) to stack under the title instead of remaining right-aligned."
+          ],
+          "missed": [
+            "-ms-align-items never existed in any version of IE/Edge; the correct legacy property is -ms-flex-align.",
+            "-webkit-box-ordinal-group and -moz-box-ordinal-group require values starting from 1, not 0. If $val is 0, this will cause incorrect rendering in older browsers, leading to layout issues."
+          ]
+        },
+        {
+          "id": "case-016-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 262053,
+          "reportHash": "0879d5e5bdbf90faaeb3bb5513c0e9b565a943ae8d7afa6c46d294470744537a",
+          "findings": 2,
+          "candidates": 4,
+          "unmatchedCandidates": 3,
+          "coreMatches": 1,
+          "coreExpected": 3,
+          "matched": [
+            "Mixing float: left with flexbox causes layout issues. Further this PR removes the float-based right alignment for .d-header .panel, which may cause the login panel in the non-Ember/noscript header (where .panel is nested inside .row and not a flex item) to stack under the title instead of remaining right-aligned."
+          ],
+          "missed": [
+            "-ms-align-items never existed in any version of IE/Edge; the correct legacy property is -ms-flex-align.",
+            "-webkit-box-ordinal-group and -moz-box-ordinal-group require values starting from 1, not 0. If $val is 0, this will cause incorrect rendering in older browsers, leading to layout issues."
+          ]
+        },
+        {
+          "id": "case-016-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 219471,
+          "reportHash": "cbcc43415265057a377c3d0525f0db1569c14e7b2c5095a0c4060d9b8350bed1",
+          "findings": 1,
+          "candidates": 3,
+          "unmatchedCandidates": 3,
+          "coreMatches": 0,
+          "coreExpected": 3,
+          "matched": [],
+          "missed": [
+            "-ms-align-items never existed in any version of IE/Edge; the correct legacy property is -ms-flex-align.",
+            "-webkit-box-ordinal-group and -moz-box-ordinal-group require values starting from 1, not 0. If $val is 0, this will cause incorrect rendering in older browsers, leading to layout issues.",
+            "Mixing float: left with flexbox causes layout issues. Further this PR removes the float-based right alignment for .d-header .panel, which may cause the login panel in the non-Ember/noscript header (where .panel is nested inside .row and not a flex item) to stack under the title instead of remaining right-aligned."
+          ]
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 0,
+          "either": 1,
+          "onlyOne": 1,
+          "neither": 2,
+          "identicalMatches": false
+        },
+        "candidate": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 2,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 0,
+          "candidateMinusBaselineMs": -257222
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 1,
+          "candidateMinusBaselineMs": 42582
+        }
+      ],
+      "candidateMinusBaselineMatches": 1
+    },
+    {
+      "id": "case-022",
+      "url": "https://github.com/grafana/grafana/pull/106778",
+      "packetHash": "fa19dec82174eed4116fe15e2e6ea58127271ae4263e8244eec06c5997a376e0",
+      "diffHash": "affa6c001cc3abdba8fa18539365d6045e2a6d95e74b4e9da23c82c237cde018",
+      "trials": [
+        {
+          "id": "case-022-candidate-r1",
+          "arm": "candidate",
+          "repeat": 1,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 498429,
+          "reportHash": "1f9b83a6cdfcdb6a1b32cc855879bbd9392bd374c969868f04bd52123d833085",
+          "findings": 4,
+          "candidates": 7,
+          "unmatchedCandidates": 3,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "RuleActionsButtons is invoked with only promRule, but SilenceGrafanaRuleDrawer inside RuleActionsButtons still depends on a Grafana Ruler rule being present, so for Grafana rules coming from list views the 'Silence notifications' menu entry (now driven by Grafana Prom abilities) will toggle showSilenceDrawer without ever rendering the drawer. This means clicking 'Silence notifications' for these rules has no visible effect, even when abilities indicate silencing is allowed.",
+            "The rendered GrafanaRuleListItem is missing the required key prop for React list items. This can cause rendering issues when the list order changes."
+          ],
+          "missed": []
+        },
+        {
+          "id": "case-022-baseline-r1",
+          "arm": "baseline",
+          "repeat": 1,
+          "status": "partial",
+          "stopReason": "Input token count unavailable or exceeds profile limit",
+          "elapsedMs": 484061,
+          "reportHash": "684cc79c33ab9a1b3a94e97d5566d5e03cf87b0070f9d255d9ac405d75656fe2",
+          "findings": 3,
+          "candidates": 10,
+          "unmatchedCandidates": 9,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "RuleActionsButtons is invoked with only promRule, but SilenceGrafanaRuleDrawer inside RuleActionsButtons still depends on a Grafana Ruler rule being present, so for Grafana rules coming from list views the 'Silence notifications' menu entry (now driven by Grafana Prom abilities) will toggle showSilenceDrawer without ever rendering the drawer. This means clicking 'Silence notifications' for these rules has no visible effect, even when abilities indicate silencing is allowed."
+          ],
+          "missed": [
+            "The rendered GrafanaRuleListItem is missing the required key prop for React list items. This can cause rendering issues when the list order changes."
+          ]
+        },
+        {
+          "id": "case-022-baseline-r2",
+          "arm": "baseline",
+          "repeat": 2,
+          "status": "partial",
+          "stopReason": "Input token count unavailable or exceeds profile limit",
+          "elapsedMs": 353351,
+          "reportHash": "8c1225720f87d2a0fd351450ee120474c826599475b203099ee75af7183140d1",
+          "findings": 3,
+          "candidates": 6,
+          "unmatchedCandidates": 5,
+          "coreMatches": 1,
+          "coreExpected": 2,
+          "matched": [
+            "RuleActionsButtons is invoked with only promRule, but SilenceGrafanaRuleDrawer inside RuleActionsButtons still depends on a Grafana Ruler rule being present, so for Grafana rules coming from list views the 'Silence notifications' menu entry (now driven by Grafana Prom abilities) will toggle showSilenceDrawer without ever rendering the drawer. This means clicking 'Silence notifications' for these rules has no visible effect, even when abilities indicate silencing is allowed."
+          ],
+          "missed": [
+            "The rendered GrafanaRuleListItem is missing the required key prop for React list items. This can cause rendering issues when the list order changes."
+          ]
+        },
+        {
+          "id": "case-022-candidate-r2",
+          "arm": "candidate",
+          "repeat": 2,
+          "status": "completed",
+          "stopReason": "finished",
+          "elapsedMs": 388952,
+          "reportHash": "6cc1fb5d305eaf5e0cee413026ac9d5668418a738c75224a7d56022456ede01f",
+          "findings": 5,
+          "candidates": 6,
+          "unmatchedCandidates": 4,
+          "coreMatches": 2,
+          "coreExpected": 2,
+          "matched": [
+            "RuleActionsButtons is invoked with only promRule, but SilenceGrafanaRuleDrawer inside RuleActionsButtons still depends on a Grafana Ruler rule being present, so for Grafana rules coming from list views the 'Silence notifications' menu entry (now driven by Grafana Prom abilities) will toggle showSilenceDrawer without ever rendering the drawer. This means clicking 'Silence notifications' for these rules has no visible effect, even when abilities indicate silencing is allowed.",
+            "The rendered GrafanaRuleListItem is missing the required key prop for React list items. This can cause rendering issues when the list order changes."
+          ],
+          "missed": []
+        }
+      ],
+      "agreement": {
+        "baseline": {
+          "both": 1,
+          "either": 1,
+          "onlyOne": 0,
+          "neither": 1,
+          "identicalMatches": true
+        },
+        "candidate": {
+          "both": 2,
+          "either": 2,
+          "onlyOne": 0,
+          "neither": 0,
+          "identicalMatches": true
+        }
+      },
+      "comparisons": [
+        {
+          "repeat": 1,
+          "candidateMinusBaselineMatches": 1,
+          "candidateMinusBaselineMs": 14368
+        },
+        {
+          "repeat": 2,
+          "candidateMinusBaselineMatches": 1,
+          "candidateMinusBaselineMs": 35601
+        }
+      ],
+      "candidateMinusBaselineMatches": 2
+    }
+  ],
+  "pairedCases": {
+    "candidateMore": 4,
+    "equal": 6,
+    "baselineMore": 5
+  },
+  "judging": {
+    "model": "openai/gpt-5.2",
+    "settledUsd": 3.2798080000000036,
+    "unknownChargeCalls": 3,
+    "chargedOrReservedUsd": 3.651303250000004,
+    "calls": 1038,
+    "limitUsd": 5
+  },
+  "reviewBilling": {
+    "additionalApiUsd": 0,
+    "method": "existing ChatGPT subscription",
+    "allocatedSubscriptionCostUsd": null
+  },
+  "gradingTransportContinuation": {
+    "createdAt": "2026-09-14T12:28:58.852351+00:00",
+    "reason": "Original BATCH_SIZE assignment left process_batch default bound at 20; enforce intended 3 with explicit partial keyword. Judging prompts, model, matching, extraction, dedup and scoring unchanged. No review retries or modifications.",
+    "previousDeclaredParallelJudgeCalls": 3,
+    "previousActualParallelJudgeCalls": 20,
+    "parallelJudgeCalls": 3,
+    "completedTrialsRetained": [
+      "case-050-baseline-r1",
+      "case-023-candidate-r1",
+      "case-032-baseline-r1",
+      "case-023-baseline-r1",
+      "case-050-candidate-r1",
+      "case-032-candidate-r1",
+      "case-017-candidate-r1",
+      "case-009-candidate-r1",
+      "case-017-baseline-r1",
+      "case-042-candidate-r1"
+    ],
+    "settledCallsRetained": 151,
+    "callsInFlightAtStop": 0,
+    "files": {
+      "grader-protocol-original.json": "ea8d37aac9a5134dde08599c2c998ed94887d18cc346e1d43cca953725d6d6cb",
+      "grading-transport-v2/martian-grade.py": "c5f62023533d2ee91250b7171d64d39f8295ddb8d63856a75c54e412fa875154",
+      "grading-transport-v2/before-grading.json": "608834cb55f9371d91466a78063f055760fabf018f41c5ada6b75ad89b7c9f73",
+      "grading-transport-v2/before-judge-cost.json": "8d923a031eab072d90b29b3875a2c697cc17265b14b8d047e5c5bf295d7a1302"
+    }
+  },
+  "artifacts": {
+    "comparison.json": "91c7f1682fab794e93d753bf969567c3200f9da6a00d5d3998fa94c5d47f7c81",
+    "comparison-result.json": "796d04af6cbf6ba09af9d56b52b81df7733022afa538f07c28d2504ee78a9341",
+    "grading.json": "3089646eccc923bc860b8934e4e1ee31b7c395334aa22f43aa4cd94006471cdc",
+    "grader-protocol.json": "88e6b727d6bbf951635e0e71c4e123dd3100e887facb36b1a0b3d28ada275bda",
+    "judge-cost.json": "dbb131576e792263715fc178cdeeeedc566cc7d02d842ea1ee6b51b109ce43f2",
+    "grader-continuation.json": "840b42204fe23e681115fb11b1c685bae7e83eac88d55d94dbde2d8af09b748a",
+    "grader-protocol-original.json": "ea8d37aac9a5134dde08599c2c998ed94887d18cc346e1d43cca953725d6d6cb"
+  },
+  "limitations": [
+    "Two repeats on 15 public development PRs; repeats are not independent new cases. The 35 reserved cases remain unrun.",
+    "Upstream unmatched candidates are not independently established false positives. Source-audit decisions do not change these scores.",
+    "Both controllers share the repaired continuous local Codex adapter, model, profile, renderer and source packets. Production API transport differs.",
+    "No clean-control false-alarm estimate or current hosted-bot comparison. Latency includes quality assessment and optional fix proposals.",
+    "The frozen harness loads the shared adapter through the candidate runtime for both arms. Baseline adapter traces and provider-error class identity are affected; future harness fix 02c7bb3 is excluded.",
+    "The original grader concurrency setting was corrected after 10 retained grades and 151 settled calls; hashed continuation provenance is retained.",
+    "The account allowance refreshed outside this agent tool calls. No reset credit was redeemed by this agent.",
+    "Source audit is not blinded or exhaustive. Reporting guard time and conservative input counting contribute to partial outcomes.",
+    "Follow-up fixes 3385130 and b00bc22 are excluded from all 60 frozen attempts. No live improvement from those fixes is claimed."
+  ],
+  "verifiedSummarySha256": "da5d477bc608ec07966196a93e1b3c86570d60187435a0e145193d6108ba6f54",
+  "additionalAnalysis": {
+    "baseline": {
+      "structuredFindings": 56,
+      "extractedCandidates": 143,
+      "totalAttemptMs": 15706030,
+      "p95AttemptMs": 2412104,
+      "p95Method": "nearest rank across all 30 attempts",
+      "phaseTotals": {
+        "trials": 0,
+        "discoveryMs": 0,
+        "assessmentMs": 0
+      },
+      "toolRejections": [
+        {
+          "tool": "read_file",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 35
+        },
+        {
+          "tool": "unknown",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 34
+        },
+        {
+          "tool": "read_file",
+          "reason": "Start line is outside source",
+          "count": 32
+        },
+        {
+          "tool": "record_quality",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 11
+        },
+        {
+          "tool": "propose_fix",
+          "reason": "Original text does not match the selected head range. Re-read the source and correct the line numbers or original text before proposing again.",
+          "count": 7
+        },
+        {
+          "tool": "read_file",
+          "reason": "Path does not exist at this snapshot",
+          "count": 6
+        },
+        {
+          "tool": "list_files",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 3
+        },
+        {
+          "tool": "search_repository",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 2
+        },
+        {
+          "tool": "record_finding",
+          "reason": "Operation failed. Check the tool schema and immutable source path.",
+          "count": 2
+        },
+        {
+          "tool": "reviewed_file",
+          "reason": "Coverage requires reading the full changed file on each existing side",
+          "count": 2
+        },
+        {
+          "tool": "search_repository",
+          "reason": "Operation failed. Check the tool schema and immutable source path.",
+          "count": 2
+        },
+        {
+          "tool": "finish",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 1
+        },
+        {
+          "tool": "read_file",
+          "reason": "Source range exceeds 24 KB; request fewer lines",
+          "count": 1
+        }
+      ]
+    },
+    "candidate": {
+      "structuredFindings": 74,
+      "extractedCandidates": 165,
+      "totalAttemptMs": 9766962,
+      "p95AttemptMs": 622983,
+      "p95Method": "nearest rank across all 30 attempts",
+      "phaseTotals": {
+        "trials": 29,
+        "discoveryMs": 7695132,
+        "assessmentMs": 1858484
+      },
+      "toolRejections": [
+        {
+          "tool": "read_file",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 35
+        },
+        {
+          "tool": "read_file",
+          "reason": "Start line is outside source",
+          "count": 6
+        },
+        {
+          "tool": "search_repository",
+          "reason": "Operation failed. Check the tool schema and immutable source path.",
+          "count": 6
+        },
+        {
+          "tool": "propose_fix",
+          "reason": "Original text does not match the selected head range. Re-read the source and correct the line numbers or original text before proposing again.",
+          "count": 5
+        },
+        {
+          "tool": "propose_fix",
+          "reason": "A fix must cite a captured head source read covering its entire replacement range",
+          "count": 2
+        },
+        {
+          "tool": "search_repository",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 2
+        },
+        {
+          "tool": "read_file",
+          "reason": "Source range exceeds 24 KB; request fewer lines",
+          "count": 1
+        },
+        {
+          "tool": "record_finding",
+          "reason": "Invalid or unavailable tool name or arguments",
+          "count": 1
+        },
+        {
+          "tool": "end_investigation",
+          "reason": "Changed ranges remain unread or unsupported. Read missingRanges or end with complete=false and limitations.",
+          "count": 1
+        },
+        {
+          "tool": "read_file",
+          "reason": "Path does not exist at this snapshot",
+          "count": 1
+        },
+        {
+          "tool": "record_finding",
+          "reason": "Operation failed. Check the tool schema and immutable source path.",
+          "count": 1
+        },
+        {
+          "tool": "propose_fix",
+          "reason": "Omit the terminating newline from replacement; GitHub adds the line ending",
+          "count": 1
+        }
+      ]
+    }
+  },
+  "followUpFixes": [
+    {
+      "commit": "3385130",
+      "change": "Accept an earlier stream error only after a valid later completed turn, while retaining all terminal, session, usage, output and native-tool guards."
+    },
+    {
+      "commit": "b00bc22",
+      "engineVersion": "r02-27",
+      "change": "Validate encoded source response size before recording evidence or coverage."
+    }
+  ]
+}

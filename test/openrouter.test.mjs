@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { openRouterModel } from '../dist/openrouter-model.js';
 import { parseProfile, price, instructions, toolDefinitions, investigate } from '../dist/investigation.js';
-import { repository, persist } from './helpers.mjs';
+import { repository, persist, finalReport } from './helpers.mjs';
 
 const profile = JSON.parse(readFileSync(new URL('../profiles/smoke-openrouter-free.json', import.meta.url)));
 const input = { instructions, context: 'owned-fixture', transcript: [], tools: toolDefinitions };
@@ -11,11 +11,11 @@ const catalog = (prompt = '0') => ({ data: [{ id: profile.model, canonical_slug:
   pricing: { prompt, completion: '0' }, supported_parameters: ['tools', 'tool_choice'] }] });
 const response = () => ({ id: 'generation-fixture', model: profile.model, usage: { prompt_tokens: 100, completion_tokens: 50, cost: 0 },
   choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [{ id: 'call-finish',
-    type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: 'Fixture only.', complete: false, limitations: [] }) } }] } }] });
+    type: 'function', function: { name: 'finish', arguments: JSON.stringify(finalReport({ complete: false })) } }] } }] });
 test('tool text schemas preserve complete paths and summaries under whole-string decoding', () => {
   const schemas = [
     toolDefinitions.find(t => t.name === 'read_file').parameters.properties.path,
-    toolDefinitions.find(t => t.name === 'finish').parameters.properties.summary,
+    toolDefinitions.find(t => t.name === 'finish').parameters.properties.limitations.items,
     toolDefinitions.find(t => t.name === 'record_finding').parameters.properties.title,
   ];
   for (const schema of schemas) {
@@ -36,7 +36,12 @@ test('free adapter pins provider and zero pricing, and records actual token usag
   const requests = [];
   const transport = async (url, options) => {
     requests.push({ url, options });
-    return Response.json(url.endsWith('/models') ? catalog() : response());
+    if (url.endsWith('/models')) return Response.json(catalog());
+    const data = response();
+    if (JSON.parse(options.body).tools.some(t => t.function.name === 'end_investigation')) {
+      data.choices[0].message.tool_calls[0].function = { name: 'end_investigation', arguments: JSON.stringify({ complete: false, limitations: ['Fixture omits source inspection.'] }) };
+    }
+    return Response.json(data);
   };
   const fixture = repository(t), directory = persist(fixture);
   const output = await investigate(directory, fixture.packet, profile, openRouterModel(profile, 'fixture-key', transport));
@@ -82,15 +87,15 @@ const paidCatalog = () => ({ data: [{ id: paidProfile.model, canonical_slug: 'de
 const paidEndpoints = (prompt = '0.000000269') => ({ data: { endpoints: [{ tag: 'novita/fp8', status: 0,
   supports_tool_choice: { required: true }, supported_parameters: ['tools', 'tool_choice'], pricing: { prompt, completion: '0.0000004' } }] } });
 
-test('a settled interrupted response is retried once without applying its partial tools', async t => {
+for (const finishReason of [null, 'error']) test(`a settled ${finishReason ?? 'missing'} finish marker retries without applying partial tools`, async t => {
   const fixture = repository(t), directory = persist(fixture), requests = [];
   const tool = (name, args) => ({ id: `call-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } });
   const steps = [
     tool('read_file', { side: 'head', path: 'update.ts', startLine: 1, count: 200 }),
-    tool('finish', { summary: 'Unfinished response must not be accepted.', complete: true, limitations: [] }),
+    tool('finish', finalReport()),
     tool('read_file', { side: 'base', path: 'update.ts', startLine: 1, count: 200 }),
-    tool('reviewed_file', { path: 'update.ts' }),
-    tool('finish', { summary: 'Complete source review.', complete: true, limitations: [] }),
+    tool('end_investigation', { complete: true, limitations: [] }),
+    tool('finish', finalReport()),
   ];
   const adapter = openRouterModel(paidProfile, 'fixture-key', async (url, options) => {
     if (url.endsWith('/models')) return Response.json(paidCatalog());
@@ -98,7 +103,7 @@ test('a settled interrupted response is retried once without applying its partia
     requests.push(JSON.parse(options.body));
     const data = response(); data.model = paidProfile.model; data.usage.cost = 0.00001;
     data.choices[0].message.tool_calls = [steps[requests.length - 1]];
-    if (requests.length === 2) data.choices[0].finish_reason = null;
+    if (requests.length === 2) data.choices[0].finish_reason = finishReason;
     return Response.json(data);
   });
   const {result, receipt} = await investigate(directory, fixture.packet, paidProfile, adapter);
@@ -118,6 +123,9 @@ test('paid route reserves before dispatch, pins prices/provider, and settles act
     if (url.endsWith('/endpoints')) return Response.json(paidEndpoints());
     assert.ok(reservation > 0);
     const data = response(); data.model = paidProfile.model; data.usage.cost = 0.0000469;
+    if (JSON.parse(options.body).tools.some(t => t.function.name === 'end_investigation')) {
+      data.choices[0].message.tool_calls[0].function = { name: 'end_investigation', arguments: JSON.stringify({ complete: false, limitations: ['Fixture omits source inspection.'] }) };
+    }
     return Response.json(data);
   };
   const output = await investigate(directory, fixture.packet, paidProfile, openRouterModel(paidProfile, 'fixture-key', transport), (_result, receipt) => { reservation = receipt.calls.at(-1)?.reservedUsd; });

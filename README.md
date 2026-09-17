@@ -213,3 +213,12 @@ Ratings are subjective and independent from finding severity and GitHub check
 conclusions. An incomplete or stale review cannot be rated. Repository policy is
 captured from the target branch; a PR cannot relax its own rules. These additions
 are available in current source and await the next versioned package release.
+
+## Current review direction
+
+The next measured experiment is a versioned repository-state artifact for each
+tracked target branch, followed by one review agent with separate investigation
+and verification phases. Read the
+[repository-state direction](docs/repository-state-direction.md) for the proposed
+contract, feedback loop and acceptance experiment. It is a proposal, not a claim
+about the current engine.

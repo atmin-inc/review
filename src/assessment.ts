@@ -30,6 +30,9 @@ export interface Assessment {
   hiddenOptionalCount: number;
   reasons: string[];
 }
+export function reviewSummary(assessment: Assessment): string {
+  return `${assessment.outcome}. ${assessment.findings.length} finding(s) recorded. Review scope: ${assessment.scope}. Required validation: ${assessment.validation}. ${assessment.rating.score === null ? 'Not rated.' : `Rating: ${assessment.rating.score}/5.`} This is not merge approval.`;
+}
 function unique(values: string[], label: string): void {
   if (new Set(values).size !== values.length) throw new Error(`Duplicate ${label}`);
 }

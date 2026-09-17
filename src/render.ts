@@ -1,5 +1,5 @@
 import { PRIORITIES, QUALITY_CRITERIA, type EvidenceAnchor, type Finding, type Packet, type Result } from './contracts.js';
-import type { Assessment } from './assessment.js';
+import { reviewSummary, type Assessment } from './assessment.js';
 import type { Verification } from './verification.js';
 import { criterionLabels } from './rating.js';
 
@@ -78,7 +78,7 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
     for (const rule of result.quality.conventionRules) lines.push(`- ${sourceLink({ ...packet, mergeBaseSha: packet.baseSha }, { path: rule.path, side: 'base', line: null })}: ${e(rule.quote)}`);
   }
   lines.push('', 'Policy is read from `.atmin/review.json` on the target branch. Optional suggestions and missing patches do not independently lower the rating.', '', '</details>', '',
-    '<details><summary>Run summary and checks</summary>', '', e(result.summary), '', '### Required validation', '');
+    '<details><summary>Run summary and checks</summary>', '', e(reviewSummary(assessment)), '', '### Required validation', '');
   for (const check of assessment.validationChecks) {
     lines.push(`- ${e(check.name)}: **${check.status}** — ${e(check.reason)}${check.url ? ` [GitHub check](${check.url})` : ''}`);
   }

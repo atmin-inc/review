@@ -4,6 +4,13 @@ import { tmpdir } from 'node:os';
 import { capture, git } from '../dist/snapshot.js';
 import { initialResult } from '../dist/contracts.js';
 
+export function finalReport(overrides = {}) {
+  return { complete: true, limitations: [],
+    quality: { score: 3, rationale: 'Fixture has unresolved verification questions.', conventionRules: [],
+      criteria: Object.fromEntries(['codebaseFit', 'simplicity', 'verification', 'documentedConventions'].map(key =>
+        [key, { status: 'unknown', reason: 'Not assessed by this deterministic fixture.', evidenceIds: [] }])) }, ...overrides };
+}
+
 export function repository(t) {
   const root = mkdtempSync(join(tmpdir(), 'atmin-review-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

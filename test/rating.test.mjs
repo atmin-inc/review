@@ -142,9 +142,9 @@ test('model checkpoints quality with captured citations and rejects invented con
   forged.conventionRules = [{ path: 'AGENTS.md', quote: 'An invented target-branch rule.' }];
   const steps = [
     ['read_file', { side: 'head', path: 'update.ts', startLine: 1, count: 200 }],
-    ['record_quality', forged], ['record_quality', proposed],
     ['read_file', { side: 'base', path: 'update.ts', startLine: 1, count: 200 }],
-    ['reviewed_file', { path: 'update.ts' }], ['finish', { summary: 'Synthetic review.', complete: true, limitations: [] }],
+    ['end_investigation', { complete: true, limitations: [] }],
+    ['record_quality', forged], ['record_quality', proposed], ['finish', { quality: proposed, complete: true, limitations: [] }],
   ];
   const profile = JSON.parse(readFileSync(new URL('../profiles/smoke-openai.json', import.meta.url)));
   let index = 0;

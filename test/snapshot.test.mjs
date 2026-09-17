@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, renameSync, unlinkSync, symlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { capture, loadReview, parsePullUrl, readPull, compareCurrent, prepare, sourceText } from '../dist/snapshot.js';
+import { capture, loadReview, parsePullUrl, readPull, compareCurrent, prepare, sourceText, searchSource, changedSourceRanges } from '../dist/snapshot.js';
 import { defaultPolicy } from '../dist/contracts.js';
 import { repository, completed, finding, persist } from './helpers.mjs';
 
@@ -52,6 +52,27 @@ test('capture reads immutable objects despite a dirty checkout', t => {
   assert.ok(actual.diff.toString().includes('-  if (owner !== account)'));
   assert.ok(!actual.diff.toString().includes('dirty unrelated'));
   assert.equal(readFileSync(join(f.source, 'update.ts'), 'utf8'), 'dirty unrelated local work\n');
+});
+
+test('repository search is literal, immutable, bounded and handles unusual paths and no matches', t => {
+  const f = repository(t);
+  f.write('callers/line\nbreak:*.ts', '// before\nupdate(owner, account);\n');
+  f.write('binary.dat', Buffer.from('update\0not source'));
+  symlinkSync('/etc/passwd', join(f.source, 'link'));
+  const head = f.commit('caller');
+  f.write('callers/dirty.ts', 'update(owner, account);');
+  assert.deepEqual(searchSource(f.source, head, 'update(owner, account)'), { matches: [
+    { path: 'callers/line\nbreak:*.ts', line: 2 }, { path: 'update.ts', line: 1 },
+  ], truncated: false });
+  assert.deepEqual(searchSource(f.source, head, 'update.*'), { matches: [], truncated: false });
+  assert.equal(searchSource(f.source, f.state.baseSha, 'owner !== account').matches.length, 1);
+  assert.equal(searchSource(f.source, head, 'owner !== account').matches.length, 0);
+  f.write('many.ts', 'needle\n'.repeat(51));
+  const many = f.commit('many matches');
+  const found = searchSource(f.source, many, 'needle');
+  assert.equal(found.matches.length, 50); assert.equal(found.truncated, true);
+  assert.throws(() => searchSource(f.source, head, 'a\nb'), /single literal line/);
+  assert.throws(() => searchSource(f.source, '--all', 'update'), /immutable revision/);
 });
 
 test('the target policy wins over a PR that relaxes it', t => {
@@ -229,4 +250,39 @@ test('CLI renders the initial packet honestly and refuses to overwrite artifacts
   assert.equal(invoke(['render', directory, '--out', join(directory, 'packet.json')]).status, 1);
   assert.equal(invoke(['review', 'https://github.com/test/review-fixture/pull/1']).status, 1);
   assert.equal(invoke(['render', directory, '--publish']).status, 1);
+});
+
+test('changed ranges respect literal filenames, empty sides, mode changes, additions and deletions', t => {
+  const f = repository(t);
+  f.write('empty.txt', ''); f.write('removed.txt', 'before\n');
+  f.write('mode.txt', 'unchanged\n'); f.write('é "quoted".txt', 'old\n');
+  const baseSha = f.commit('range base');
+  f.write('empty.txt', 'now populated\n'); f.write('added.txt', '@@ -50 +50 @@\n');
+  f.write('é "quoted".txt', 'new\n');
+  unlinkSync(join(f.source, 'removed.txt'));
+  f.run('update-index', '--chmod=+x', 'mode.txt');
+  // core.filemode=false keeps the explicitly staged mode when commit stages contents.
+  f.run('config', 'core.filemode', 'false');
+  const headSha = f.commit('range head');
+  const { packet } = capture(f.source, { ...f.state, baseSha, headSha });
+  const ranges = packet.changedFiles.flatMap(file => changedSourceRanges(f.source, packet, file));
+  assert.deepEqual(ranges.filter(r => r.path === 'empty.txt').map(r => [r.side, r.startLine, r.endLine]), [['base', 1, 0], ['head', 1, 1]]);
+  assert.deepEqual(ranges.filter(r => r.path === 'added.txt').map(r => [r.side, r.startLine, r.endLine]), [['head', 1, 1]]);
+  assert.deepEqual(ranges.filter(r => r.path === 'removed.txt').map(r => [r.side, r.startLine, r.endLine]), [['base', 1, 1]]);
+  for (const path of ['mode.txt', 'é "quoted".txt']) assert.deepEqual(ranges.filter(r => r.path === path).map(r => [r.side, r.startLine, r.endLine]), [['base', 1, 1], ['head', 1, 1]]);
+});
+
+test('repository diff attributes cannot conceal changed text from coverage', t => {
+  const f = repository(t);
+  f.write('.gitattributes', 'update.ts -diff\n');
+  const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+  f.write('update.ts', lines.join('\n') + '\n');
+  const baseSha = f.commit('attributes base');
+  lines[14] = 'changed';
+  f.write('update.ts', lines.join('\n') + '\n');
+  const headSha = f.commit('attributes head');
+  const { packet } = capture(f.source, { ...f.state, baseSha, headSha });
+  assert.match(f.run('diff', baseSha, headSha), /Binary files/);
+  assert.deepEqual(changedSourceRanges(f.source, packet, packet.changedFiles[0]).map(r => [r.side, r.startLine, r.endLine]),
+    [['base', 12, 18], ['head', 12, 18]]);
 });

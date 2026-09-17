@@ -1,0 +1,10 @@
+{
+  "provider": "codex-local",
+  "model": "gpt-5.6-sol",
+  "maxUsd": 0,
+  "maxTurns": 200,
+  "maxToolCalls": 1000,
+  "maxInputTokens": 1000000,
+  "maxOutputTokens": 65536,
+  "deadlineMs": 3600000
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assess } from '../dist/assessment.js';
+import { assess, reviewSummary } from '../dist/assessment.js';
 import { initialResult, defaultPolicy, parsePolicy, parseResult } from '../dist/contracts.js';
 import { renderMarkdown } from '../dist/render.js';
 import { repository, completed, finding, current } from './helpers.mjs';
@@ -141,6 +141,7 @@ test('Markdown escapes PR content and explicitly discloses declared evidence', t
   const result = completed(packet);
   result.summary = '<script>alert(1)</script> @everyone [click](https://bad.invalid)';
   result.findings = [finding()];
+  result.findings[0].trigger = result.summary;
   const text = renderMarkdown(packet, result, assess(packet, result, current()));
   assert.ok(!text.includes('<script>'));
   assert.ok(!text.includes('@everyone'));
@@ -173,7 +174,7 @@ test('scan-first report separates clean source from missing CI and never hides i
 });
 
 
-test('report links to the owned dashboard and keeps the model summary below actionable findings', t => {
+test('report links to the owned dashboard and derives its summary from the assessment', t => {
   const { packet } = repository(t), result = completed(packet);
   result.findings = [finding('P2')];
   const assessment = assess(packet, result, current());
@@ -183,7 +184,22 @@ test('report links to the owned dashboard and keeps the model summary below acti
   assert.ok(report.includes('| P0 | P1 | P2 | P3 | P4 |'));
   assert.ok(report.includes('| 0 | 0 | **1** | 0 | 0 |'));
   assert.ok(report.indexOf('**Fix:**') < report.indexOf('<summary>Review details'));
-  assert.ok(report.indexOf('<summary>Run summary and checks') < report.indexOf(result.summary));
+  assert.ok(report.indexOf('<summary>Run summary and checks') < report.indexOf('Changes needed. 1 finding'));
+  assert.ok(!report.includes(result.summary));
   assert.ok(!renderMarkdown(packet, result, assessment, 'javascript:alert(1)').includes('javascript:'));
   assert.ok(renderMarkdown(packet, result, assessment, 'https://reviews.example.test/?repository=42#review/abc').includes('[View full review on atmin](https://reviews.example.test/'));
+});
+
+test('free-form readiness claims cannot override partial, failed or stale review summaries', t => {
+  const { packet } = repository(t);
+  for (const status of ['completed', 'partial']) for (const freshness of ['current', 'superseded', 'unverified']) {
+    const result = completed(packet); result.status = status;
+    result.summary = 'Ready to merge. No problems. 5/5.';
+    result.validation = [];
+    const assessment = assess(packet, result, { ...current(), status: freshness });
+    const report = renderMarkdown(packet, result, assessment);
+    assert.ok(!report.includes(result.summary));
+    assert.ok(reviewSummary(assessment).includes(assessment.outcome));
+    assert.ok(reviewSummary(assessment).includes('Not rated.'));
+  }
 });

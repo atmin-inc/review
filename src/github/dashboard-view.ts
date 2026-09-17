@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { readVerification } from '../verification.js';
 import { parseProfile } from '../investigation.js';
 import { parsePacket, parseResult } from '../contracts.js';
-import { assess, unverified, type ValidationCheck } from '../assessment.js';
+import { assess, reviewSummary, unverified, type ValidationCheck } from '../assessment.js';
 import { compareCurrent } from '../snapshot.js';
 import type { PilotConfig } from './config.js';
 import type { Store, Job } from './store.js';
@@ -127,7 +127,7 @@ export function readReview(config: PilotConfig, job: Job, live?: Pull, repositor
       url: `https://github.com/${config.repository}/blob/${f.anchor.side === 'head' ? packet.headSha : packet.mergeBaseSha}/${f.anchor.path.split('/').map(encodeURIComponent).join('/')}#L${f.anchor.line}`,
       evidence: result.evidence.filter(e => f.evidenceIds.includes(e.id)).map(e => ({ id: e.id, kind: e.kind, summary: e.summary })),
     }));
-    return { run, pull: live ?? null, report: { summary: result.summary, reviewer: result.reviewer,
+    return { run, pull: live ?? null, report: { summary: reviewSummary(assessment), reviewer: result.reviewer,
       head: packet.headSha, base: packet.baseSha, baseRef: packet.baseRef, assessment: { ...assessment, findings },
       coverage: result.coverage.map(c => ({ path: c.path, status: c.status })), validationAt, limitations: result.limitations },
       reason: result.status !== 'completed' || job.state !== 'completed' ? failureReason(job) : null };

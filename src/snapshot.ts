@@ -37,22 +37,24 @@ function commandEnv(): NodeJS.ProcessEnv {
     GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_ATTR_NOSYSTEM: '1',
     GIT_LITERAL_PATHSPECS: '1', GH_PROMPT_DISABLED: '1', GH_HOST: 'github.com' };
 }
-function command(program: string, args: string[], cwd?: string, operation = args[0] ?? ''): Buffer {
+function command(program: string, args: string[], cwd?: string, operation = args[0] ?? '', allowNoMatch = false): Buffer {
   const timeout = Math.min(120000, (commandDeadline.getStore() ?? (Date.now() + 120000)) - Date.now());
   requireValue(timeout > 0, 'Review deadline reached');
   try {
     return execFileSync(program, args, { ...(cwd ? { cwd } : {}), env: commandEnv(), maxBuffer: MAX_BYTES, timeout, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch {
+  } catch (error) {
+    if (allowNoMatch && error && typeof error === 'object' && 'status' in error && error.status === 1
+      && 'stdout' in error && Buffer.isBuffer(error.stdout) && error.stdout.length === 0) return Buffer.alloc(0);
     // Child-process exceptions include arguments/output. Do not echo private data.
     throw new Error(`${program} ${operation} failed or exceeded its time/output limit. Check access and the requested revision.`);
   }
 }
-export function git(repository: string, args: string[]): Buffer {
+export function git(repository: string, args: string[], allowNoMatch = false): Buffer {
   return command('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
     '-c', 'core.attributesFile=/dev/null', '-c', 'credential.helper=',
     '-c', 'credential.https://github.com.helper=!gh auth git-credential',
     '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
-    '-c', 'protocol.ssh.allow=never', '-C', repository, ...args], undefined, args[0]);
+    '-c', 'protocol.ssh.allow=never', '-C', repository, ...args], undefined, args[0], allowNoMatch);
 }
 function gitText(repository: string, args: string[]): string { return decode(git(repository, args)); }
 
@@ -195,10 +197,47 @@ export function sourceText(repository: string, revision: string, path: string): 
   requireValue(fileKind(file) === 'text', 'Only regular UTF-8 text can be read');
   return decode(file.bytes);
 }
+// Git owns path decoding and hunk construction. Use a literal path per diff so
+// quoted names, renames and hunk-looking source text cannot change the inventory.
+export function changedSourceRanges(repository: string, packet: Packet, file: ChangedFile) {
+  const diff = gitText(repository, ['diff', '--text', '--no-ext-diff', '--no-textconv', '--no-renames', '--unified=3',
+    packet.mergeBaseSha, packet.headSha, '--', file.path]);
+  const hunks = [...diff.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)];
+  return (['base', 'head'] as const).flatMap(side => {
+    if (file.change === 'added' && side === 'base' || file.change === 'deleted' && side === 'head') return [];
+    const index = side === 'base' ? 1 : 3;
+    const ranges = hunks.flatMap(hunk => {
+      const startLine = Number(hunk[index]), count = Number(hunk[index + 1] ?? 1);
+      return count ? [{ path: file.path, side, startLine, endLine: startLine + count - 1 }] : [];
+    });
+    // Empty files and mode-only changes still require a source read on each
+    // existing side; read_file represents an empty file as range 1–0.
+    if (!ranges.length) {
+      const text = sourceText(repository, side === 'base' ? packet.mergeBaseSha : packet.headSha, file.path);
+      requireValue(text !== null, 'Changed source side is missing');
+      ranges.push({ path: file.path, side, startLine: 1, endLine: text.length ? 1 : 0 });
+    }
+    return ranges;
+  });
+}
 export function sourcePaths(repository: string, revision: string): string[] {
   requireValue(shaPattern.test(revision), 'Invalid immutable revision');
   const output = gitText(repository, ['ls-tree', '-r', '--name-only', '-z', revision]);
   return output ? output.slice(0, -1).split('\0') : [];
+}
+export function searchSource(repository: string, revision: string, query: string) {
+  requireValue(shaPattern.test(revision), 'Invalid immutable revision');
+  requireValue(query.length > 0 && query.length <= 200 && !/[\0\r\n]/.test(query), 'Search requires a single literal line of 1–200 characters');
+  // Native Git searches frozen blobs without a checkout, text conversion or repository scripts.
+  // The shared command deadline and 16 MiB output cap also bound broad searches.
+  const output = decode(git(repository, ['grep', '-I', '-n', '-z', '-F', '--no-textconv', '-e', query, revision, '--'], true));
+  const matches: { path: string; line: number }[] = [];
+  for (const match of output.matchAll(/([^\0]+)\0(\d+)\0[^\n]*(?:\n|$)/g)) {
+    if (matches.length === 50) return { matches, truncated: true };
+    requireValue(match[1]!.startsWith(`${revision}:`), 'Search returned an unexpected revision');
+    matches.push({ path: match[1]!.slice(revision.length + 1), line: Number(match[2]) });
+  }
+  return { matches, truncated: false };
 }
 export function sourceSlice(repository: string, revision: string, path: string, startLine: number, count: number) {
   requireValue(Number.isSafeInteger(startLine) && startLine >= 1 && Number.isSafeInteger(count) && count >= 1 && count <= 200,
