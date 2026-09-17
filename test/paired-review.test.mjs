@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
@@ -16,6 +16,13 @@ function plan() {
 
 test('paired protocol keeps every repeat distinct and reverses order',()=>{
   const good=plan();validatePlan(good);
+  const state={...plan(),kind:'frozen-repository-state-comparison'};
+  assert.throws(()=>validatePlan(state),/frozen repository state/);
+  state.states=Object.fromEntries(state.cases.map(c=>[c.id,`states/${c.id}/repository-state.json`]));
+  assert.throws(()=>validatePlan(state),/frozen repository state/);
+  for(const path of Object.values(state.states))state.files[path]=hash('state');
+  validatePlan(state);
+  assert.throws(()=>validatePlan({...plan(),kind:'unknown'}));
   for(const change of [m=>m.trials.pop(),m=>m.trials[0].arm='unknown',m=>m.trials[0].evaluationArm='baseline',m=>m.trials[0].caseId='../outside',m=>m.trials[0].id=m.trials[1].id,m=>m.trials.push(m.trials.shift())]) {
     const bad=structuredClone(good);change(bad);assert.throws(()=>validatePlan(bad));
   }
@@ -23,8 +30,9 @@ test('paired protocol keeps every repeat distinct and reverses order',()=>{
 
 test('paired dispatch selects isolated engines, retains all 60 outcomes and refuses changed frozen files',async t=>{
   const root=mkdtempSync(join(tmpdir(),'atmin-paired-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
-  const manifest=plan();
+  const manifest={...plan(),kind:'frozen-repository-state-comparison',states:{}};
   const write=(path,source)=>{mkdirSync(join(root,path,'..'),{recursive:true});writeFileSync(join(root,path),source);manifest.files[path]=hash(source);};
+  for(const c of manifest.cases){write(`states/${c.id}/repository-state.json`,`state-${c.id}`);manifest.states[c.id]=`states/${c.id}/repository-state.json`;}
   write('engine/package.json','{"type":"module"}');write('baseline/package.json','{"type":"module"}');
   write('dispatch.mjs',`export const starts=[]; export let active=0, maximum=0, releaseSlow, finishFast;
     export const slow=new Promise(resolve=>releaseSlow=resolve), fast=new Promise(resolve=>finishFast=resolve);
@@ -49,7 +57,11 @@ test('paired dispatch selects isolated engines, retains all 60 outcomes and refu
   const result=await pending;
   assert.ok(dispatch.maximum<=3);
   assert.equal(result.trials.length,60);assert.ok(result.trials.every(t=>t.status==='completed'));
-  for(const trial of result.trials)assert.equal(readFileSync(join(root,'trials',trial.id,'report.md'),'utf8'),trial.arm);
+  for(const trial of result.trials){
+    assert.equal(readFileSync(join(root,'trials',trial.id,'report.md'),'utf8'),trial.arm);
+    const state=join(root,'trials',trial.id,'repository-state.json');
+    if(trial.arm==='candidate')assert.equal(readFileSync(state,'utf8'),`state-${trial.caseId}`);else assert.ok(!existsSync(state),'baseline trials never receive state');
+  }
   await assert.rejects(compare(root),/EEXIST/);
   writeFileSync(join(root,'baseline/dist/run.js'),'throw Error("must not import")');
   await assert.rejects(compare(root),/Frozen experiment file changed/);

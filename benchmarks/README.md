@@ -9,7 +9,9 @@ win. See the [final comparison](paired-comparison-2026-09-14.md),
 Two separately tested fixes address recovered CLI errors and rejected reads
 incorrectly counting as coverage; they are excluded from these frozen results.
 Thirty-five PRs remain reserved. Reviewed clean controls, broader repeat evidence
-and a fresh hosted-competitor evaluation remain outstanding. The six-case smoke
+and a fresh hosted-competitor evaluation remain outstanding. The next paired
+experiment, repository state as a single factor, has a
+[predeclared protocol](repository-state-protocol.md) and has not run. The six-case smoke
 harness and [live GitHub acceptance evidence](../deploy/live-acceptance-2026-09-11.md)
 also exist.
 

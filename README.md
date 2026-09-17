@@ -220,5 +220,8 @@ The next measured experiment is a versioned repository-state artifact for each
 tracked target branch, followed by one review agent with separate investigation
 and verification phases. Read the
 [repository-state direction](docs/repository-state-direction.md) for the proposed
-contract, feedback loop and acceptance experiment. It is a proposal, not a claim
-about the current engine.
+contract, feedback loop and acceptance experiment. Engine r02-28 implements
+[RepositoryState v1](docs/repository-state.md): a `build-state` command, exact-commit
+freshness, path-based section selection and a `withdraw_finding` tool, with a
+[predeclared paired protocol](benchmarks/repository-state-protocol.md) that has
+not yet been run. It is an experiment, not a claim about review quality.
