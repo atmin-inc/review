@@ -216,9 +216,13 @@ are available in current source and await the next versioned package release.
 
 ## Current review direction
 
-The next measured experiment is a versioned repository-state artifact for each
-tracked target branch, followed by one review agent with separate investigation
-and verification phases. Read the
-[repository-state direction](docs/repository-state-direction.md) for the proposed
-contract, feedback loop and acceptance experiment. It is a proposal, not a claim
-about the current engine.
+The current design centres review on the **claim**: one falsifiable assertion
+about one location, carried through investigation, verification and disposition.
+Read the [claim-lifecycle design](docs/claim-lifecycle-design-2026-09-17.md) for
+the claim schema, the ordered evidence ladder and the eval methodology.
+
+The earlier [repository-state direction](docs/repository-state-direction.md)
+stays published for context. Its versioned per-branch artifact is deferred by the
+claim-lifecycle design in favour of a thin human-knowledge file, and one review
+agent with separate investigation and verification phases carries forward. Both
+are proposals, not claims about the current engine.
