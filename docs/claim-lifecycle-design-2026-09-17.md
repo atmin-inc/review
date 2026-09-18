@@ -42,7 +42,7 @@ enough structure to be attacked.
 | `description` | What the code does that prompted the claim. |
 | `suspected_condition` | The trigger under which the defect manifests. |
 | `severity` | Proposed P0 to P4, subject to change at verification. |
-| `evidence_to_check[]` | Questions the verifier must answer, written by the investigator. |
+| `evidence_to_check[]` | Specific propositions the verifier must check, written by the investigator. |
 | `investigator_confidence` | Prior, not a verdict. Never reported to a user. |
 
 The canonical worked example, used throughout this document:
@@ -50,15 +50,15 @@ The canonical worked example, used throughout this document:
 ```json
 {
   "claim_id": "c-0142",
-  "type": "sql_injection",
+  "type": "injection_risk",
   "location": "orders.py:47",
-  "description": "Order search builds its WHERE clause by interpolating the caller-supplied `status` argument into the query string.",
-  "suspected_condition": "A request reaches search_orders() with a `status` value containing a quote or a semicolon.",
+  "description": "The SQL query interpolates `user_input` directly into the string.",
+  "suspected_condition": "A request reaches this query with a `user_input` value containing a quote or a semicolon.",
   "severity": "P1",
   "evidence_to_check": [
-    "Does line 47 concatenate or interpolate `status` into SQL rather than bind it?",
-    "Is `status` reachable from an unauthenticated or otherwise user-controlled route?",
-    "Does a validation or allowlist guard run before line 47?"
+    "The interpolation is not sanitized upstream.",
+    "No parameterized binding is used.",
+    "`user_input` is reachable from a user-controlled route."
   ],
   "investigator_confidence": 0.6
 }
@@ -92,13 +92,13 @@ as it must. A symbolic refutation ends the claim immediately.
 
 **Rung 1, symbolic.** grep, AST queries, the type checker, the compiler. These
 return deterministic facts about the code. For `c-0142`: does the AST show
-`status` reaching a query string through interpolation rather than a bind
+`user_input` reaching a query string through interpolation rather than a bind
 parameter? This rung is nearly free and it settles most claims. Many claims die
 here, which is the intended outcome of a wide investigator.
 
 **Rung 2, executable.** The verifier writes and runs a repro or a scoped test.
-For `c-0142`: call `search_orders()` with `status` set to `open' OR '1'='1` and
-observe whether the row count changes. An executable result is the strongest
+For `c-0142`: drive the query at `orders.py:47` with `user_input` set to
+`' OR '1'='1` and observe whether the row count changes. An executable result is the strongest
 evidence available, because it demonstrates the defect rather than arguing for it.
 
 **Rung 3, cross-family LLM.** A narrow sub-check from a different model family.
@@ -131,16 +131,16 @@ The chain for `c-0142`:
   "verdict": "confirmed",
   "evidence": [
     { "rung": "symbolic",
-      "check": "AST: query string at orders.py:47 built by f-string with non-literal `status`",
+      "check": "AST: query string at orders.py:47 built by interpolation with non-literal `user_input`, no bind parameter",
       "result": "hit" },
     { "rung": "symbolic",
-      "check": "call graph: search_orders() reachable from GET /orders, no auth decorator",
+      "check": "call graph: `user_input` reaches orders.py:47 from a user-controlled route with no sanitizer on the path",
       "result": "hit" },
     { "rung": "executable",
-      "check": "scoped test calls search_orders(status=\"open' OR '1'='1\")",
+      "check": "scoped test drives the query with user_input=\"' OR '1'='1\"",
       "result": "hit, returns all rows rather than the open subset" },
     { "rung": "cross_family_llm",
-      "check": "jev noul sql_injection over the changed hunk",
+      "check": "jev noul sql_injection over the changed hunk (cross-family)",
       "result": 0.94 }
   ],
   "final_severity": "P1",
@@ -276,22 +276,46 @@ checks and compose verdicts in code.
   and still negligible. The gap is schema size rather than model price: the
   question block alone costs 1,501 input tokens.
 
-## 12. Open questions to close before implementation
+## 12. Resolved questions and post-merge follow-ups
 
-1. **Who authors and maintains the human-knowledge file?** It is the deferral
-   that section 1 leans on, and a stale file is worse than none. Open: whether
-   maintainers write it directly, whether it is reviewed on a schedule, and what
-   marks an entry as expired.
-2. **What counts as a different model family, concretely?** Different vendor is
-   clear. Two sizes of one vendor's model is clearly not. Distilled or shared
-   lineage across vendors is genuinely unclear, and the rule in section 3 is
-   unenforceable until this is decided.
-3. **Where does the executable rung run?** A sandboxed test environment or a
-   checked-out worktree. This decides the blast radius of running verifier-written
-   code, the cost per claim, and whether rung 2 is reachable at all for
-   repositories with heavy fixtures.
-4. **What is the hard precision floor in section 9?** The primary metric is not
-   defined until a number is chosen, and the number should come from user
-   tolerance rather than current performance.
-5. **How do claims dedupe across runs?** `claim_id` must be stable enough to track
-   a claim through rebases for the regression harness to diff findings.
+Two questions from the review of this document are closed here. Three need real
+discussion and are labelled **post-merge follow-up** rather than blocking the
+design. None of the three changes the architecture; each sets a parameter inside it.
+
+### Closed
+
+**What counts as a different model family.** Different vendor **and** no shared
+base-model lineage. Where lineage cannot be established, treat the pair as the
+same family and refuse the configuration. The asymmetry is deliberate: wrongly
+claiming two models are independent silently corrupts every verification they
+agree on, while wrongly rejecting a valid pair costs only a configuration change.
+This makes the hard requirement in section 3 enforceable by the harness.
+
+**How claims dedupe across runs.** `claim_id` is a content hash over `type`,
+normalized location and `suspected_condition`, not a sequence number. Normalized
+location means path plus enclosing symbol rather than a raw line number, so a
+rebase that shifts lines does not mint a new claim and the regression harness in
+section 9 can diff findings across revisions. Two claims that collide within one
+run get an appended ordinal.
+
+### Post-merge follow-up
+
+**Who authors and maintains the human-knowledge file.** The RepositoryState
+deferral in section 1 leans on this file, and a stale file is worse than none.
+A template for it is scaffolded alongside the v1 spec. Still open: whether
+maintainers write it directly, what review cadence keeps it honest, and what marks
+an entry expired. Until that is settled, treat the file as advisory context that
+never by itself supports a finding.
+
+**Where the executable rung runs.** A sandboxed test environment or a checked-out
+worktree. This sets the blast radius of running verifier-written code, the cost
+per claim, and whether rung 2 is reachable at all for repositories with heavy
+fixtures. The security question dominates and should be decided with whoever owns
+the execution environment. Until then, rung 2 stays unimplemented and the ladder
+degrades to rungs 1 and 3, which caps confidence at moderate for any claim a
+symbolic check cannot settle.
+
+**What the hard precision floor is.** Section 9's primary metric is not fully
+defined until a number is chosen, and the number should come from user tolerance
+rather than from current performance. Picking it from what the reviewer happens to
+score today would make the metric unfalsifiable.
