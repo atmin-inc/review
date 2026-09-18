@@ -22,7 +22,7 @@ by which method, with what result, and it survives a model change.
 
 | Field | Type | Required | Notes |
 | --- | --- | :---: | --- |
-| `rung` | enum | yes | `symbolic`, `executable`, `cross_family_llm`. |
+| `rung` | enum | yes | `symbolic`, `ci_output`, `cross_family_llm`. In v1 the middle rung reads test output CI already produced; it never executes. |
 | `check` | string | yes | What was run, precisely enough to re-run. |
 | `result` | string or number | yes | `hit`, `miss`, or a probability for rung 3. |
 
@@ -38,7 +38,8 @@ These are policy, evaluated in code, not by a model.
    routes the claim to a human. The majority does not win.
 4. A symbolic refutation ends the claim immediately. Later rungs are not run.
 5. Rung 2 being unavailable is recorded as a limitation, not silently skipped.
-   Until the sandbox question is settled, claims needing rung 2 cap at moderate.
+   In v1 rung 2 reads existing CI output and never executes, so on any corpus
+   without CI output it cannot fire and claims needing it cap at moderate.
 
 ## Worked example
 
@@ -53,9 +54,9 @@ These are policy, evaluated in code, not by a model.
     { "rung": "symbolic",
       "check": "call graph: `user_input` reaches orders.py:47 from a user-controlled route with no sanitizer on the path",
       "result": "hit" },
-    { "rung": "executable",
-      "check": "scoped test drives the query with user_input=\"' OR '1'='1\"",
-      "result": "hit, returns all rows rather than the open subset" },
+    { "rung": "ci_output",
+      "check": "existing CI run: test_orders_search_filters_by_status fails on head with an unexpected row count",
+      "result": "hit" },
     { "rung": "cross_family_llm",
       "check": "jev noul sql_injection over the changed hunk (cross-family)",
       "result": 0.94 }

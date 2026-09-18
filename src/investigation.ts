@@ -1,7 +1,7 @@
 import { Ajv } from 'ajv';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { ReviewInputError, text as str, fixSchema, findingSchema, qualitySchema, initialResult, parseResult, type Packet, type Result, type Finding, type QualityReview } from './contracts.js';
+import { ReviewInputError, text as str, fixSchema, findingSchema, qualitySchema, initialResult, parseResult, type Packet, type Result, type Finding, type Priority, type QualityReview } from './contracts.js';
 import { validateEvidence } from './assessment.js';
 import { hash, changedSourceRanges, searchSource, sourcePaths, sourceSlice, sourceText, validateAnchor, validateFixSource, validateConventionRules, withGitDeadline } from './snapshot.js';
 import { resolveRatingPolicy } from './rating.js';
@@ -44,6 +44,8 @@ export const toolDefinitions = [
     parameters: obj({ side, query: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\u0000\\r\\n]+$' } }) },
   { name: 'record_finding', description: 'Checkpoint one substantiated defect or opted-in improvement. Cite evidence IDs returned by read_file. Reusing an ID replaces that finding.',
     parameters: findingSchema },
+  { name: 'withdraw_finding', description: 'Withdraw a recorded finding after counterevidence disproves it or shows the behavior already exists at the merge base. State the counterevidence. Withdrawals are retained for audit.',
+    parameters: obj({ id: str, reason: str }) },
   { name: 'end_investigation', description: 'Checkpoint the end of bug discovery, alone in its response. Record all substantiated findings first. complete=true means the change and relevant dependencies were investigated with no unresolved work; source reads alone cannot establish this. The controller checks changed-range reads. Otherwise set complete=false and explain missing evidence or unresolved suspicions. Quality and optional fixes follow separately.',
     parameters: obj({ complete: { type: 'boolean' }, limitations: { type: 'array', items: str, maxItems: 50 } }) },
   { name: 'propose_fix', description: 'Optionally attach a minimal head-side replacement to a recorded finding. First read and cite the entire range. At most 20 original and replacement lines. Supply replacementLines as separate code lines; the controller joins them with real line breaks. Use an empty array to delete the range. Do not encode line breaks inside an array item. Preserve leading whitespace on every line, including the first. Supply original as the exact text you intend to replace, matching the head range including whitespace. The controller verifies it against captured source. This does not execute or test the fix.',
@@ -63,7 +65,7 @@ P1: serious realistically reachable security, data or core functionality failure
 P2: meaningful localized functional defect with a plausible concrete trigger; fix before merge.
 P3: established minor low-impact defect; nonblocking follow-up.
 P4: optional behavior-preserving improvement, no established defect; report only when policy.includeOptional is true.
-Do not downgrade an uncertain severe suspicion to P3; investigate it or disclose it as an unresolved limitation. Missing tests are validation gaps, not automatically defects. Do not flag style preferences or pre-existing problems. Explain trigger, consequence, priority rationale and actual counterevidence inspected. One stable ID per root cause; update rather than duplicate.
+Do not downgrade an uncertain severe suspicion to P3; investigate it or disclose it as an unresolved limitation. Missing tests are validation gaps, not automatically defects. Do not flag style preferences or pre-existing problems. Explain trigger, consequence, priority rationale and actual counterevidence inspected. One stable ID per root cause; update rather than duplicate. If counterevidence disproves a recorded finding or shows it pre-exists at the merge base, withdraw it with withdraw_finding.
 Only controller read_file IDs may support findings. There is no shell or test tool; never claim a test ran. Checkpoint substantiated findings immediately. Read changed ranges on both existing sides, plus surrounding code and dependencies as needed. The controller tracks those reads; they are a minimum inspection floor, not a reason to stop exploring. End discovery with end_investigation and honest limitations. Use complete=false for missing evidence or unresolved suspicions. Quality and optional fixes are separate downstream work. Use tools, not a free-text final response.`;
 
 const assessmentInstructions = `Assess the whole change separately from defect severity. Score anchors: 5 strong net-positive change ready on available evidence; 4 good change with a minor actionable concern; 3 useful direction needing meaningful changes; 2 substantial problems undermine the change; 1 fundamentally unsafe or incorrect. This is subjective, not certainty. Do not mechanically translate priorities to scores; the controller enforces serious-defect caps. Never reduce the quality score merely for optional P4 preferences or a missing proposed patch. Each score below 5 needs a concrete actionable concern in its rationale, not personal taste.
@@ -87,6 +89,7 @@ export interface Model {
 }
 export interface Receipt {
   schemaVersion: 1; engineVersion: 'r02-27'; profile: Profile; promptHash: string; toolHash: string; packetHash: string; contextHash: string | null;
+  withdrawals: { id: string; priority: Priority; reason: string; at: string }[];
   discovery: { complete: boolean; limitations: string[]; finishedAt: string } | null;
   inputCountKind: 'exact' | 'conservative-estimate';
   providerFailure: ProviderFailure | null;
@@ -118,7 +121,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
   result.reviewer = { name: 'atmin review', model: profile.model, context: 'independent' };
   result.summary = 'Investigation started but has not finished.';
   result.limitations = ['Source inspection only. Required execution has not run. Source reads do not prove the model’s conclusions.'];
-  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-27', discovery: null, profile, contextHash: null, providerFailure: null,
+  const receipt: Receipt = { schemaVersion: 1, engineVersion: 'r02-27', discovery: null, profile, contextHash: null, withdrawals: [], providerFailure: null,
     inputCountKind: model.inputCountKind ?? 'exact',
     rateCard: profile.provider === 'codex-local' ? { billing: 'subscription', inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-11', source: 'https://developers.openai.com/codex/auth/' }
@@ -317,6 +320,17 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
             const finding = data as Finding;
             recordFinding(finding);
             output = { accepted: finding.id };
+          } else if (tool.name === 'withdraw_finding') {
+            // The refutation path. A claim that counterevidence disproves is
+            // retracted rather than downgraded, and the withdrawal is retained
+            // so the evidence chain records why it ended.
+            const args = data as { id: string; reason: string };
+            const finding = result.findings.find(f => f.id === args.id);
+            if (!finding) throw new ReviewInputError('No recorded finding has that ID');
+            result.findings = result.findings.filter(f => f.id !== args.id);
+            receipt.withdrawals.push({ id: args.id, priority: finding.priority, reason: args.reason, at: new Date().toISOString() });
+            traceEvent('review.withdrawal', { request, toolIndex: receipt.toolCalls, findingIdHash: traceHash(args.id), priority: finding.priority, findings: result.findings.length });
+            output = { withdrawn: args.id };
           } else if (tool.name === 'end_investigation') {
             if (reply.calls.length !== 1) throw new ReviewInputError('end_investigation must be the only tool call in its response');
             const args = data as { complete: boolean; limitations: string[] };
