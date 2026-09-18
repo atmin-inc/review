@@ -31,8 +31,10 @@ the agreement. Arm A has no verifier and is unaffected.
 ## Metrics
 
 **Primary:** accepted-or-fixed findings per PR at a hard precision floor and a
-fixed cost budget. The floor is unset; it must be chosen from user tolerance
-before the first run, not from observed performance.
+fixed cost budget. **The floor is 70%**, measured on the 15 Martian development
+cases, set by maintainer decision before the first run rather than from observed
+performance. Current measured upstream Core precision is 19.4%, so this is a bar to
+clear, not a description of where the reviewer is.
 
 **Regression gate, not primary:** upstream Core F2 on the Martian development
 split. The handoff documents why it cannot carry more weight: the upstream

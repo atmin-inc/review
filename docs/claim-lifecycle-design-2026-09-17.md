@@ -96,10 +96,13 @@ return deterministic facts about the code. For `c-0142`: does the AST show
 parameter? This rung is nearly free and it settles most claims. Many claims die
 here, which is the intended outcome of a wide investigator.
 
-**Rung 2, executable.** The verifier writes and runs a repro or a scoped test.
-For `c-0142`: drive the query at `orders.py:47` with `user_input` set to
-`' OR '1'='1` and observe whether the row count changes. An executable result is the strongest
-evidence available, because it demonstrates the defect rather than arguing for it.
+**Rung 2, executable.** In v1 this rung **reads test output CI has already
+produced**. It does not execute anything: no fresh test runs, no ephemeral
+containers, no worktree writes. If CI already ran a test that fails for the
+claimed reason, that output is the evidence. If it did not, rung 2 does not fire
+and the claim falls to rung 3. An executed result is the strongest evidence
+available, because it demonstrates the defect rather than arguing for it, which is
+why writing and running a repro is planned for v2 rather than dropped.
 
 **Rung 3, cross-family LLM.** A narrow sub-check from a different model family.
 Jev suits this rung: it answers one typed question against supplied state and
@@ -298,24 +301,21 @@ rebase that shifts lines does not mint a new claim and the regression harness in
 section 9 can diff findings across revisions. Two claims that collide within one
 run get an appended ordinal.
 
-### Post-merge follow-up
+### Resolved by decision
 
-**Who authors and maintains the human-knowledge file.** The RepositoryState
-deferral in section 1 leans on this file, and a stale file is worse than none.
-A template for it is scaffolded alongside the v1 spec. Still open: whether
-maintainers write it directly, what review cadence keeps it honest, and what marks
-an entry expired. Until that is settled, treat the file as advisory context that
-never by itself supports a finding.
+These three were settled by the maintainers rather than by investigation. They set
+parameters inside the architecture; none of them changes it.
 
-**Where the executable rung runs.** A sandboxed test environment or a checked-out
-worktree. This sets the blast radius of running verifier-written code, the cost
-per claim, and whether rung 2 is reachable at all for repositories with heavy
-fixtures. The security question dominates and should be decided with whoever owns
-the execution environment. Until then, rung 2 stays unimplemented and the ladder
-degrades to rungs 1 and 3, which caps confidence at moderate for any claim a
-symbolic check cannot settle.
+**The human-knowledge file is owned by humans.** People edit
+`docs/human-knowledge.md` directly on `main`. No CODEOWNERS gate for now. The
+reviewer never writes to it: read-only from the agent's perspective. This keeps the
+file's authority human, which is the whole reason it replaces a generated artifact.
 
-**What the hard precision floor is.** Section 9's primary metric is not fully
-defined until a number is chosen, and the number should come from user tolerance
-rather than from current performance. Picking it from what the reviewer happens to
-score today would make the metric unfalsifiable.
+**The executable rung does not execute in v1.** Scoped to reading test output CI
+has already produced, as described in section 4. The consequence is explicit: on a
+corpus where no CI output exists, rung 2 never fires and every claim a symbolic
+check cannot settle caps at moderate confidence on rung 3 alone. Full execution is
+a v2 feature.
+
+**The precision floor is 70%**, measured on the 15 Martian development cases. This
+is the ship bar. Section 9's primary metric is now fully defined.
