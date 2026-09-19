@@ -16,7 +16,6 @@ export interface FindingMatch {
   typeIn?: ClaimType[];
   minConfidence?: Confidence;
   confidenceIs?: Confidence;
-  routedToHuman?: boolean;
 }
 export type Rule = { name: string; verdict: ReviewVerdict } &
   ({ any: FindingMatch } | { atLeast: number; match: FindingMatch } | { otherwise: true });
@@ -27,7 +26,6 @@ export interface Finding {
   type: ClaimType;
   severity: Priority;
   confidence: Confidence;
-  routedToHuman: boolean;
 }
 
 // Only a confirmed claim is a finding. Refuted and inconclusive claims keep their
@@ -35,7 +33,7 @@ export interface Finding {
 export function findingsFrom(chains: Chain[], typeOf: (claimId: string) => ClaimType): Finding[] {
   return chains.filter(chain => chain.verdict === 'confirmed').map(chain => ({
     claimId: chain.claimId, type: typeOf(chain.claimId),
-    severity: chain.finalSeverity!, confidence: chain.verifierConfidence, routedToHuman: chain.routeToHuman,
+    severity: chain.finalSeverity!, confidence: chain.verifierConfidence,
   }));
 }
 
@@ -45,7 +43,6 @@ export function matches(finding: Finding, match: FindingMatch): boolean {
   if (match.confidenceIs && finding.confidence !== match.confidenceIs) return false;
   if (match.minConfidence
     && CONFIDENCE_ORDER.indexOf(finding.confidence) < CONFIDENCE_ORDER.indexOf(match.minConfidence)) return false;
-  if (match.routedToHuman !== undefined && finding.routedToHuman !== match.routedToHuman) return false;
   return true;
 }
 

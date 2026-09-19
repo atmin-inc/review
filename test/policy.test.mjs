@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { BALANCED, decide, findingsFrom, policyRejection } from '../dist/policy.js';
 import { composeChain } from '../dist/evidence.js';
 
-const finding = over => ({ claimId: 'c-1', type: 'contract_break', severity: 'P2', confidence: 'moderate', routedToHuman: false, ...over });
+const finding = over => ({ claimId: 'c-1', type: 'contract_break', severity: 'P2', confidence: 'moderate', ...over });
 
 test('an empty review merges, and the fallback is named like any other rule', () => {
   const decision = decide([], BALANCED);

@@ -49,7 +49,7 @@ export function verifyClaim(claim: Claim, revision: Revision,
     return {
       chain: {
         claimId: claim.claimId, verdict: 'inconclusive', evidence: symbolic, verifierConfidence: 'low',
-        routeToHuman: false,
+        suspectChecks: [],
         limitations: [symbolic.length
           ? `${unsettled.length} of ${outcomes.length} propositions were not settled, so the claim does not follow from what was established.`
           : 'No rung produced evidence for this claim.',
