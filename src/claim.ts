@@ -107,3 +107,13 @@ export function assignClaimIds(drafts: ClaimDraft[], sourceOf: (path: string) =>
     return { ...draft, claimId: count ? `${base}-${count}` : base };
   });
 }
+
+// A line declares `symbol` when a definition pattern names exactly it, or when it
+// binds the name directly. Used by rung 1 to find where something is actually
+// defined rather than trusting whatever prefix of a file happened to be read.
+export function declaresSymbol(line: string, symbol: string): boolean {
+  if (STATEMENTS.has(/^\s*([A-Za-z_]\w*)/.exec(line)?.[1] ?? '')) return false;
+  if (DEFINITIONS.some(pattern => pattern.exec(line)?.[1] === symbol)) return true;
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\w.])${escaped}\\s*(?::[^=]*)?=(?!=)`).test(line);
+}
