@@ -105,3 +105,33 @@ test('an unreferenced expectation reads the other way too', () => {
   assert.equal(runCheck(revisionOf(files), dead).evidence[0].result, 'miss', 'it has a caller, so it is not dead');
   assert.equal(runCheck(revisionOf({ 'api.ts': files['api.ts'] }), dead).evidence[0].result, 'hit');
 });
+
+// The first false-positive mechanism from the 2026-09-14 audit, in the one place this
+// rung could still commit it. A symbol can be declared more than once, and inspecting
+// whichever declaration turned up first would let one body stand in for all of them —
+// the same error as reading a module to line 180 and concluding that an initialization
+// at 218 does not exist.
+test('absence must hold across every declaration, not the first one found', () => {
+  const files = {
+    'iface.ts': 'function update(owner, account) {\n  return null;\n}\n',
+    'impl.ts': 'function update(owner, account) {\n  if (owner !== account) throw new Error("no");\n  return "ok";\n}\n',
+  };
+  const check = { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' };
+  const outcome = runCheck(revisionOf(files), check);
+  assert.equal(outcome.evidence[0].result, 'miss', 'the guard exists in one of the two bodies, so it is not gone');
+  assert.match(outcome.evidence[0].check, /2 declarations/);
+
+  const present = runCheck(revisionOf(files), { ...check, expect: 'present' });
+  assert.equal(present.evidence[0].result, 'hit');
+  assert.match(present.evidence[0].check, /impl\.ts:1/, 'the evidence points at the body that actually contains it');
+});
+
+// A body that ran past the cap is not a body that lacks the pattern. Absence stays
+// unestablished rather than becoming a refutation of whatever the claim needed.
+test('a declaration body cut off at the cap cannot establish absence for the set', () => {
+  const long = ['function update() {', ...Array(250).fill('  step();'), '}'].join('\n');
+  const files = { 'short.ts': 'function update() {\n  return 1;\n}\n', 'long.ts': long };
+  const outcome = runCheck(revisionOf(files), { assertion: 'body_contains', symbol: 'update', pattern: 'guard', expect: 'absent' });
+  assert.deepEqual(outcome.evidence, []);
+  assert.match(outcome.limitations[0], /could not be inspected in full/);
+});
