@@ -1,5 +1,14 @@
 # atmin review benchmark plan
 
+> **Eval framing superseded.** The primary metric, the precision floor and the
+> guardrails now live in
+> [claim-lifecycle-design-2026-09-17.md](../docs/claim-lifecycle-design-2026-09-17.md)
+> section 9, pre-registered in [bench/PLAN.md](../bench/PLAN.md). Martian F2 is a
+> regression gate, not the headline number, and the precision floor is 70%. The
+> frozen results, corpus curation and hosted-comparison protocol below still
+> stand. Some links in this file point at documents the public export does not
+> carry.
+
 **Status:** Updated September 14, 2026. The paired controller experiment finished
 60 reviews: 15 frozen Martian development PRs × two versions × two repeats.
 Both versions matched 27/72 Core annotation opportunities; discovery-first
