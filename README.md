@@ -227,6 +227,27 @@ claim-lifecycle design in favour of a thin human-knowledge file, and one review
 agent with separate investigation and verification phases carries forward. Both
 are proposals, not claims about the current engine.
 
+That lifecycle now runs end to end:
+
+```sh
+npx atmin-review claim-review https://github.com/OWNER/REPO/pull/123 \
+  --profile ./review-profile.json
+```
+
+A wide pass emits falsifiable claims, a separate pass settles each claim's
+propositions against the frozen revision with none of the first pass's reasoning
+in scope, and the verdict is composed from what survived. The report shows the
+claims that died alongside the findings that lived: emitting widely is only
+trustworthy when the discarding is visible. It accepts a prepared snapshot
+directory in place of a URL, and writes `claims.json` and `verification.json`
+beside the snapshot.
+
+Two limits are current, not permanent. The cross-family rung does not run, so no
+claim reaches high confidence through agreement, and the report says so. Rung 1
+knows three assertions — what a declaration contains, what a body contains, and
+whether a symbol is referenced outside a file — each askable of the head or the
+merge base.
+
 The specs a v1 implementation targets are the [claim schema](spec/claim-schema.md),
 the [evidence chain](spec/evidence-chain.md) and the
 [verdict policy constraints](spec/verdict-policy.md). The
