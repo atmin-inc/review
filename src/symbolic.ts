@@ -68,16 +68,26 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
       return truncated ? inconclusive(label, 'the search truncated before any declaration was found')
         : inconclusive(label, `no declaration of \`${check.symbol}\` was found in this revision`);
     }
-    const site = found[0]!;
-    const body = bodyOf(revision, site.path, site.line);
-    if (body === null) return inconclusive(label, `the body of \`${check.symbol}\` could not be read`);
-    // A body cut off at the cap cannot establish absence: the pattern may be past it.
-    if (body.capped && !body.text.includes(check.pattern) && expect === 'absent') {
-      return inconclusive(label, `the body exceeded ${BODY_LINES} lines, so absence could not be established`);
+    // Every declaration, not the first one that turned up. A symbol can be defined
+    // more than once — an interface and its implementation, a platform variant — and
+    // inspecting one of them is the partial inspection the 2026-09-14 audit recorded
+    // as a false-positive mechanism: a module read as far as line 180 was treated as
+    // evidence that an initialization at 218 did not exist.
+    const bodies = found.map(site => ({ site, body: bodyOf(revision, site.path, site.line) }));
+    const readable = bodies.flatMap(item => item.body ? [{ site: item.site, body: item.body }] : []);
+    if (!readable.length) return inconclusive(label, `the body of \`${check.symbol}\` could not be read`);
+    const containing = readable.filter(item => item.body.text.includes(check.pattern));
+    // Absence has to hold across all of them, so a body that was cut off at the cap,
+    // or one that could not be read at all, leaves it unestablished.
+    const incomplete = readable.filter(item => item.body.capped).length + (bodies.length - readable.length);
+    if (expect === 'absent' && !containing.length && incomplete) {
+      return inconclusive(label, `${incomplete} of ${bodies.length} declaration bodies could not be inspected in full, so absence could not be established`);
     }
+    const site = (containing[0] ?? readable[0]!).site;
+    const where = bodies.length > 1 ? ` (${site.path}:${site.line}, ${bodies.length} declarations)` : ` (${site.path}:${site.line})`;
     return {
-      evidence: [{ rung: 'symbolic', check: `${label} (${site.path}:${site.line})`, result: settle(body.text.includes(check.pattern), expect) }],
-      limitations: body.capped ? [`${label}: only the first ${BODY_LINES} lines of the body were inspected`] : [],
+      evidence: [{ rung: 'symbolic', check: `${label}${where}`, result: settle(containing.length > 0, expect) }],
+      limitations: incomplete ? [`${label}: ${incomplete} of ${bodies.length} declaration bodies were inspected only in part`] : [],
     };
   }
   if (check.assertion === 'declaration_contains') {
