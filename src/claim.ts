@@ -20,15 +20,20 @@ export type SymbolicCheck =
   | { assertion: 'body_contains'; symbol: string; pattern: string; expect?: Expectation }
   | { assertion: 'referenced_outside'; symbol: string; path: string; expect?: Expectation };
 
+// A proposition is one thing that must hold for the claim to follow, paired with the
+// check that settles it. Keeping them apart was a mistake: it let a single grep hit
+// stand in for a whole argument, so "the guard text is absent" could confirm "any
+// account can update any record" without anyone establishing the steps between.
+export interface Proposition { proposition: string; check?: SymbolicCheck }
+
 export interface ClaimDraft {
   type: ClaimType;
   location: string;
   description: string;
   suspectedCondition: string;
   severity: Priority;
-  evidenceToCheck: string[];
+  evidenceToCheck: Proposition[];
   investigatorConfidence?: number;
-  symbolicChecks?: SymbolicCheck[];
 }
 export interface Claim extends ClaimDraft { claimId: string }
 

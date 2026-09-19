@@ -5,7 +5,7 @@ import { assignClaimIds, claimId, claimRejection, enclosingSymbol, normalizeLoca
 const draft = over => ({
   type: 'injection_risk', location: 'orders.py:5', description: 'The query interpolates user_input.',
   suspectedCondition: 'A request reaches this query with a value containing a quote.',
-  severity: 'P1', evidenceToCheck: ['The interpolation is not sanitized upstream.'], ...over,
+  severity: 'P1', evidenceToCheck: [{ proposition: 'The interpolation is not sanitized upstream.' }], ...over,
 });
 
 const BEFORE = ['import db', '', 'def fetch_orders(user_input):', '    query = "..." + user_input',
