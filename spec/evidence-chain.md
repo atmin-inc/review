@@ -24,6 +24,7 @@ by which method, with what result, and it survives a model change.
 | Field | Type | Required | Notes |
 | --- | --- | :---: | --- |
 | `rung` | enum | yes | `symbolic`, `ci_output`, `cross_family_llm`. In v1 the middle rung reads test output CI already produced; it never executes. |
+| | | | Every rung answers one proposition of the claim, never the claim itself. |
 | `check` | string | yes | What was run, precisely enough to re-run. |
 | `result` | string or number | yes | `hit`, `miss`, or a probability for rung 3. |
 
@@ -32,9 +33,18 @@ by which method, with what result, and it survives a model change.
 These are policy, evaluated in code, not by a model.
 
 1. LLM-only evidence caps `verifier_confidence` at **moderate**, whatever the
-   probability returned.
+   probability returned. So does a claim with any single proposition that only a
+   model could settle: an argument is no stronger than its weakest step.
 2. **high** requires a symbolic or executable hit **and** cross-family LLM
    agreement.
+
+   The LLM rung is asked about one proposition at a time, never about the claim.
+   SMOKE_TEST_JEV.md is the reason: factual checks came back sharp and composite
+   judgments clustered around a coin flip, so "is this an auth bypass?" is the
+   question to avoid and "does any caller compare owner to account before
+   update()?" is the question to ask. That is also how a proposition no symbolic
+   check can express gets settled at all, rather than leaving every claim that
+   has one inconclusive.
 3. A hitting symbolic rung that disagrees with the LLM rung lowers confidence and
    makes the claim inconclusive, so it does not ship. The majority does not win,
    and neither does a person: there is no human-escalation verdict.

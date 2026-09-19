@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { climb, composeChain, DEFAULT_THRESHOLDS } from '../dist/evidence.js';
+import { composeChain, DEFAULT_THRESHOLDS } from '../dist/evidence.js';
 
 const symbolic = (result, check = 'AST: interpolation with no bind parameter') => ({ rung: 'symbolic', check, result });
 const ci = result => ({ rung: 'ci_output', check: 'existing CI run: test_orders fails on head', result });
@@ -86,23 +86,13 @@ test('a claim with no evidence at all is a programming error, not an inconclusiv
   assert.throws(() => compose([]), /needs a chain even when refuted/);
 });
 
-// Spending rung 2 or rung 3 on a settled claim buys nothing and invites a model to
-// argue with a deterministic fact.
-test('climbing stops at a symbolic refutation', () => {
-  const run = [];
-  const runner = (rung, evidence) => ({ rung, run: () => { run.push(rung); return evidence; } });
-  const evidence = climb([
-    runner('symbolic', [symbolic('miss')]),
-    runner('ci_output', [ci('hit')]),
-    runner('cross_family_llm', [jev(0.9)]),
-  ]);
-  assert.deepEqual(run, ['symbolic']);
-  assert.equal(evidence.length, 1);
-});
-
-test('climbing continues past a symbolic hit', () => {
-  const run = [];
-  const runner = (rung, evidence) => ({ rung, run: () => { run.push(rung); return evidence; } });
-  climb([runner('symbolic', [symbolic('hit')]), runner('ci_output', []), runner('cross_family_llm', [jev(0.9)])]);
-  assert.deepEqual(run, ['symbolic', 'ci_output', 'cross_family_llm']);
+// An argument is only as strong as its weakest step. When one proposition rests on a
+// model alone, the caller says so with a cap, and no amount of agreement elsewhere
+// lifts the claim past it. A refutation is never capped: a deterministic miss is the
+// strongest answer available.
+test('a capped chain cannot be raised past its weakest step', () => {
+  const evidence = [symbolic('hit'), jev(0.96)];
+  assert.equal(composeChain('c-1', 'P1', evidence).verifierConfidence, 'high');
+  assert.equal(composeChain('c-1', 'P1', evidence, DEFAULT_THRESHOLDS, 'P1', 'moderate').verifierConfidence, 'moderate');
+  assert.equal(composeChain('c-1', 'P1', [symbolic('miss')], DEFAULT_THRESHOLDS, 'P1', 'moderate').verifierConfidence, 'high');
 });

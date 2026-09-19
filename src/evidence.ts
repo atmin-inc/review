@@ -31,9 +31,9 @@ export interface Chain {
 export interface Thresholds { agreeAtOrAbove: number; disagreeAtOrBelow: number }
 export const DEFAULT_THRESHOLDS: Thresholds = { agreeAtOrAbove: 0.7, disagreeAtOrBelow: 0.3 };
 
-type Signal = 'agrees' | 'disagrees' | 'uninformative' | 'absent';
+export type Signal = 'agrees' | 'disagrees' | 'uninformative' | 'absent';
 
-function llmSignal(evidence: Evidence[], thresholds: Thresholds): Signal {
+export function llmSignal(evidence: Evidence[], thresholds: Thresholds): Signal {
   const probabilities = evidence.filter(e => e.rung === 'cross_family_llm' && typeof e.result === 'number')
     .map(e => e.result as number);
   if (!probabilities.length) return 'absent';
@@ -45,13 +45,22 @@ function llmSignal(evidence: Evidence[], thresholds: Thresholds): Signal {
 
 export const isRefutation = (item: Evidence): boolean => item.rung === 'symbolic' && item.result === 'miss';
 
+const ORDER: Confidence[] = ['low', 'moderate', 'high'];
+
+// `cap` exists because an argument is only as strong as its weakest step. A claim
+// whose every proposition was established symbolically is a different thing from one
+// where a step rests on a model alone, even when both end up confirmed, and the rung
+// mix that distinguishes them is known to the caller rather than to this table.
 export function composeChain(claimId: string, proposedSeverity: Priority, evidence: Evidence[],
-  thresholds: Thresholds = DEFAULT_THRESHOLDS, finalSeverity = proposedSeverity): Chain {
+  thresholds: Thresholds = DEFAULT_THRESHOLDS, finalSeverity = proposedSeverity, cap: Confidence = 'high'): Chain {
   if (!evidence.length) throw new Error(`Claim ${claimId} needs a chain even when refuted`);
   const limitations = evidence.some(e => e.rung === 'ci_output') ? []
     : ['Rung 2 did not fire: no CI output covered this claim, so it was not settled by execution.'];
-  const chain = (verdict: Verdict, verifierConfidence: Confidence, suspectChecks: string[] = []): Chain => ({
-    claimId, verdict, evidence, verifierConfidence, suspectChecks, limitations,
+  const chain = (verdict: Verdict, confidence: Confidence, suspectChecks: string[] = []): Chain => ({
+    claimId, verdict, evidence, suspectChecks, limitations,
+    // A refutation is not capped: a deterministic miss is the strongest answer there is.
+    verifierConfidence: verdict === 'refuted' ? confidence
+      : ORDER[Math.min(ORDER.indexOf(confidence), ORDER.indexOf(cap))]!,
     ...(verdict === 'confirmed' ? { finalSeverity } : {}),
   });
 
@@ -80,19 +89,4 @@ export function composeChain(claimId: string, proposedSeverity: Priority, eviden
   if (signal === 'agrees') return chain('confirmed', 'moderate');
   if (signal === 'disagrees') return chain('refuted', 'moderate');
   return chain('inconclusive', 'low');
-}
-
-export interface RungRunner { rung: Rung; run(): Evidence[] }
-
-// Rule 4 again, as control flow rather than as composition: later rungs are not run
-// after a symbolic refutation. Spending rung 2 or rung 3 on a settled claim buys
-// nothing and invites a model to argue with a deterministic fact.
-export function climb(runners: RungRunner[]): Evidence[] {
-  const collected: Evidence[] = [];
-  for (const runner of runners) {
-    const produced = runner.run();
-    collected.push(...produced);
-    if (produced.some(isRefutation)) break;
-  }
-  return collected;
 }
