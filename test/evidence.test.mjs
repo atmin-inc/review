@@ -23,13 +23,22 @@ test('high confidence needs a deterministic hit and the model agreeing', () => {
   assert.equal(compose([symbolic('hit'), symbolic('hit', 'call graph: reachable from a route')]).verifierConfidence, 'moderate');
 });
 
-// A deterministic fact outvoted by a model is the failure mode this rule exists for.
-// Two agreeing rungs against one symbolic hit must not silently confirm or refute.
-test('a symbolic hit the model contradicts goes to a person, not to a majority', () => {
-  const chain = compose([symbolic('hit'), jev(0.05)]);
+// A deterministic fact outvoted by a model is the failure mode this rule exists for,
+// and the answer is not a person. A check is a text proxy for a proposition — "the
+// body lacks `owner !== account`" hits when the comparison moved into a helper — so a
+// contradiction reports on the proxy, not on the code. The claim does not ship and the
+// check is recorded as suspect, which is calibration input rather than an escalation.
+test('a symbolic hit the model contradicts is recorded as a suspect check, not escalated', () => {
+  const chain = compose([symbolic('hit', 'grep: body of `update` lacks "owner !== account"'), jev(0.05)]);
   assert.equal(chain.verdict, 'inconclusive');
   assert.equal(chain.verifierConfidence, 'low');
-  assert.equal(chain.routeToHuman, true);
+  assert.deepEqual(chain.suspectChecks, ['grep: body of `update` lacks "owner !== account"']);
+  assert.equal('routeToHuman' in chain, false, 'there is no human-escalation path to fall back on');
+});
+
+test('an uncontradicted chain names no suspect check', () => {
+  assert.deepEqual(compose([symbolic('hit'), jev(0.94)]).suspectChecks, []);
+  assert.deepEqual(compose([symbolic('miss')]).suspectChecks, []);
 });
 
 test('a symbolic refutation ends the claim at high confidence', () => {
@@ -50,7 +59,7 @@ test('a refutation is not weakened by a model that disagrees with it', () => {
 test('a probability in the neutral band is neither agreement nor disagreement', () => {
   for (const probability of [0.49, 0.41, 0.31, 0.69]) {
     assert.equal(compose([symbolic('hit'), jev(probability)]).verifierConfidence, 'moderate',
-      `${probability} should neither raise to high nor route to a human`);
+      `${probability} should neither raise to high nor count against the check`);
     assert.equal(compose([jev(probability)]).verdict, 'inconclusive');
   }
 });

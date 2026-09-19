@@ -14,7 +14,11 @@ export interface Chain {
   evidence: Evidence[];
   finalSeverity?: Priority;
   verifierConfidence: Confidence;
-  routeToHuman: boolean;
+  // Symbolic checks the cross-family rung contradicted. A check is a text proxy for
+  // a proposition, so a contradiction is a report about the proxy, not a dispute
+  // about the code: the guard may simply have moved into a helper the grep cannot
+  // see. These are calibration input for tightening the check catalogue.
+  suspectChecks: string[];
   limitations: string[];
 }
 
@@ -46,8 +50,8 @@ export function composeChain(claimId: string, proposedSeverity: Priority, eviden
   if (!evidence.length) throw new Error(`Claim ${claimId} needs a chain even when refuted`);
   const limitations = evidence.some(e => e.rung === 'ci_output') ? []
     : ['Rung 2 did not fire: no CI output covered this claim, so it was not settled by execution.'];
-  const chain = (verdict: Verdict, verifierConfidence: Confidence, routeToHuman = false): Chain => ({
-    claimId, verdict, evidence, verifierConfidence, routeToHuman, limitations,
+  const chain = (verdict: Verdict, verifierConfidence: Confidence, suspectChecks: string[] = []): Chain => ({
+    claimId, verdict, evidence, verifierConfidence, suspectChecks, limitations,
     ...(verdict === 'confirmed' ? { finalSeverity } : {}),
   });
 
@@ -59,10 +63,16 @@ export function composeChain(claimId: string, proposedSeverity: Priority, eviden
   const signal = llmSignal(evidence, thresholds);
 
   if (hardHit) {
-    // Rule 3. The majority does not win: a deterministic hit contradicted by the
-    // model is an unresolved disagreement, so it goes to a person rather than
-    // being settled by whichever side has two votes.
-    if (signal === 'disagrees') return chain('inconclusive', 'low', true);
+    // Rule 3. The majority does not win, and neither does a person: every way a
+    // complete argument can be contradicted is a defect on our side. Either the
+    // check is a proxy that does not mean what its proposition says, or the
+    // propositions do not add up to the claim, or the model is wrong. None of those
+    // is a question to hand someone, so the claim does not ship and the checks it
+    // rested on are recorded as suspect.
+    if (signal === 'disagrees') {
+      return chain('inconclusive', 'low',
+        evidence.filter(e => e.rung === 'symbolic' && e.result === 'hit').map(e => e.check));
+    }
     // Rule 2. One rung alone never reaches high.
     return signal === 'agrees' ? chain('confirmed', 'high') : chain('confirmed', 'moderate');
   }

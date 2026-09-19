@@ -92,8 +92,8 @@ test('a claim refuted on rung 1 never reaches the cross-family rung', t => {
 // text is gone. The claim is semantic: any account can update any record. Those are
 // not the same statement, and the gap between them is the remaining propositions.
 // Confirming on the first one alone is what put a complete-looking argument in front
-// of a model and produced a contradiction a person was asked to settle. An unsettled
-// step is a gap in the argument, so the answer is to go check it, not to escalate.
+// of a model and produced a contradiction that read as a dispute. An unsettled step is
+// a gap in the argument, so the answer is to go check it, not to ask anyone.
 test('an argument with an unchecked step is incomplete, not contested', t => {
   let asked = 0;
   const counting = { check: () => { asked++; return [{ rung: 'cross_family_llm', check: 'jev', result: 0.94 }]; } };
@@ -105,7 +105,7 @@ test('an argument with an unchecked step is incomplete, not contested', t => {
   const { chains, decision } = run(t, [partial], counting);
 
   assert.equal(chains[0].verdict, 'inconclusive');
-  assert.equal(chains[0].routeToHuman, false, 'an unfinished argument is not a disagreement to adjudicate');
+  assert.deepEqual(chains[0].suspectChecks, [], 'an unfinished argument accuses no check');
   assert.equal(asked, 0, 'no model is asked to complete an argument rung 1 left open');
   assert.equal(chains[0].evidence.length, 1, 'what was established is still recorded');
   assert.match(chains[0].limitations[0], /1 of 2 propositions were not settled/);

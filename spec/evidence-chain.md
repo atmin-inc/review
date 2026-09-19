@@ -1,6 +1,6 @@
 # Spec: evidence chain
 
-**Status:** Draft. Not implemented.
+**Status:** Draft. Implemented in `src/evidence.ts`.
 **Source:** [claim-lifecycle-design-2026-09-17.md](../docs/claim-lifecycle-design-2026-09-17.md), sections 4 and 5.
 
 Every finding ships with `verdict`, `evidence[]`, `final_severity` and
@@ -17,6 +17,7 @@ by which method, with what result, and it survives a model change.
 | `evidence[]` | Evidence[] | yes | Ordered by rung. Non-empty even when refuted. |
 | `final_severity` | enum `P0`–`P4` | when confirmed | May differ from the claim's proposed severity. |
 | `verifier_confidence` | enum | yes | `low`, `moderate`, `high`. See the cap below. |
+| `suspect_checks[]` | string[] | yes | Symbolic checks the LLM rung contradicted. Calibration input, never shown to a user. Empty in the ordinary case. |
 
 ### Evidence entry
 
@@ -35,7 +36,16 @@ These are policy, evaluated in code, not by a model.
 2. **high** requires a symbolic or executable hit **and** cross-family LLM
    agreement.
 3. A hitting symbolic rung that disagrees with the LLM rung lowers confidence and
-   routes the claim to a human. The majority does not win.
+   makes the claim inconclusive, so it does not ship. The majority does not win,
+   and neither does a person: there is no human-escalation verdict.
+
+   A check is a text proxy for a proposition, so a contradiction here is a report
+   about the proxy rather than a dispute about the code. A check reading "the body
+   lacks `owner !== account`" hits when the comparison has moved into a helper, and
+   the model is right to say there is no bypass. The other two shapes are the same
+   kind of defect: propositions that do not add up to the claim, or a wrong model.
+   The contradicted checks are recorded in `suspect_checks` so the catalogue can be
+   tightened; nobody is asked to adjudicate.
 4. A symbolic refutation ends the claim immediately. Later rungs are not run.
 5. Rung 2 being unavailable is recorded as a limitation, not silently skipped.
    In v1 rung 2 reads existing CI output and never executes, so on any corpus
