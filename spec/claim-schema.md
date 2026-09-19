@@ -37,6 +37,14 @@ Each entry is `{ proposition, check? }`. The proposition is one thing that must
 hold for the claim to follow; the check is the rung-1 assertion that settles
 that one proposition, selected and parameterized from the closed catalogue.
 
+A check names the side it asks about with `revision`: `head` by default, or
+`base` for the merge base. Every review claim is a claim that this change
+introduced something, so a claim about a removed guard or a new behaviour needs
+a base-side proposition of its own. Without one it has not been attributed. The
+2026-09-14 audit recorded misattribution as one of three recurring
+false-positive mechanisms: `sms-retry-non-idempotent` was reported as a new
+defect although every step of its trigger predated the change.
+
 Keeping the two apart was a mistake worth naming, because the shape invites it.
 A check establishes a *syntactic* fact — the text `owner !== account` does not
 appear in this function body. A claim states a *semantic* one — any account can

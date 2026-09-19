@@ -32,8 +32,10 @@ function model(steps, options = {}) {
 
 const corpus = t => {
   const fixture = repository(t);
-  const revision = revisionFrom(fixture.source, fixture.packet.headSha);
-  return { revision, sourceOf: path => sourceText(fixture.source, fixture.packet.headSha, path) };
+  return {
+    revisions: { head: revisionFrom(fixture.source, fixture.packet.headSha), base: revisionFrom(fixture.source, fixture.packet.mergeBaseSha) },
+    sourceOf: path => sourceText(fixture.source, fixture.packet.headSha, path),
+  };
 };
 
 // The fixture's head deletes an ownership guard from update(owner, account).
@@ -54,15 +56,15 @@ const GUARD_CLAIM = {
 // an id, and verification settles it against the same revision with none of the
 // model's reasoning in scope. Emission and verdict are now one path.
 test('an emitted claim is verified against the revision, not against the model', async t => {
-  const { revision, sourceOf } = corpus(t);
-  const emitted = await investigateClaims(revision, sourceOf, {},
+  const { revisions, sourceOf } = corpus(t);
+  const emitted = await investigateClaims(revisions, sourceOf, {},
     model([action('record_claim', GUARD_CLAIM), end()]), LIMITS);
 
   assert.equal(emitted.complete, true);
   assert.equal(emitted.claims.length, 1);
   assert.match(emitted.claims[0].claimId, /^c-[0-9a-f]{12}$/);
 
-  const { chains, decision } = verifyClaims(emitted.claims, revision, BALANCED);
+  const { chains, decision } = verifyClaims(emitted.claims, revisions, BALANCED);
   assert.equal(chains[0].verdict, 'confirmed');
   assert.equal(decision.verdict, 'security_review');
 });
@@ -71,9 +73,9 @@ test('an emitted claim is verified against the revision, not against the model',
 // cannot be settled by any rung, so the verifier would carry it to the end and report
 // it as inconclusive. Refusing it at emit time is what keeps wide emission cheap.
 test('an unfalsifiable claim is refused at emit time and the model is told why', async t => {
-  const { revision, sourceOf } = corpus(t);
+  const { revisions, sourceOf } = corpus(t);
   const fake = model([action('record_claim', { ...GUARD_CLAIM, suspectedCondition: GUARD_CLAIM.description }), end()]);
-  const emitted = await investigateClaims(revision, sourceOf, {}, fake, LIMITS);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, fake, LIMITS);
 
   assert.equal(emitted.claims.length, 0);
   assert.match(emitted.toolErrors[0].reason, /restates description/);
@@ -82,16 +84,16 @@ test('an unfalsifiable claim is refused at emit time and the model is told why',
 });
 
 test('a claim about a line that does not exist is refused', async t => {
-  const { revision, sourceOf } = corpus(t);
-  const emitted = await investigateClaims(revision, sourceOf, {},
+  const { revisions, sourceOf } = corpus(t);
+  const emitted = await investigateClaims(revisions, sourceOf, {},
     model([action('record_claim', { ...GUARD_CLAIM, location: 'update.ts:900' }), end()]), LIMITS);
   assert.equal(emitted.claims.length, 0);
   assert.match(emitted.toolErrors[0].reason, /does not resolve/);
 });
 
 test('re-recording the same claim is refused rather than counted twice', async t => {
-  const { revision, sourceOf } = corpus(t);
-  const emitted = await investigateClaims(revision, sourceOf, {},
+  const { revisions, sourceOf } = corpus(t);
+  const emitted = await investigateClaims(revisions, sourceOf, {},
     model([action('record_claim', GUARD_CLAIM), action('record_claim', GUARD_CLAIM), end()]), LIMITS);
   assert.equal(emitted.claims.length, 1);
   assert.match(emitted.toolErrors[0].reason, /already recorded/);
@@ -101,13 +103,13 @@ test('re-recording the same claim is refused rather than counted twice', async t
 // turn the source tools are withdrawn, so the only move left is to close out and say
 // what was left unresolved.
 test('the closing turn withdraws the source tools so the pass always ends honestly', async t => {
-  const { revision, sourceOf } = corpus(t);
+  const { revisions, sourceOf } = corpus(t);
   const fake = model([
-    action('read_file', { path: 'update.ts', startLine: 1, count: 10 }),
+    action('read_file', { side: 'head', path: 'update.ts', startLine: 1, count: 10 }),
     action('record_claim', GUARD_CLAIM),
     end(false, ['Callers outside this repository were not inspected.']),
   ]);
-  const emitted = await investigateClaims(revision, sourceOf, {}, fake, { ...LIMITS, maxTurns: 3 });
+  const emitted = await investigateClaims(revisions, sourceOf, {}, fake, { ...LIMITS, maxTurns: 3 });
 
   assert.deepEqual(fake.inputs[2].tools.map(tool => tool.name), ['end_investigation']);
   assert.equal(emitted.complete, false);
@@ -116,8 +118,8 @@ test('the closing turn withdraws the source tools so the pass always ends honest
 });
 
 test('an incomplete close with no limitations is refused', async t => {
-  const { revision, sourceOf } = corpus(t);
-  const emitted = await investigateClaims(revision, sourceOf, {}, model([end(false), end(false, ['Ran out of budget.'])]), LIMITS);
+  const { revisions, sourceOf } = corpus(t);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, model([end(false), end(false, ['Ran out of budget.'])]), LIMITS);
   assert.match(emitted.toolErrors[0].reason, /explain unresolved work/);
   assert.deepEqual(emitted.limitations, ['Ran out of budget.']);
 });
@@ -126,7 +128,7 @@ test('an incomplete close with no limitations is refused', async t => {
 // worth, so a run that dies partway still hands over what it already emitted. The
 // truncated response itself is discarded whole: its tool calls may be half-written.
 test('claims emitted before a failure survive it, and the truncated turn does not', async t => {
-  const { revision, sourceOf } = corpus(t);
+  const { revisions, sourceOf } = corpus(t);
   let turn = 0;
   const flaky = {
     async count() { return 1000; },
@@ -138,7 +140,7 @@ test('claims emitted before a failure survive it, and the truncated turn does no
     },
     toolOutput: (id, value) => ({ id, value }),
   };
-  const emitted = await investigateClaims(revision, sourceOf, {}, flaky, LIMITS);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, flaky, LIMITS);
   assert.equal(emitted.claims.length, 1, 'the claim from the completed turn is kept');
   assert.equal(emitted.complete, false);
   assert.match(emitted.stopReason, /Provider response incomplete/);
@@ -147,18 +149,18 @@ test('claims emitted before a failure survive it, and the truncated turn does no
 // Provider and SDK failures can carry repository text, so only controlled messages
 // cross back out of the loop.
 test('an unexpected failure is reported without its message', async t => {
-  const { revision, sourceOf } = corpus(t);
+  const { revisions, sourceOf } = corpus(t);
   const exploding = { async count() { return 1; }, async respond() { throw new Error('secret token abc123 leaked here'); }, toolOutput: () => ({}) };
-  const emitted = await investigateClaims(revision, sourceOf, {}, exploding, LIMITS);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, exploding, LIMITS);
   assert.equal(emitted.stopReason, 'Investigation failed; provider or source operation unavailable');
   assert.doesNotMatch(JSON.stringify(emitted), /abc123/);
 });
 
 test('a claim carrying a check outside the catalogue is rejected by the schema', async t => {
-  const { revision, sourceOf } = corpus(t);
+  const { revisions, sourceOf } = corpus(t);
   const invented = { ...GUARD_CLAIM, evidenceToCheck: [{ proposition: 'The guard is gone.',
     check: { assertion: 'run_shell', symbol: 'update', pattern: 'rm -rf /' } }] };
-  const emitted = await investigateClaims(revision, sourceOf, {}, model([action('record_claim', invented), end()]), LIMITS);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, model([action('record_claim', invented), end()]), LIMITS);
   assert.equal(emitted.claims.length, 0);
   assert.match(emitted.toolErrors[0].reason, /Invalid or unavailable tool name or arguments/);
 });
@@ -166,9 +168,9 @@ test('a claim carrying a check outside the catalogue is rejected by the schema',
 // A command that can spend without a ceiling is not one to hand anybody. Each request
 // is priced before it is made, and a request that cannot be reserved is not made.
 test('a request that cannot be reserved is never made', async t => {
-  const { revision, sourceOf } = corpus(t);
+  const { revisions, sourceOf } = corpus(t);
   const fake = model([action('record_claim', GUARD_CLAIM), end()]);
-  const emitted = await investigateClaims(revision, sourceOf, {}, fake,
+  const emitted = await investigateClaims(revisions, sourceOf, {}, fake,
     { ...LIMITS, maxUsd: 0.00001 });
   assert.equal(fake.inputs.length, 0, 'no request is sent once the budget cannot cover it');
   assert.equal(emitted.stopReason, 'Budget cannot reserve the next request');
@@ -176,8 +178,8 @@ test('a request that cannot be reserved is never made', async t => {
 });
 
 test('spending is settled against what the provider actually reported', async t => {
-  const { revision, sourceOf } = corpus(t);
-  const emitted = await investigateClaims(revision, sourceOf, {}, model([end()]), LIMITS);
+  const { revisions, sourceOf } = corpus(t);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, model([end()]), LIMITS);
   // Reserved at maxOutputTokens, settled at the 50 the reply reported.
   assert.equal(emitted.spentUsd, (1000 * 2.5 + 50 * 15) / 1_000_000);
   assert.ok(emitted.spentUsd < LIMITS.costOf(1000, LIMITS.maxOutputTokens), 'the reservation is released, not kept');

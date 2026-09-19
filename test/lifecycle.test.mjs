@@ -33,11 +33,14 @@ const FALSE_CLAIM = {
   ],
 };
 
+const revisionsOf = fixture => ({
+  head: revisionFrom(fixture.source, fixture.packet.headSha),
+  base: revisionFrom(fixture.source, fixture.packet.mergeBaseSha),
+});
 const run = (t, claims, crossFamily) => {
   const fixture = repository(t);
-  const revision = revisionFrom(fixture.source, fixture.packet.headSha);
   const withIds = assignClaimIds(claims, path => sourceText(fixture.source, fixture.packet.headSha, path));
-  return { ...verifyClaims(withIds, revision, BALANCED, crossFamily), claims: withIds };
+  return { ...verifyClaims(withIds, revisionsOf(fixture), BALANCED, crossFamily), claims: withIds };
 };
 
 // The whole architecture in one pass over a real Git revision: a wide investigator
@@ -123,7 +126,49 @@ test('a claim no rung can touch is inconclusive, not quietly confirmed', t => {
 });
 
 test('an unusable policy fails loudly rather than producing a verdict', t => {
-  const fixture = repository(t);
-  const revision = revisionFrom(fixture.source, fixture.packet.headSha);
-  assert.throws(() => verifyClaims([], revision, { name: 'no-fallback', rules: [] }), /is unusable/);
+  assert.throws(() => verifyClaims([], revisionsOf(repository(t)), { name: 'no-fallback', rules: [] }), /is unusable/);
+});
+
+// The third false-positive mechanism the 2026-09-14 audit recorded: a claim attributed
+// to a pull request because related lines changed, when its whole trigger already
+// existed at the merge base. `sms-retry-non-idempotent` was reported as a new defect
+// although every step of it predated the change. A base-side proposition settles that
+// deterministically, so the misattribution dies on rung 1 rather than reaching a user.
+const ATTRIBUTED = {
+  type: 'auth_bypass', location: 'update.ts:2',
+  description: 'update() no longer compares owner to account.',
+  suspectedCondition: 'A different account submits a known record id.',
+  severity: 'P1',
+  evidenceToCheck: [
+    { proposition: 'The ownership comparison is gone at head.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' } },
+    { proposition: 'It was there before this change, so this change removed it.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'present', revision: 'base' } },
+  ],
+};
+const MISATTRIBUTED = {
+  type: 'contract_break', location: 'update.ts:2',
+  description: 'update() returns a bare string rather than the saved record.',
+  suspectedCondition: 'A caller reads the returned value expecting a record.',
+  severity: 'P2',
+  evidenceToCheck: [
+    { proposition: 'update() returns the bare string at head.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'return "updated"' } },
+    { proposition: 'This change introduced it: the bare return is absent at the merge base.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'return "updated"', expect: 'absent', revision: 'base' } },
+  ],
+};
+
+test('a correctly attributed regression is confirmed on both sides of the change', t => {
+  const { chains } = run(t, [ATTRIBUTED]);
+  assert.equal(chains[0].verdict, 'confirmed');
+  assert.equal(chains[0].evidence.length, 2);
+  assert.match(chains[0].evidence[1].check, /at the merge base/);
+});
+
+test('a claim whose trigger already existed at the merge base is refuted, not reported', t => {
+  const { chains, decision } = run(t, [MISATTRIBUTED]);
+  assert.equal(chains[0].verdict, 'refuted');
+  assert.equal(chains[0].verifierConfidence, 'high');
+  assert.equal(decision.verdict, 'merge', 'a pre-existing condition is not this change to answer for');
 });
