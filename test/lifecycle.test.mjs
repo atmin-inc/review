@@ -74,7 +74,7 @@ test('a refuted claim keeps its chain but reaches no user', t => {
 });
 
 test('cross-family agreement raises a deterministic hit to high, and blocks', t => {
-  const agreeing = { check: () => [{ rung: 'cross_family_llm', check: 'jev noul touches_auth', result: 0.94 }] };
+  const agreeing = { settle: proposition => [{ rung: 'cross_family_llm', check: `jev noul: ${proposition}`, result: 0.94 }] };
   const { chains, decision } = run(t, [TRUE_CLAIM], agreeing);
   assert.equal(chains[0].verifierConfidence, 'high');
   assert.equal(decision.verdict, 'block');
@@ -85,7 +85,7 @@ test('cross-family agreement raises a deterministic hit to high, and blocks', t 
 // symbolic check already refuted, so no model is invited to argue with the code.
 test('a claim refuted on rung 1 never reaches the cross-family rung', t => {
   let asked = 0;
-  const counting = { check: () => { asked++; return [{ rung: 'cross_family_llm', check: 'jev', result: 0.99 }]; } };
+  const counting = { settle: () => { asked++; return [{ rung: 'cross_family_llm', check: 'jev', result: 0.99 }]; } };
   const { chains } = run(t, [FALSE_CLAIM], counting);
   assert.equal(asked, 0);
   assert.equal(chains[0].verdict, 'refuted');
@@ -93,26 +93,79 @@ test('a claim refuted on rung 1 never reaches the cross-family rung', t => {
 
 // The architecture's load-bearing rule. A grep settles a syntactic fact: the guard
 // text is gone. The claim is semantic: any account can update any record. Those are
-// not the same statement, and the gap between them is the remaining propositions.
-// Confirming on the first one alone is what put a complete-looking argument in front
-// of a model and produced a contradiction that read as a dispute. An unsettled step is
-// a gap in the argument, so the answer is to go check it, not to ask anyone.
-test('an argument with an unchecked step is incomplete, not contested', t => {
-  let asked = 0;
-  const counting = { check: () => { asked++; return [{ rung: 'cross_family_llm', check: 'jev', result: 0.94 }]; } };
+// not the same statement, and the gap between them is the remaining propositions. A
+// step no rung reached leaves the argument unfinished, so the claim does not ship.
+test('an argument with a step no rung reached does not ship', t => {
   const partial = {
     ...TRUE_CLAIM,
     evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
       { proposition: 'The endpoint is reachable by an account that does not own the record.' }],
   };
-  const { chains, decision } = run(t, [partial], counting);
+  const { chains, decision } = run(t, [partial]);
 
   assert.equal(chains[0].verdict, 'inconclusive');
   assert.deepEqual(chains[0].suspectChecks, [], 'an unfinished argument accuses no check');
-  assert.equal(asked, 0, 'no model is asked to complete an argument rung 1 left open');
   assert.equal(chains[0].evidence.length, 1, 'what was established is still recorded');
   assert.match(chains[0].limitations[0], /1 of 2 propositions were not settled/);
   assert.match(chains[0].limitations[1], /reachable by an account/);
+  assert.equal(decision.verdict, 'merge');
+});
+
+// The recall path, and the reason rung 3 asks about a proposition rather than a claim.
+// "Is this an auth bypass?" is the composite judgment the smoke test found mushy.
+// "Is the endpoint reachable by an account that does not own the record?" is a factual
+// question, and it is exactly the step no grep can express. Settling it that way ships
+// the claim, capped at moderate: an argument is only as strong as its weakest step.
+test('a step only a model can reach is settled by one, and caps the claim at moderate', t => {
+  const asked = [];
+  const narrow = { settle: proposition => {
+    asked.push(proposition);
+    return [{ rung: 'cross_family_llm', check: `jev noul: ${proposition}`, result: 0.91 }];
+  } };
+  const partial = {
+    ...TRUE_CLAIM,
+    evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
+      { proposition: 'The endpoint is reachable by an account that does not own the record.' }],
+  };
+  const { chains, decision } = run(t, [partial], narrow);
+
+  assert.equal(chains[0].verdict, 'confirmed');
+  assert.equal(chains[0].verifierConfidence, 'moderate', 'a step resting on a model alone caps the claim');
+  assert.equal(asked.length, 2, 'the model is asked about each proposition, never about the claim');
+  assert.match(asked[1], /reachable by an account/);
+  assert.equal(decision.verdict, 'security_review');
+});
+
+// The same narrow question, answered the other way. A proposition the model denies is
+// a claim that does not hold, and it dies at moderate rather than high: a model is not
+// a deterministic refutation.
+test('a step the model denies refutes the claim at moderate confidence', t => {
+  const denying = { settle: proposition => [{ rung: 'cross_family_llm', check: `jev noul: ${proposition}`,
+    result: proposition.startsWith('The endpoint') ? 0.04 : 0.88 }] };
+  const partial = {
+    ...TRUE_CLAIM,
+    evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
+      { proposition: 'The endpoint is reachable by an account that does not own the record.' }],
+  };
+  const { chains, decision } = run(t, [partial], denying);
+
+  assert.equal(chains[0].verdict, 'refuted');
+  assert.equal(chains[0].verifierConfidence, 'moderate');
+  assert.match(chains[0].limitations[0], /does not hold/);
+  assert.equal(decision.verdict, 'merge');
+});
+
+// The contradiction case, now sharp enough to name the check. The model is not voting
+// against the code; it is reporting that this particular text proxy does not mean what
+// its proposition says.
+test('a model that contradicts a check accuses that check, and the claim does not ship', t => {
+  const contradicting = { settle: () => [{ rung: 'cross_family_llm', check: 'jev noul', result: 0.03 }] };
+  const { chains, decision } = run(t, [TRUE_CLAIM], contradicting);
+
+  assert.equal(chains[0].verdict, 'inconclusive');
+  assert.equal(chains[0].verifierConfidence, 'low');
+  assert.equal(chains[0].suspectChecks.length, 2);
+  assert.match(chains[0].suspectChecks[0], /body of `update` lacks/);
   assert.equal(decision.verdict, 'merge');
 });
 
