@@ -6,12 +6,15 @@ import { assess, unverified } from './assessment.js';
 import { checkCurrent, loadReview, prepare } from './snapshot.js';
 import { renderMarkdown } from './render.js';
 import { readProfile, runReview } from './run.js';
+import { runClaimReview } from './claim-run.js';
+import { renderClaimReview } from './render-claim.js';
 import { accountedUsd } from './investigation.js';
 import { costReport } from './cost-report.js';
 
 const help = `atmin review — source investigation and evidence tools
 
   atmin-review review <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
+  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>]
   atmin-review prepare <https://github.com/owner/repo/pull/number> [--out <new-directory>]
   atmin-review render <directory> [--format markdown|json] [--check-current] [--out <new-file>]
   atmin-review investigate <directory> --profile <profile.json>
@@ -21,6 +24,9 @@ prepare uses read-only GitHub/Git access and writes a private snapshot.
 render validates all evidence references against captured Git objects.
 --check-current checks live head/target; without it freshness is unverified.
 investigate sends frozen source to the configured API, with bounded reads and usage reservations.
+claim-review runs the claim lifecycle: a wide pass emits falsifiable claims, a separate
+pass settles each one against the frozen revision, and the verdict is composed from what
+survived. Claims that die are shown, not hidden.
 No repository scripts, GitHub writes or merge approvals. Required execution remains not-run.
 `;
 
@@ -30,6 +36,21 @@ async function main(): Promise<void> {
   if (values.help || !positionals.length) { process.stdout.write(help); return; }
   const [operation, input] = positionals;
   if (!input || positionals.length !== 2) throw new Error('Expected one command and one input; use --help');
+  if (operation === 'claim-review') {
+    if (!values.profile || values.format || values['check-current']) throw new Error('claim-review requires --profile and accepts only --out');
+    const profile = readProfile(resolve(values.profile));
+    const directory = input.startsWith('https://') ? prepare(input, values.out).directory : resolve(input);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
+    try {
+      const { claims, investigation, verification } = await runClaimReview(directory, profile, undefined, controller.signal);
+      process.stdout.write(renderClaimReview(claims, verification, investigation));
+      process.stderr.write(`Private review artifacts: ${directory}\n`);
+      if (investigation.stopReason !== 'finished') process.exitCode = 2;
+    } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+    return;
+  }
   if (operation === 'investigate' || operation === 'review') {
     if (!values.profile || (operation === 'investigate' && values.out) || values.format || values['check-current']) throw new Error('review/investigate requires --profile; --out is only valid for review');
     const profile = readProfile(resolve(values.profile));
@@ -63,7 +84,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify({ directory, headSha: packet.headSha, baseSha: packet.baseSha, changedFiles: packet.changedFiles.length, investigation: 'not-started' }, null, 2)}\n`);
     return;
   }
-  if (operation !== 'render') throw new Error('Unknown command; use prepare, investigate or render.');
+  if (operation !== 'render') throw new Error('Unknown command; use prepare, investigate, claim-review or render.');
   if (values.format && !['markdown', 'json'].includes(values.format)) throw new Error('Format must be markdown or json');
   const { packet, result } = loadReview(resolve(input));
   const assessment = assess(packet, result, values['check-current'] ? checkCurrent(packet) : unverified());
