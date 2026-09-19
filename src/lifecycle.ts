@@ -1,6 +1,6 @@
-import type { Claim } from './claim.js';
+import type { Claim, Proposition } from './claim.js';
 import { climb, composeChain, DEFAULT_THRESHOLDS, type Chain, type Evidence, type Thresholds } from './evidence.js';
-import { runChecks, type Revision } from './symbolic.js';
+import { runCheck, type Revision } from './symbolic.js';
 import { decide, findingsFrom, policyRejection, type Decision, type Policy } from './policy.js';
 
 // The verification half of the lifecycle: a claim set in, a verdict composed in code
@@ -10,28 +10,63 @@ import { decide, findingsFrom, policyRejection, type Decision, type Policy } fro
 export interface CrossFamilyRung { check(claim: Claim): Evidence[] }
 export interface Verification { chains: Chain[]; decision: Decision; limitations: string[] }
 
+// A claim is an argument, and a check settles one step of it. Tracking the steps
+// separately is the whole point: a grep establishes a syntactic fact, and a claim
+// like "any account can update any record" needs several of those facts before it
+// follows. Collapsing them let one hit stand in for the argument.
+export type PropositionStatus = 'established' | 'refuted' | 'unsettled';
+export interface PropositionOutcome {
+  proposition: string; status: PropositionStatus; evidence: Evidence[]; limitations: string[];
+}
+
+export function settleProposition(revision: Revision, item: Proposition): PropositionOutcome {
+  if (!item.check) {
+    return { proposition: item.proposition, status: 'unsettled', evidence: [], limitations: [] };
+  }
+  const outcome = runCheck(revision, item.check);
+  const result = outcome.evidence[0]?.result;
+  const status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
+  return { proposition: item.proposition, status, evidence: outcome.evidence, limitations: outcome.limitations };
+}
+
 export function verifyClaim(claim: Claim, revision: Revision,
   crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): { chain: Chain; limitations: string[] } {
-  const collected: string[] = [];
-  const evidence = climb([
-    { rung: 'symbolic', run: () => {
-      const outcome = runChecks(revision, claim.symbolicChecks ?? []);
-      collected.push(...outcome.limitations);
-      return outcome.evidence;
-    } },
-    // Rung 2 is absent by construction in v1: it reads CI output that this corpus
-    // does not carry. composeChain records that rather than passing over it.
-    { rung: 'cross_family_llm', run: () => crossFamily?.check(claim) ?? [] },
-  ]);
-  if (!evidence.length) {
-    // A claim no rung could touch is not refuted and not confirmed. Saying so is the
-    // honest outcome; treating it as either would be the dishonest one.
+  const outcomes = claim.evidenceToCheck.map(item => settleProposition(revision, item));
+  const collected = outcomes.flatMap(outcome => outcome.limitations);
+  const symbolic = outcomes.flatMap(outcome => outcome.evidence);
+
+  // One proposition shown false is enough: the argument cannot hold without it, and
+  // no later rung is invited to argue with a deterministic fact.
+  if (outcomes.some(outcome => outcome.status === 'refuted')) {
+    return { chain: composeChain(claim.claimId, claim.severity, symbolic, thresholds), limitations: collected };
+  }
+
+  // An argument with an unsettled step is incomplete, not contested. Saying so keeps
+  // an unfinished argument away from a person: the answer is to check the remaining
+  // propositions, not to ask someone to adjudicate the ones that were checked.
+  const unsettled = outcomes.filter(outcome => outcome.status === 'unsettled');
+  if (unsettled.length || !outcomes.length) {
     return {
-      chain: { claimId: claim.claimId, verdict: 'inconclusive', evidence: [], verifierConfidence: 'low',
-        routeToHuman: false, limitations: ['No rung produced evidence for this claim.'] },
+      chain: {
+        claimId: claim.claimId, verdict: 'inconclusive', evidence: symbolic, verifierConfidence: 'low',
+        routeToHuman: false,
+        limitations: [symbolic.length
+          ? `${unsettled.length} of ${outcomes.length} propositions were not settled, so the claim does not follow from what was established.`
+          : 'No rung produced evidence for this claim.',
+        ...unsettled.map(outcome => `Unsettled: ${JSON.stringify(outcome.proposition)}`)],
+      },
       limitations: collected,
     };
   }
+
+  // Every step established. Only now is the claim worth a model's opinion, which can
+  // raise it to high or contradict a complete argument. Rung 2 is absent by
+  // construction in v1: it reads CI output this corpus does not carry, and
+  // composeChain records that rather than passing over it.
+  const evidence = climb([
+    { rung: 'symbolic', run: () => symbolic },
+    { rung: 'cross_family_llm', run: () => crossFamily?.check(claim) ?? [] },
+  ]);
   return { chain: composeChain(claim.claimId, claim.severity, evidence, thresholds), limitations: collected };
 }
 

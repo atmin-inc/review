@@ -14,15 +14,23 @@ const TRUE_CLAIM = {
   type: 'auth_bypass', location: 'update.ts:2',
   description: 'update() returns without comparing owner to account.',
   suspectedCondition: 'A different account submits a known record id.',
-  severity: 'P1', evidenceToCheck: ['No ownership comparison remains in the function body.'],
-  symbolicChecks: [{ assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' }],
+  severity: 'P1',
+  evidenceToCheck: [
+    { proposition: 'No ownership comparison remains in the function body.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' } },
+    { proposition: 'No other module wraps update() with its own ownership check.',
+      check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts', expect: 'absent' } },
+  ],
 };
 const FALSE_CLAIM = {
   type: 'contract_break', location: 'update.ts:1',
   description: 'update() is called from other modules that assume the old signature.',
   suspectedCondition: 'Another module calls update() and relies on the throw.',
-  severity: 'P1', evidenceToCheck: ['update is referenced outside update.ts.'],
-  symbolicChecks: [{ assertion: 'referenced_outside', symbol: 'update', path: 'update.ts' }],
+  severity: 'P1',
+  evidenceToCheck: [
+    { proposition: 'update is referenced outside update.ts.',
+      check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts' } },
+  ],
 };
 
 const run = (t, claims, crossFamily) => {
@@ -41,6 +49,7 @@ test('a true claim survives verification and a false one dies on rung 1', t => {
   const [confirmed, refuted] = chains;
   assert.equal(confirmed.verdict, 'confirmed');
   assert.equal(confirmed.verifierConfidence, 'moderate', 'one rung alone never reaches high');
+  assert.equal(confirmed.evidence.length, 2, 'every proposition is settled on its own');
   assert.match(confirmed.evidence[0].check, /body of `update` lacks/);
 
   assert.equal(refuted.verdict, 'refuted');
@@ -79,8 +88,34 @@ test('a claim refuted on rung 1 never reaches the cross-family rung', t => {
   assert.equal(chains[0].verdict, 'refuted');
 });
 
+// The architecture's load-bearing rule. A grep settles a syntactic fact: the guard
+// text is gone. The claim is semantic: any account can update any record. Those are
+// not the same statement, and the gap between them is the remaining propositions.
+// Confirming on the first one alone is what put a complete-looking argument in front
+// of a model and produced a contradiction a person was asked to settle. An unsettled
+// step is a gap in the argument, so the answer is to go check it, not to escalate.
+test('an argument with an unchecked step is incomplete, not contested', t => {
+  let asked = 0;
+  const counting = { check: () => { asked++; return [{ rung: 'cross_family_llm', check: 'jev', result: 0.94 }]; } };
+  const partial = {
+    ...TRUE_CLAIM,
+    evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
+      { proposition: 'The endpoint is reachable by an account that does not own the record.' }],
+  };
+  const { chains, decision } = run(t, [partial], counting);
+
+  assert.equal(chains[0].verdict, 'inconclusive');
+  assert.equal(chains[0].routeToHuman, false, 'an unfinished argument is not a disagreement to adjudicate');
+  assert.equal(asked, 0, 'no model is asked to complete an argument rung 1 left open');
+  assert.equal(chains[0].evidence.length, 1, 'what was established is still recorded');
+  assert.match(chains[0].limitations[0], /1 of 2 propositions were not settled/);
+  assert.match(chains[0].limitations[1], /reachable by an account/);
+  assert.equal(decision.verdict, 'merge');
+});
+
 test('a claim no rung can touch is inconclusive, not quietly confirmed', t => {
-  const { chains, decision } = run(t, [{ ...TRUE_CLAIM, symbolicChecks: [] }]);
+  const bare = { ...TRUE_CLAIM, evidenceToCheck: [{ proposition: 'Any account can update any record.' }] };
+  const { chains, decision } = run(t, [bare]);
   assert.equal(chains[0].verdict, 'inconclusive');
   assert.equal(chains[0].verifierConfidence, 'low');
   assert.match(chains[0].limitations[0], /No rung produced evidence/);
