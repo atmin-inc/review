@@ -8,6 +8,18 @@ export const CLAIM_TYPES = ['injection_risk', 'hardcoded_secret', 'auth_bypass',
   'data_loss', 'contract_break', 'error_handling_gap', 'resource_leak'] as const;
 export type ClaimType = typeof CLAIM_TYPES[number];
 
+// Rung 1's closed catalogue. The investigator selects and parameterizes a check;
+// it never authors a new kind of one. Literal grep over frozen blobs is read-only,
+// so a model-chosen symbol is a search term, not a capability.
+// `expect` exists because most review claims are about absence: a guard removed, a
+// null check missing, a bound never applied. Without it a check can only support
+// claims about what IS there, and every absence claim would read as refuted.
+export type Expectation = 'present' | 'absent';
+export type SymbolicCheck =
+  | { assertion: 'declaration_contains'; symbol: string; pattern: string; expect?: Expectation }
+  | { assertion: 'body_contains'; symbol: string; pattern: string; expect?: Expectation }
+  | { assertion: 'referenced_outside'; symbol: string; path: string; expect?: Expectation };
+
 export interface ClaimDraft {
   type: ClaimType;
   location: string;
@@ -16,6 +28,7 @@ export interface ClaimDraft {
   severity: Priority;
   evidenceToCheck: string[];
   investigatorConfidence?: number;
+  symbolicChecks?: SymbolicCheck[];
 }
 export interface Claim extends ClaimDraft { claimId: string }
 
