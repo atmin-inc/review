@@ -226,3 +226,10 @@ stays published for context. Its versioned per-branch artifact is deferred by th
 claim-lifecycle design in favour of a thin human-knowledge file, and one review
 agent with separate investigation and verification phases carries forward. Both
 are proposals, not claims about the current engine.
+
+The specs a v1 implementation targets are the [claim schema](spec/claim-schema.md),
+the [evidence chain](spec/evidence-chain.md) and the
+[verdict policy constraints](spec/verdict-policy.md). The
+[regression harness layout](harness/README.md) and the
+[pre-registered paired benchmark](bench/PLAN.md) describe how it gets measured.
+Ship bar: 70% precision on the 15 Martian development cases.

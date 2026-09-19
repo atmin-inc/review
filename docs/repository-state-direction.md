@@ -1,6 +1,16 @@
 # Versioned repository state for PR review
 
-**Status:** Proposed experiment, September 17, 2026.
+**Status:** **Deferred**, September 17, 2026. Kept for context and for the
+problem statement below, which still holds.
+
+The versioned per-branch artifact this document proposes is deferred as
+over-engineered for its present value. The current direction replaces it with a
+thin human-authored knowledge file plus review-time symbol search. See
+[claim-lifecycle-design-2026-09-17.md](./claim-lifecycle-design-2026-09-17.md),
+sections 1 and 10, and `docs/human-knowledge.template.md` for the replacement.
+
+The source-audit gaps recorded below are not deferred. They are what the
+claim lifecycle's evidence ladder exists to close.
 
 ## Why try this
 
