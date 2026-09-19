@@ -77,23 +77,33 @@ Read before you claim: read the changed ranges on both sides, and search for cal
 
 End with end_investigation and honest limitations. Use tools, not prose.`;
 
-export interface ClaimLimits { maxTurns: number; maxToolCalls: number; maxOutputTokens: number }
+// The investigator spends money, so its bound is a reservation rather than a turn
+// count alone: each request is priced before it is made and settled after, and a
+// request that cannot be reserved is not made. costOf keeps the rate card with the
+// caller, which is the only place that knows which provider is answering.
+export interface ClaimLimits {
+  maxTurns: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number;
+  maxUsd: number; costOf(inputTokens: number, outputTokens: number): number;
+}
 export interface ClaimInvestigation {
   claims: Claim[];
   complete: boolean;
   limitations: string[];
   toolErrors: { tool: string; reason: string }[];
   stopReason: string | null;
+  spentUsd: number;
 }
 
 export async function investigateClaims(revision: Revision, sourceOf: (path: string) => string | null,
   context: unknown, model: Model, limits: ClaimLimits, signal: AbortSignal = new AbortController().signal): Promise<ClaimInvestigation> {
   const drafts: ClaimDraft[] = [];
   const seen = new Set<string>();
-  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null };
+  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0 };
   const transcript: unknown[] = [];
   let toolCalls = 0;
   let done = false;
+  let settled = 0;
+  let reservation = 0;
   try {
     for (let turn = 0; turn < limits.maxTurns && !done; turn++) {
       signal.throwIfAborted();
@@ -111,8 +121,22 @@ export async function investigateClaims(revision: Revision, sourceOf: (path: str
         } }),
         transcript, tools,
       };
+      const inputTokens = await model.count(input, signal);
+      signal.throwIfAborted();
+      if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > limits.maxInputTokens) {
+        throw new Error('Input token count unavailable or exceeds the configured limit');
+      }
+      // The reservation is held until the reply settles it. A request whose outcome
+      // is unknown stays charged at its reservation, so an unknown spend is never
+      // mistaken for zero.
+      reservation = limits.costOf(inputTokens, limits.maxOutputTokens);
+      if (settled + reservation > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
+      outcome.spentUsd = settled + reservation;
       const reply = await model.respond(input, limits.maxOutputTokens, signal);
       signal.throwIfAborted();
+      settled += limits.costOf(reply.inputTokens, reply.outputTokens);
+      reservation = 0;
+      outcome.spentUsd = settled;
       if (reply.status !== 'completed') throw new Error('Provider response incomplete; recorded claims preserved');
       transcript.push(...reply.continuation);
       if (!reply.calls.length) {
@@ -172,13 +196,14 @@ export async function investigateClaims(revision: Revision, sourceOf: (path: str
     if (!done) throw new Error('Model turn limit reached');
   } catch (error) {
     // Controlled messages only: provider and SDK text can carry repository content.
-    const allowed = /^(Provider response|Duplicate tool|Tool call limit|Model turn limit)/;
+    const allowed = /^(Provider response|Duplicate tool|Tool call limit|Model turn limit|Budget cannot|Input token)/;
     const reason = signal.aborted ? 'Investigation cancelled'
       : error instanceof Error && allowed.test(error.message) ? error.message
       : 'Investigation failed; provider or source operation unavailable';
     outcome.stopReason = reason;
     outcome.complete = false;
     outcome.limitations.push(reason);
+    outcome.spentUsd = settled + reservation;
   }
   // Claims emitted before a failure are kept: they are cheap to verify and the
   // verifier, not this pass, decides what they are worth.

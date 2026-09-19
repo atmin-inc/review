@@ -7,7 +7,8 @@ import { verifyClaims } from '../dist/lifecycle.js';
 import { BALANCED } from '../dist/policy.js';
 import { sourceText } from '../dist/snapshot.js';
 
-const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxOutputTokens: 4096 };
+const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxInputTokens: 50000, maxOutputTokens: 4096,
+  maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000 };
 const action = (name, args) => ({ id: `${name}-${Math.random()}`, name, arguments: JSON.stringify(args) });
 const end = (complete = true, limitations = []) => action('end_investigation', { complete, limitations });
 
@@ -160,4 +161,24 @@ test('a claim carrying a check outside the catalogue is rejected by the schema',
   const emitted = await investigateClaims(revision, sourceOf, {}, model([action('record_claim', invented), end()]), LIMITS);
   assert.equal(emitted.claims.length, 0);
   assert.match(emitted.toolErrors[0].reason, /Invalid or unavailable tool name or arguments/);
+});
+
+// A command that can spend without a ceiling is not one to hand anybody. Each request
+// is priced before it is made, and a request that cannot be reserved is not made.
+test('a request that cannot be reserved is never made', async t => {
+  const { revision, sourceOf } = corpus(t);
+  const fake = model([action('record_claim', GUARD_CLAIM), end()]);
+  const emitted = await investigateClaims(revision, sourceOf, {}, fake,
+    { ...LIMITS, maxUsd: 0.00001 });
+  assert.equal(fake.inputs.length, 0, 'no request is sent once the budget cannot cover it');
+  assert.equal(emitted.stopReason, 'Budget cannot reserve the next request');
+  assert.equal(emitted.claims.length, 0);
+});
+
+test('spending is settled against what the provider actually reported', async t => {
+  const { revision, sourceOf } = corpus(t);
+  const emitted = await investigateClaims(revision, sourceOf, {}, model([end()]), LIMITS);
+  // Reserved at maxOutputTokens, settled at the 50 the reply reported.
+  assert.equal(emitted.spentUsd, (1000 * 2.5 + 50 * 15) / 1_000_000);
+  assert.ok(emitted.spentUsd < LIMITS.costOf(1000, LIMITS.maxOutputTokens), 'the reservation is released, not kept');
 });
