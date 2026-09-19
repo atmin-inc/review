@@ -41,6 +41,23 @@ cases, set by maintainer decision before the first run rather than from observed
 performance. Current measured upstream Core precision is 19.4%, so this is a bar to
 clear, not a description of where the reviewer is.
 
+**The floor's denominator is adjudicated structured findings**, decided September
+19, 2026, before the first run. Precision is matched valid unique findings over all
+adjudicated unique findings, counting a source-supported defect the annotation set
+does not carry as valid rather than as a false positive. The upstream full-report
+score is retained unchanged beside it as the regression gate below; it is not the
+floor's denominator, because the extractor turns quality prose into candidates and
+19.4% is therefore not a count of false bug claims.
+
+**The floor carries a recall condition:** 70% precision at Core recall no lower
+than the pre-registered baseline of 37.5%. A precision floor alone is clearable by
+reporting less, which is the opposite of the intended change.
+
+Until adjudication exists, the reachable range is bounded rather than known.
+[`findings-only-bound.mjs`](../benchmarks/findings-only-bound.mjs) computes the
+ceiling from the frozen run without rescoring it: at most 44.6% for the baseline
+arm, so re-instrumenting the denominator cannot on its own reach the floor.
+
 **Regression gate, not primary:** upstream Core F2 on the Martian development
 split. The handoff documents why it cannot carry more weight: the upstream
 extractor turns quality prose into candidates, so unmatched candidates are not a
