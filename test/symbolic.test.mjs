@@ -14,6 +14,10 @@ const revisionOf = (files, cap = 50) => ({
     return { matches: matches.slice(0, cap), truncated: matches.length > cap };
   },
   lineAt(path, line) { return files[path]?.split('\n')[line - 1] ?? null; },
+  slice(path, startLine, count) {
+    const lines = files[path]?.split('\n');
+    return lines ? lines.slice(startLine - 1, startLine - 1 + count).join('\n') : null;
+  },
 });
 
 // The audited gap from case-042: all four reviews missed a reachable optional-member
@@ -81,4 +85,23 @@ test('checks compose into one outcome', () => {
     { assertion: 'referenced_outside', symbol: 'value', path: 'a.py' },
   ]);
   assert.deepEqual(outcome.evidence.map(e => e.result), ['hit', 'hit']);
+});
+
+// Most review claims are about absence: a guard removed, a null check missing, a
+// bound never applied. Without an expectation the check can only support claims
+// about what IS there, so every true absence claim would read as refuted.
+test('an absence claim is supported by absence, not refuted by it', () => {
+  const guarded = revisionOf({ 'a.ts': 'function update(owner, account) {\n  if (owner !== account) throw new Error("no");\n}\n' });
+  const unguarded = revisionOf({ 'a.ts': 'function update(owner, account) {\n  return "updated";\n}\n' });
+  const check = { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' };
+  assert.equal(runCheck(unguarded, check).evidence[0].result, 'hit', 'the guard really is gone');
+  assert.equal(runCheck(guarded, check).evidence[0].result, 'miss', 'the guard is there, so the claim is wrong');
+  assert.match(runCheck(unguarded, check).evidence[0].check, /lacks/);
+});
+
+test('an unreferenced expectation reads the other way too', () => {
+  const files = { 'api.ts': 'export function send(x) {}\n', 'caller.ts': 'send(1);\n' };
+  const dead = { assertion: 'referenced_outside', symbol: 'send', path: 'api.ts', expect: 'absent' };
+  assert.equal(runCheck(revisionOf(files), dead).evidence[0].result, 'miss', 'it has a caller, so it is not dead');
+  assert.equal(runCheck(revisionOf({ 'api.ts': files['api.ts'] }), dead).evidence[0].result, 'hit');
 });
