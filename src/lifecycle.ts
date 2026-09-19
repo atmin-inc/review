@@ -1,6 +1,6 @@
 import type { Claim, Proposition } from './claim.js';
 import { climb, composeChain, DEFAULT_THRESHOLDS, type Chain, type Evidence, type Thresholds } from './evidence.js';
-import { runCheck, type Revision } from './symbolic.js';
+import { runCheck, sideOf, type Revisions } from './symbolic.js';
 import { decide, findingsFrom, policyRejection, type Decision, type Policy } from './policy.js';
 
 // The verification half of the lifecycle: a claim set in, a verdict composed in code
@@ -19,19 +19,19 @@ export interface PropositionOutcome {
   proposition: string; status: PropositionStatus; evidence: Evidence[]; limitations: string[];
 }
 
-export function settleProposition(revision: Revision, item: Proposition): PropositionOutcome {
+export function settleProposition(revisions: Revisions, item: Proposition): PropositionOutcome {
   if (!item.check) {
     return { proposition: item.proposition, status: 'unsettled', evidence: [], limitations: [] };
   }
-  const outcome = runCheck(revision, item.check);
+  const outcome = runCheck(sideOf(revisions, item.check), item.check);
   const result = outcome.evidence[0]?.result;
   const status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
   return { proposition: item.proposition, status, evidence: outcome.evidence, limitations: outcome.limitations };
 }
 
-export function verifyClaim(claim: Claim, revision: Revision,
+export function verifyClaim(claim: Claim, revisions: Revisions,
   crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): { chain: Chain; limitations: string[] } {
-  const outcomes = claim.evidenceToCheck.map(item => settleProposition(revision, item));
+  const outcomes = claim.evidenceToCheck.map(item => settleProposition(revisions, item));
   const collected = outcomes.flatMap(outcome => outcome.limitations);
   const symbolic = outcomes.flatMap(outcome => outcome.evidence);
 
@@ -70,11 +70,11 @@ export function verifyClaim(claim: Claim, revision: Revision,
   return { chain: composeChain(claim.claimId, claim.severity, evidence, thresholds), limitations: collected };
 }
 
-export function verifyClaims(claims: Claim[], revision: Revision, policy: Policy,
+export function verifyClaims(claims: Claim[], revisions: Revisions, policy: Policy,
   crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): Verification {
   const rejection = policyRejection(policy);
   if (rejection) throw new Error(`Policy ${JSON.stringify(policy.name)} is unusable: ${rejection}`);
-  const verified = claims.map(claim => verifyClaim(claim, revision, crossFamily, thresholds));
+  const verified = claims.map(claim => verifyClaim(claim, revisions, crossFamily, thresholds));
   const chains = verified.map(item => item.chain);
   const types = new Map(claims.map(claim => [claim.claimId, claim.type]));
   return {

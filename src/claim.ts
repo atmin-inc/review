@@ -14,11 +14,19 @@ export type ClaimType = typeof CLAIM_TYPES[number];
 // `expect` exists because most review claims are about absence: a guard removed, a
 // null check missing, a bound never applied. Without it a check can only support
 // claims about what IS there, and every absence claim would read as refuted.
+//
+// `revision` exists because a review claims a REGRESSION, and a condition that
+// already holds at the merge base is not one. The 2026-09-14 audit recorded this as
+// one of three recurring false-positive mechanisms: a claim was attributed to a pull
+// request because related lines changed, while its whole trigger existed before.
+// Settling that needs the same check run against the base.
 export type Expectation = 'present' | 'absent';
+export type Side = 'head' | 'base';
+interface Sided { expect?: Expectation; revision?: Side }
 export type SymbolicCheck =
-  | { assertion: 'declaration_contains'; symbol: string; pattern: string; expect?: Expectation }
-  | { assertion: 'body_contains'; symbol: string; pattern: string; expect?: Expectation }
-  | { assertion: 'referenced_outside'; symbol: string; path: string; expect?: Expectation };
+  | ({ assertion: 'declaration_contains'; symbol: string; pattern: string } & Sided)
+  | ({ assertion: 'body_contains'; symbol: string; pattern: string } & Sided)
+  | ({ assertion: 'referenced_outside'; symbol: string; path: string } & Sided);
 
 // A proposition is one thing that must hold for the claim to follow, paired with the
 // check that settles it. Keeping them apart was a mistake: it let a single grep hit

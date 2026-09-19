@@ -1,4 +1,4 @@
-import { declaresSymbol, type Expectation, type SymbolicCheck } from './claim.js';
+import { declaresSymbol, type Expectation, type Side, type SymbolicCheck } from './claim.js';
 import { searchSource, sourceSlice } from './snapshot.js';
 import type { Evidence } from './evidence.js';
 
@@ -19,8 +19,13 @@ export interface Revision {
 // only as far as the cap and the shortfall is reported rather than assumed empty.
 const BODY_LINES = 200;
 export interface CheckOutcome { evidence: Evidence[]; limitations: string[] }
+// Both sides of the change, because a claim about a regression is a claim about the
+// difference between them. A check names the side it is asking about.
+export interface Revisions { head: Revision; base: Revision }
+export const sideOf = (revisions: Revisions, check: SymbolicCheck): Revision =>
+  check.revision === 'base' ? revisions.base : revisions.head;
 
-export type { Expectation, SymbolicCheck };
+export type { Expectation, Side, SymbolicCheck };
 
 const inconclusive = (check: string, why: string): CheckOutcome => ({ evidence: [], limitations: [`${check}: ${why}`] });
 
@@ -55,8 +60,9 @@ function bodyOf(revision: Revision, path: string, line: number): { text: string;
 
 export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome {
   const expect = check.expect ?? 'present';
+  const at = check.revision === 'base' ? ' at the merge base' : '';
   if (check.assertion === 'body_contains') {
-    const label = `grep: body of \`${check.symbol}\` ${expect === 'present' ? 'contains' : 'lacks'} ${JSON.stringify(check.pattern)}`;
+    const label = `grep: body of \`${check.symbol}\`${at} ${expect === 'present' ? 'contains' : 'lacks'} ${JSON.stringify(check.pattern)}`;
     const { found, truncated } = declarations(revision, check.symbol);
     if (!found.length) {
       return truncated ? inconclusive(label, 'the search truncated before any declaration was found')
@@ -75,7 +81,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     };
   }
   if (check.assertion === 'declaration_contains') {
-    const label = `grep: declaration of \`${check.symbol}\` ${expect === 'present' ? 'contains' : 'lacks'} ${JSON.stringify(check.pattern)}`;
+    const label = `grep: declaration of \`${check.symbol}\`${at} ${expect === 'present' ? 'contains' : 'lacks'} ${JSON.stringify(check.pattern)}`;
     const { found, truncated } = declarations(revision, check.symbol);
     if (!found.length) {
       // A search that hit its cap proves nothing about what it did not reach, and a
@@ -92,7 +98,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     };
   }
 
-  const label = `grep: \`${check.symbol}\` ${expect === 'present' ? 'referenced' : 'unreferenced'} outside ${check.path}`;
+  const label = `grep: \`${check.symbol}\` ${expect === 'present' ? 'referenced' : 'unreferenced'} outside ${check.path}${at}`;
   const { matches, truncated } = revision.search(check.symbol);
   const outside = matches.filter(match => match.path !== check.path);
   if (!outside.length && truncated) {

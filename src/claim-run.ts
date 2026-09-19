@@ -23,14 +23,15 @@ export async function runClaimReview(directory: string, profile: Profile,
   }
   const model = injectedModel ?? (profile.provider === 'openrouter' ? openRouterModel(profile) : openAIModel(profile));
   const repository = join(directory, 'source.git');
-  const revision = revisionFrom(repository, packet.headSha);
+  // Both sides, because a claim about a regression is a claim about the difference.
+  const revisions = { head: revisionFrom(repository, packet.headSha), base: revisionFrom(repository, packet.mergeBaseSha) };
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
   const diff = readFileSync(join(directory, 'change.diff'));
   if (diff.length > 128000) throw new Error('Diff exceeds 128 KB investigation limit');
   const context = { packet, diff: diff.toString('utf8') };
 
-  const investigation = await investigateClaims(revision, sourceOf, context, model, {
+  const investigation = await investigateClaims(revisions, sourceOf, context, model, {
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
     maxUsd: profile.maxUsd,
@@ -39,7 +40,7 @@ export async function runClaimReview(directory: string, profile: Profile,
 
   // The verifier is handed the claims and the revision, and nothing else. Whatever the
   // investigator believed does not travel with them.
-  const verification = verifyClaims(investigation.claims, revision, BALANCED);
+  const verification = verifyClaims(investigation.claims, revisions, BALANCED);
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
