@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 305 tests: 303 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 306 tests: 304 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -50,6 +50,19 @@ Each was invisible downstream, because in every case both rungs behaved exactly 
 specified. When two rungs disagree, suspect the question before either answer. The
 revision is now a field on the proposition, resolved once by `propositionSide` in
 `src/claim.ts` and used by every rung, with the invariant tested rather than commented.
+
+**Enforce it in the structure, not in the prompt.** The first attempt at the revision
+named it in the question — "judge this at the head revision" — and made things worse.
+With both revisions in the state, naming one narrowed the model to the changed file, so
+"the tests expect a Forbidden error" read as "does a Forbidden error still happen after
+this change" and Jev answered 0.1 to a fact grep had confirmed. Contradicted checks went
+from 1 in 52 propositions to 8 in 94, and one run lost the finding outright. Three
+wordings were measured and all three suppressed it identically, which is what says the
+phrasing was never the problem. Sending only the revision the question is about scored
+6 of 7 against 4 for both-sides and 3 for both-sides-with-a-qualifier, on statements all
+true of the code. A state that holds one revision cannot be misread; a sentence asking
+the model to hold one in mind can. One claim with propositions on both sides now takes
+two calls, each carrying half the source.
 
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
