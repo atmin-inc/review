@@ -53,6 +53,15 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
 - **Keep a negative control in any run set.** PR #4 (242 lines of docs, nothing to find)
   is the one here. Without it, "blocks a real defect 5/5" cannot be told apart from a
   reviewer that blocks everything. It returned `merge` with no claims 4/5.
+- **Self-refuting propositions are the live emission failure mode.** The model states a
+  proposition about data shape or intent — "the account object has an ownerId property"
+  — and then scopes its check to the changed function's body, where the defect it is
+  reporting guarantees the pattern is absent. The grep misses, and a miss on rung 1 is a
+  refutation, the strongest negative verdict available. A true finding becomes a
+  confident denial. Seen in both run sets (pre-fix on a `contract_break`, post-fix on the
+  `auth_bypass` itself, which cost that run the finding), so it is emission variance, not
+  a regression. Worth fixing; no deterministic detector is obvious, because the check is
+  well-formed and only its placement is wrong.
 - **A claim's type is not verified against what it is about.** The fifth control run
   emitted 9 claims about the documentation — a stale commit hash, undefined jargon —
   typed `error_handling_gap` and `contract_break`, and confirmed 6 at high confidence,
