@@ -15,6 +15,11 @@ import { decide, findingsFrom, policyRejection, type Decision, type Policy } fro
 // step rung 1 could not express.
 export interface CrossFamilyRung { settle(proposition: string, claim: Claim): Evidence[] }
 export interface Verification { chains: Chain[]; decision: Decision; limitations: string[]; crossFamilyLog: CrossFamilyAnswer[] }
+// Off by default: `questionRefutations` reverses the rule that no rung argues with a
+// deterministic refutation, and every claim it saves costs a model call on a claim that
+// was meant to die on rung 1 for nothing. A flag rather than a change so the two can be
+// compared over the same claims, which is the only way to say what it is worth.
+export interface VerifyOptions { questionRefutations?: boolean }
 // Every question the cross-family rung was asked and what it answered. Recording them
 // is what makes the rung's contribution measurable: the same claims can be verified
 // again with the rung replayed or switched off, exactly and for free, instead of a
@@ -68,8 +73,8 @@ export function settleProposition(revisions: Revisions, item: Proposition): Prop
   return { proposition: item.proposition, status, evidence: outcome.evidence, limitations };
 }
 
-export function verifyClaim(claim: Claim, revisions: Revisions,
-  crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): { chain: Chain; limitations: string[]; asked: CrossFamilyAnswer[] } {
+export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: CrossFamilyRung,
+  thresholds: Thresholds = DEFAULT_THRESHOLDS, options: VerifyOptions = {}): { chain: Chain; limitations: string[]; asked: CrossFamilyAnswer[] } {
   const outcomes = claim.evidenceToCheck.map(item => settleProposition(revisions, item));
   const collected = outcomes.flatMap(outcome => outcome.limitations);
   const symbolic = outcomes.flatMap(outcome => outcome.evidence);
@@ -81,7 +86,37 @@ export function verifyClaim(claim: Claim, revisions: Revisions,
 
   // One proposition shown false is enough: the argument cannot hold without it, and no
   // later rung is invited to argue with a deterministic fact.
-  if (outcomes.some(outcome => outcome.status === 'refuted')) {
+  //
+  // Except that refutation is the strongest verdict available and, by that rule, the
+  // least protected one. `suspectChecks` exists to catch a check that does not mean what
+  // its proposition says, and returning here means it only ever guards propositions a
+  // check ESTABLISHED. A mismatched check is just as wrong when it refutes. Measured
+  // 2026-09-20: "there is no other function or middleware that enforces ownership" was
+  // checked with referenced_outside(renameAccount, expect: 'absent'), which asks whether
+  // the function is called at all; the test file calls it, so the check missed and a
+  // correct auth_bypass died with no rung able to see the mismatch.
+  //
+  // `questionRefutations` asks rung 3 before letting that happen, and is off by default
+  // because it reverses the rule above and costs a call. It is narrow on purpose: only
+  // when a single check carries the whole refutation is there one point of failure worth
+  // paying for. If the model agrees the proposition holds, the check is contradicted and
+  // the claim becomes inconclusive rather than false — the same treatment an established
+  // check gets. Otherwise the refutation stands exactly as it would have, so the flag
+  // either reverses a refutation or changes nothing.
+  const refuted = outcomes.filter(outcome => outcome.status === 'refuted');
+  if (refuted.length) {
+    const sole = options.questionRefutations && refuted.length === 1 && refuted[0]!.evidence.length === 1
+      ? refuted[0]! : null;
+    const questioned = sole ? crossFamily?.settle(sole.proposition, claim) ?? [] : [];
+    if (questioned.length) log.push({ claimId: claim.claimId, proposition: sole!.proposition, evidence: questioned });
+    if (sole && llmSignal(questioned, thresholds) === 'agrees') {
+      const records: PropositionRecord[] = outcomes.map(outcome => outcome === sole
+        ? { proposition: outcome.proposition, status: 'unsettled' as const, settledBy: null }
+        : { proposition: outcome.proposition, status: outcome.status, settledBy: outcome.status === 'unsettled' ? null : 'symbolic' });
+      return chain('inconclusive', 'low', [...symbolic, ...questioned], records,
+        ['A check the model contradicts may not establish what its proposition says.'],
+        sole.evidence.map(one => one.check));
+    }
     const records: PropositionRecord[] = outcomes.map(outcome =>
       ({ proposition: outcome.proposition, status: outcome.status, settledBy: outcome.status === 'unsettled' ? null : 'symbolic' }));
     return { chain: { ...composeChain(claim.claimId, claim.severity, symbolic, thresholds), propositions: records }, limitations: collected, asked: log };
@@ -140,11 +175,11 @@ export function verifyClaim(claim: Claim, revisions: Revisions,
   };
 }
 
-export function verifyClaims(claims: Claim[], revisions: Revisions, policy: Policy,
-  crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): Verification {
+export function verifyClaims(claims: Claim[], revisions: Revisions, policy: Policy, crossFamily?: CrossFamilyRung,
+  thresholds: Thresholds = DEFAULT_THRESHOLDS, options: VerifyOptions = {}): Verification {
   const rejection = policyRejection(policy);
   if (rejection) throw new Error(`Policy ${JSON.stringify(policy.name)} is unusable: ${rejection}`);
-  const verified = claims.map(claim => verifyClaim(claim, revisions, crossFamily, thresholds));
+  const verified = claims.map(claim => verifyClaim(claim, revisions, crossFamily, thresholds, options));
   const chains = verified.map(item => item.chain);
   const types = new Map(claims.map(claim => [claim.claimId, claim.type]));
   return {

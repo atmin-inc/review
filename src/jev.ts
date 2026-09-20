@@ -1,4 +1,4 @@
-import { verifyClaims, type CrossFamilyAnswer } from './lifecycle.js';
+import { verifyClaims, type CrossFamilyAnswer, type VerifyOptions } from './lifecycle.js';
 import type { Revisions } from './symbolic.js';
 import { parseLocation, type Claim } from './claim.js';
 import type { Evidence } from './evidence.js';
@@ -15,8 +15,10 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 // So the asking happens first, as its own phase, and verification replays the answers.
 // The questions are collected by running verification once with a rung that records
 // what it is asked and answers nothing, so the set asked is exactly the set the real
-// rung would face — including the rule that a symbolically refuted claim is never
-// carried to a later rung — without that rule being restated here.
+// rung would face — including whether a symbolically refuted claim is carried to a
+// later rung, which `questionRefutations` changes — without any of that being restated
+// here. That is the point of collecting the questions by asking rather than deriving
+// them: the two phases cannot drift apart.
 //
 // Second, Jev answers many questions against one state in a single call, so one call
 // covers one claim and all of its propositions.
@@ -118,11 +120,12 @@ const window = (revision: Revisions['head'], path: string, line: number): string
 };
 
 // Exactly the questions rung 3 would be asked for this claim set, obtained by asking.
-export function questionsAsked(claims: Claim[], revisions: Revisions, policy: Policy = BALANCED): CrossFamilyAnswer[] {
+export function questionsAsked(claims: Claim[], revisions: Revisions, policy: Policy = BALANCED,
+  options: VerifyOptions = {}): CrossFamilyAnswer[] {
   const asked: CrossFamilyAnswer[] = [];
   verifyClaims(claims, revisions, policy, {
     settle: (proposition, claim) => { asked.push({ claimId: claim.claimId, proposition, evidence: [] }); return []; },
-  });
+  }, undefined, options);
   return asked;
 }
 
@@ -142,13 +145,14 @@ export interface JevResult { log: CrossFamilyAnswer[]; calls: number; skippedCla
 // as unsettled, and that is the honest outcome of a failed call.
 export interface JevOptions {
   apiKey?: string; limits?: JevLimits; transport?: typeof globalThis.fetch; signal?: AbortSignal | undefined; policy?: Policy;
+  verify?: VerifyOptions;
 }
 
 export async function askJev(claims: Claim[], revisions: Revisions, diff: string, options: JevOptions = {}): Promise<JevResult> {
   const { apiKey = process.env.TYPESAFE_API_KEY, limits = DEFAULT_JEV_LIMITS,
-    transport = globalThis.fetch, signal, policy = BALANCED } = options;
+    transport = globalThis.fetch, signal, policy = BALANCED, verify = {} } = options;
   if (!apiKey) throw new Error('TYPESAFE_API_KEY is missing. Configure it locally.');
-  const asked = questionsAsked(claims, revisions, policy);
+  const asked = questionsAsked(claims, revisions, policy, verify);
   const byClaim = new Map<string, string[]>();
   for (const entry of asked) byClaim.set(entry.claimId, [...byClaim.get(entry.claimId) ?? [], entry.proposition]);
   const claimsById = new Map(claims.map(claim => [claim.claimId, claim]));
