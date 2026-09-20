@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 302 tests: 300 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 305 tests: 303 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -30,6 +30,27 @@ UI at `/docs`. Read that rather than guessing; `.smoke/jev-schema.json` is missi
 the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verified live
 2026-09-20; `src/jev.ts` matches it.
 
+## The one rule the live runs kept teaching
+
+**A rung must be asked a question it can answer, about material it was sent, at a
+revision it was told.** Three separate findings turned out to be this rule broken three
+ways, each costing a correct `auth_bypass`:
+
+- *Material it was sent.* `jevState` carried only the file the claim was located in, so
+  a proposition about a test asked Jev about text it had never seen.
+- *A question it can answer.* `body_contains` searched the declaration line, so
+  "actorId is not referenced in the function body" was refuted by the parameter list —
+  the check could not express the question the proposition asked.
+- *A revision it was told.* A proposition naming no side is true at head and false at
+  base. Rung 1 ran at head and missed, correctly; rung 3, handed the bare sentence and a
+  state carrying both sides, answered for base; `suspectChecks` held the claim back.
+  Neither rung was wrong. They were answering different questions.
+
+Each was invisible downstream, because in every case both rungs behaved exactly as
+specified. When two rungs disagree, suspect the question before either answer. The
+revision is now a field on the proposition, resolved once by `propositionSide` in
+`src/claim.ts` and used by every rung, with the invariant tested rather than commented.
+
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
 - A real model emits usable claims: it found the defect every run, typed and located it
@@ -44,7 +65,6 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   and the verifier read that as rung 3 contradicting a true symbolic fact — grep found
   `/Forbidden/` at `test/suggestion-demo.test.mjs:12` and Jev returned 0.12 on the same
   proposition. The state now carries every file the claim's checks name, capped at four.
-  The general rule: a rung may only be asked about what it was sent.
 - Run-to-run variance was high before those fixes. Measured again over 5 repeats per PR
   at `03fda12`: PR #2 returned `block` 5/5 with 0 unsettled propositions out of 46, and
   the surviving finding was the `auth_bypass` itself every time. Claim counts still vary
