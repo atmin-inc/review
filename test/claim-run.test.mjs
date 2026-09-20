@@ -87,6 +87,23 @@ test('the report shows the surviving finding, the discarded claim and the missin
   assert.match(report, /Nothing was executed/);
 });
 
+// The converse of the note above, and the reason it is conditional: once rung 3 really
+// answers, a report that still says the rung did not run tells the reader the opposite
+// of the `jev noul:` evidence printed a few lines earlier.
+test('the report drops the missing-rung note once the cross-family rung has answered', async t => {
+  const fixture = repository(t);
+  const directory = persist(fixture);
+  const fake = model([[action('record_claim', TRUE_CLAIM)],
+    action('end_investigation', { complete: true, limitations: [] })]);
+  const rung = { settle: proposition => [{ rung: 'cross_family_llm', check: `jev noul: ${proposition}`, result: 0.95 }] };
+  const { claims, investigation, verification } = await runClaimReview(directory, profile, fake, undefined, rung);
+
+  assert.ok(verification.crossFamilyLog.length, 'the rung answered, so the run recorded it');
+  const report = renderClaimReview(claims, verification, investigation);
+  assert.match(report, /jev noul:/);
+  assert.doesNotMatch(report, /cross-family rung did not run/);
+});
+
 // A model that emits nothing is a merge, not a crash, and the report says so plainly
 // rather than reading as a clean bill of health.
 test('a pass that emits no claim returns merge and says the pass was incomplete', async t => {

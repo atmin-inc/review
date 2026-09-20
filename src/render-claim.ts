@@ -56,9 +56,12 @@ export function renderClaimReview(claims: Claim[], verification: Verification,
       }), '');
   }
 
+  // Rung 3 now really runs, so this note is conditional. Printing it beside `jev noul:`
+  // evidence told the reader the opposite of what the report showed.
   const notes = [...investigation.limitations, ...verification.limitations,
     ...(investigation.complete ? [] : ['Emission did not finish, so this is not a complete pass over the change.']),
-    'The cross-family rung did not run: no second-family model is configured, so no claim reached high confidence through agreement.'];
+    ...(verification.crossFamilyLog.length ? []
+      : ['The cross-family rung did not run: no second-family model is configured, so no claim reached high confidence through agreement.'])];
   lines.push('', '## Limitations', '', ...notes.map(note => `- ${e(note)}`), '',
     `Source inspection and literal search over the frozen revision. Nothing was executed. Model spend: $${investigation.spentUsd.toFixed(4)}.`, '');
   return lines.join('\n');
