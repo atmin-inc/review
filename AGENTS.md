@@ -53,6 +53,21 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
 - **Keep a negative control in any run set.** PR #4 (242 lines of docs, nothing to find)
   is the one here. Without it, "blocks a real defect 5/5" cannot be told apart from a
   reviewer that blocks everything. It returned `merge` with no claims 4/5.
+- **A soundness fix buys correctness, not recall.** A claim ships only when some rung
+  can actually settle every proposition, so turning a wrong answer into *no* answer
+  removes a false verdict without recovering the finding. Measured exactly: replaying
+  the captured bad run through the fixed verifier moves both claims from `refuted` to
+  `inconclusive` — the confident denial is gone — and the `auth_bypass` still does not
+  ship, because `inconclusive` does not ship either. Asking Jev live over the same
+  claims left the proposition unsettled, since the check named a symbol and the state
+  therefore never carried the file that would answer it. Recall has to come from the
+  checks being able to reach the right file. `test/self-refuting-regression.test.mjs`
+  freezes both halves of that result.
+- **Check whether a fix actually fired before crediting it.** The 10-run set after the
+  verifier fix came back 10/10, and the new rule fired zero times — the emitter simply
+  did not produce the bad proposition in those runs. The score was variance. A failure
+  mode that appears roughly 1 run in 5-10 cannot be measured by 5 repeats at all; replay
+  the captured run that exhibited it instead, which is deterministic and free.
 - **Self-refuting propositions are the live emission failure mode.** The model states a
   proposition about data shape or intent — "the account object has an ownerId property"
   — and then scopes its check to the changed function's body, where the defect it is

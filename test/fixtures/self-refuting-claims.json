@@ -1,0 +1,95 @@
+{
+  "_source": "Captured verbatim from a live claim-review of atmin-inc/review PR #2 on 2026-09-20, deepseek/deepseek-v3.2 over OpenRouter, head f8cce6c against base 91f4f45. Both claims are correct about the code. Both were refuted by rung 1 before b0425d9, because each carries a proposition about the account object's shape checked with body_contains inside renameAccount, where the deleted guard was the only mention of ownerId. Do not hand-edit to make a test pass: the point of the fixture is that a real emitter produced exactly this.",
+  "claims": [
+    {
+      "type": "auth_bypass",
+      "location": "examples/suggestion-demo/accounts.mjs:4",
+      "description": "The renameAccount function updates account.displayName without checking if actorId matches account.ownerId",
+      "suspectedCondition": "When renameAccount is called with an actorId that does not match the account's ownerId",
+      "severity": "P1",
+      "evidenceToCheck": [
+        {
+          "proposition": "The function signature includes actorId parameter",
+          "check": {
+            "assertion": "declaration_contains",
+            "symbol": "renameAccount",
+            "pattern": "actorId"
+          }
+        },
+        {
+          "proposition": "The account object has ownerId property",
+          "check": {
+            "assertion": "body_contains",
+            "symbol": "renameAccount",
+            "pattern": "ownerId"
+          }
+        },
+        {
+          "proposition": "Before the change, there was an owner check that threw 'Forbidden'",
+          "check": {
+            "assertion": "body_contains",
+            "symbol": "renameAccount",
+            "pattern": "if (account.ownerId !== actorId) throw new Error('Forbidden');",
+            "revision": "base",
+            "expect": "present"
+          }
+        },
+        {
+          "proposition": "After the change, the owner check is missing",
+          "check": {
+            "assertion": "body_contains",
+            "symbol": "renameAccount",
+            "pattern": "if (account.ownerId !== actorId) throw new Error('Forbidden');",
+            "revision": "head",
+            "expect": "absent"
+          }
+        }
+      ]
+    },
+    {
+      "type": "data_loss",
+      "location": "examples/suggestion-demo/accounts.mjs:4",
+      "description": "Any user can modify any account's displayName without ownership verification, allowing unauthorized data modification",
+      "suspectedCondition": "When a non-owner calls renameAccount with a valid accountId",
+      "severity": "P2",
+      "evidenceToCheck": [
+        {
+          "proposition": "Function modifies account.displayName without checking actorId matches account.ownerId",
+          "check": {
+            "assertion": "body_contains",
+            "symbol": "renameAccount",
+            "pattern": "account.displayName = displayName;",
+            "revision": "head",
+            "expect": "present"
+          }
+        },
+        {
+          "proposition": "Function signature includes actorId parameter suggesting caller authentication intent",
+          "check": {
+            "assertion": "declaration_contains",
+            "symbol": "renameAccount",
+            "pattern": "actorId"
+          }
+        },
+        {
+          "proposition": "Account objects have ownerId property",
+          "check": {
+            "assertion": "body_contains",
+            "symbol": "renameAccount",
+            "pattern": "ownerId"
+          }
+        },
+        {
+          "proposition": "No authorization check exists in the function",
+          "check": {
+            "assertion": "body_contains",
+            "symbol": "renameAccount",
+            "pattern": "ownerId !== actorId",
+            "revision": "head",
+            "expect": "absent"
+          }
+        }
+      ]
+    }
+  ]
+}
