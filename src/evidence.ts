@@ -8,12 +8,19 @@ export type Verdict = 'confirmed' | 'refuted' | 'inconclusive';
 export type Confidence = 'low' | 'moderate' | 'high';
 
 export interface Evidence { rung: Rung; check: string; result: 'hit' | 'miss' | number }
+
+// Which rung settled which step, recorded rather than inferred. A rung's contribution
+// is only measurable if the chain says what it actually settled, and a claim that
+// shipped is only auditable if you can see which of its steps rested on what.
+export type PropositionStatus = 'established' | 'refuted' | 'unsettled';
+export interface PropositionRecord { proposition: string; status: PropositionStatus; settledBy: Rung | null }
 export interface Chain {
   claimId: string;
   verdict: Verdict;
   evidence: Evidence[];
   finalSeverity?: Priority;
   verifierConfidence: Confidence;
+  propositions: PropositionRecord[];
   // Symbolic checks the cross-family rung contradicted. A check is a text proxy for
   // a proposition, so a contradiction is a report about the proxy, not a dispute
   // about the code: the guard may simply have moved into a helper the grep cannot
@@ -57,7 +64,7 @@ export function composeChain(claimId: string, proposedSeverity: Priority, eviden
   const limitations = evidence.some(e => e.rung === 'ci_output') ? []
     : ['Rung 2 did not fire: no CI output covered this claim, so it was not settled by execution.'];
   const chain = (verdict: Verdict, confidence: Confidence, suspectChecks: string[] = []): Chain => ({
-    claimId, verdict, evidence, suspectChecks, limitations,
+    claimId, verdict, evidence, suspectChecks, limitations, propositions: [],
     // A refutation is not capped: a deterministic miss is the strongest answer there is.
     verifierConfidence: verdict === 'refuted' ? confidence
       : ORDER[Math.min(ORDER.indexOf(confidence), ORDER.indexOf(cap))]!,

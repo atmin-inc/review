@@ -242,6 +242,19 @@ trustworthy when the discarding is visible. It accepts a prepared snapshot
 directory in place of a URL, and writes `claims.json` and `verification.json`
 beside the snapshot.
 
+Whether a rung earns its place is a measurement, not an assumption:
+
+```sh
+npx atmin-review claim-ablate ./private-review
+```
+
+That re-verifies a finished run with the cross-family rung switched off, replaying
+its recorded answers rather than asking again, so the difference between the two
+is the rung and nothing else. It spends nothing and changes nothing. The report
+counts what the rung added, what it took away, what it raised and what it called
+into question, because a rung that only removes findings is still earning its
+place when those findings were wrong.
+
 Two limits are current, not permanent. The cross-family rung does not run, so no
 claim reaches high confidence through agreement, and the report says so. Rung 1
 knows three assertions — what a declaration contains, what a body contains, and

@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { loadReview, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
 import { investigateClaims, type ClaimInvestigation } from './investigator.js';
-import { verifyClaims, type Verification } from './lifecycle.js';
+import { verifyClaims, type CrossFamilyRung, type Verification } from './lifecycle.js';
+import { contributionOfCrossFamily, type RungContribution } from './ablation.js';
 import { BALANCED } from './policy.js';
 import { price, type Model, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
@@ -16,7 +17,7 @@ import type { Claim } from './claim.js';
 export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification }
 
 export async function runClaimReview(directory: string, profile: Profile,
-  injectedModel?: Model, signal?: AbortSignal): Promise<ClaimReview> {
+  injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
   if (profile.provider === 'codex-local' && !injectedModel) {
     throw new Error('Local subscription experiments require the benchmark Codex adapter; hosted execution is not supported');
@@ -40,7 +41,7 @@ export async function runClaimReview(directory: string, profile: Profile,
 
   // The verifier is handed the claims and the revision, and nothing else. Whatever the
   // investigator believed does not travel with them.
-  const verification = verifyClaims(investigation.claims, revisions, BALANCED);
+  const verification = verifyClaims(investigation.claims, revisions, BALANCED, crossFamily);
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
@@ -49,4 +50,21 @@ export async function runClaimReview(directory: string, profile: Profile,
   persist('claims.json', investigation.claims);
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
   return { claims: investigation.claims, investigation, verification };
+}
+
+// The same claims, verified again with the cross-family rung switched off. Emission is
+// not repeated and the model is not re-asked — the recorded answers are replayed — so
+// the difference is the rung's contribution and nothing else.
+export function ablateCrossFamily(directory: string): RungContribution {
+  const { packet } = loadReview(directory);
+  const repository = join(directory, 'source.git');
+  const revisions = { head: revisionFrom(repository, packet.headSha), base: revisionFrom(repository, packet.mergeBaseSha) };
+  const read = (name: string) => {
+    const bytes = readFileSync(join(directory, name));
+    if (bytes.length > 16_000_000) throw new Error(`${name} exceeds the 16 MB replay limit`);
+    return JSON.parse(bytes.toString('utf8'));
+  };
+  const verification = read('verification.json') as Verification;
+  if (!Array.isArray(verification.crossFamilyLog)) throw new Error('This run predates cross-family recording; re-run claim-review to measure the rung');
+  return contributionOfCrossFamily(read('claims.json'), revisions, BALANCED, verification.crossFamilyLog);
 }

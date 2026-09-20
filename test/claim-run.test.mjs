@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist } from './helpers.mjs';
-import { runClaimReview } from '../dist/claim-run.js';
+import { ablateCrossFamily, runClaimReview } from '../dist/claim-run.js';
 import { renderClaimReview } from '../dist/render-claim.js';
 
 const profile = { provider: 'openai', model: 'gpt-5.4-2026-03-05', maxUsd: 2, maxTurns: 6,
@@ -134,4 +134,20 @@ test('a model-chosen pattern cannot break out of the code span it is shown in', 
   const span = report.split('\n').find(line => line.startsWith('- `grep:'));
   assert.equal((span.match(/`/g) ?? []).length, 2, 'the label stays inside exactly one code span');
   assert.ok(span.endsWith('` → hit'), 'the span closes where the renderer closes it, not where the model does');
+});
+
+// A finished run can be re-verified with the cross-family rung switched off, from what
+// it wrote down. No model is asked again, so the difference between the two is the
+// rung and nothing else — which is what lets a benchmark say whether it earns its keep.
+test('a finished run can be measured for what the cross-family rung contributed', async t => {
+  const fixture = repository(t);
+  const directory = persist(fixture);
+  const fake = model([action('record_claim', TRUE_CLAIM), action('end_investigation', { complete: true, limitations: [] })]);
+  await runClaimReview(directory, profile, fake);
+
+  const contribution = ablateCrossFamily(directory);
+  assert.equal(contribution.rung, 'cross_family_llm');
+  assert.deepEqual(contribution.gained, [], 'no rung 3 is configured, so it contributed nothing here');
+  assert.equal(contribution.with.verdicts.confirmed, contribution.without.verdicts.confirmed);
+  assert.equal(contribution.with.propositions.symbolic, 1);
 });
