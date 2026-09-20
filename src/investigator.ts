@@ -35,7 +35,8 @@ export const claimSchema = {
     severity: { type: 'string', enum: [...PRIORITIES] },
     evidenceToCheck: { type: 'array', minItems: 1, maxItems: 8, items: {
       type: 'object', additionalProperties: false,
-      properties: { proposition: str, check: symbolicCheck }, required: ['proposition'] } },
+      properties: { proposition: str, revision: { type: 'string', enum: ['head', 'base'], default: 'head' }, check: symbolicCheck },
+      required: ['proposition'] } },
     investigatorConfidence: { type: 'number', minimum: 0, maximum: 1 },
   },
   required: ['type', 'location', 'description', 'suspectedCondition', 'severity', 'evidenceToCheck'],
@@ -66,6 +67,7 @@ Each claim needs:
 - description: what the code does that prompted the claim, stated as behavior, not judgment.
 - suspectedCondition: the trigger under which the defect manifests. Not a restatement of description. A claim with no trigger is not falsifiable and will be rejected.
 - evidenceToCheck: every proposition that must hold for the claim to follow, each paired where possible with the check that settles it.
+- revision: which side of the change the proposition is about, head (after) or base (before). Default head. State it whenever the proposition is about the code as it was: "the guard used to run before the update" is a claim about base, and asked about head it is simply false. Every rung is asked at this revision, so a proposition that does not name the right one is answered against the wrong code.
 
 That last field is the one that matters. A check establishes a fact about text; your claim is about behavior, and the two are not the same statement. "The body of update() lacks the text owner !== account" does not by itself establish "any account can update any record" — the comparison may have moved into a helper, no caller may reach the function, or a middleware may already enforce it. Enumerate those steps as separate propositions. A claim whose propositions are not all established does not ship, so a claim missing a step is a claim thrown away.
 

@@ -41,7 +41,22 @@ export type SymbolicCheck =
 // check that settles it. Keeping them apart was a mistake: it let a single grep hit
 // stand in for a whole argument, so "the guard text is absent" could confirm "any
 // account can update any record" without anyone establishing the steps between.
-export interface Proposition { proposition: string; check?: SymbolicCheck }
+// `revision` is part of the question, not decoration on the check. The reviewer's whole
+// subject is a difference between two revisions, so "the body lacks `account.ownerId`" is
+// true at head and false at base and means nothing unqualified. Measured 2026-09-20: rung
+// 1 ran that check at head and missed, correctly; rung 3 was handed the bare sentence
+// along with a state carrying both sides and the diff, answered for the other side, and
+// `suspectChecks` held back a correct `auth_bypass`. Neither rung was wrong. They were
+// answering different questions.
+//
+// So the side is resolved once, by `propositionSide`, and every rung is asked at that
+// same value. The check may still name a side — a claim about a regression genuinely
+// needs one proposition at base and one at head — and when it does, it wins, because it
+// is what rung 1 actually ran against. Absent both, head: the state after the change is
+// what a review is about.
+export interface Proposition { proposition: string; revision?: Side; check?: SymbolicCheck }
+export const propositionSide = (item: Proposition): Side =>
+  item.check?.revision ?? item.revision ?? 'head';
 
 export interface ClaimDraft {
   type: ClaimType;

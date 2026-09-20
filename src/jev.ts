@@ -1,5 +1,5 @@
 import { verifyClaims, type CrossFamilyAnswer, type VerifyOptions } from './lifecycle.js';
-import type { Revisions } from './symbolic.js';
+import type { Revisions, Side } from './symbolic.js';
 import { parseLocation, type Claim } from './claim.js';
 import type { Evidence } from './evidence.js';
 import { ProviderRequestError } from './provider-error.js';
@@ -31,10 +31,24 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 // `NoulAnswer`: `type: 'noul'` with the probability of yes in `noul`. Parsing stays
 // strict: a response that does not match fails loudly rather than being coerced into a
 // probability, because a wrong number here silently decides whether claims ship.
+// The state carries both revisions and the diff, because a claim about a regression is
+// unanswerable without them, so the question has to say which side decides. Measured
+// 2026-09-20: asked the bare sentence "the body of renameAccount lacks account.ownerId",
+// Jev answered for the side where it is present. Rung 1 had run at head and missed,
+// correctly, and `suspectChecks` held back a correct `auth_bypass`. Neither rung was
+// wrong; they were answering different questions.
+// Tested on 'base', not on 'head', so that a value that is somehow neither falls to head
+// — the same default `propositionSide` applies. Defaulting the other way would quietly
+// ask about the code before the change, which is the mistake this whole function exists
+// to stop.
+const judgeAt = (revision: Side): string => revision === 'base'
+  ? 'Judge this at the base revision: the state BEFORE the change. The head revision and the diff are context only.'
+  : 'Judge this at the head revision: the state AFTER the change. The base revision and the diff are context only.';
+
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
 
-export interface JevQuestion { key: string; proposition: string }
+export interface JevQuestion { key: string; proposition: string; revision: Side }
 
 export function jevRequest(state: unknown, questions: JevQuestion[]): string {
   return JSON.stringify({
@@ -42,15 +56,17 @@ export function jevRequest(state: unknown, questions: JevQuestion[]): string {
     state,
     questions: Object.fromEntries(questions.map(question => [question.key, {
       type: 'noul',
-      instructions: question.proposition,
+      instructions: `${question.proposition}\n\n${judgeAt(question.revision)}`,
       // The criteria say what "yes" means, because the proposition is a statement and
       // a Noul answers a question. Without this the model is free to read the
       // statement as a request for its opinion of the change. `true` and `false` are
       // the two sides of the Noul, so both are stated rather than leaving the model
-      // to infer the negative.
+      // to infer the negative. Both name the revision, because the state carries the
+      // other one too and a statement about a change is true on one side and false on
+      // the other.
       criteria: {
-        true: 'This statement is true of the code in the state as given. Judge the code, not the intent of the change.',
-        false: 'This statement is not true of the code in the state as given.',
+        true: `This statement is true of the ${question.revision} revision as given. Judge the code, not the intent of the change.`,
+        false: `This statement is not true of the ${question.revision} revision as given.`,
       },
     }])),
   });
@@ -124,7 +140,7 @@ export function questionsAsked(claims: Claim[], revisions: Revisions, policy: Po
   options: VerifyOptions = {}): CrossFamilyAnswer[] {
   const asked: CrossFamilyAnswer[] = [];
   verifyClaims(claims, revisions, policy, {
-    settle: (proposition, claim) => { asked.push({ claimId: claim.claimId, proposition, evidence: [] }); return []; },
+    settle: (proposition, claim, revision) => { asked.push({ claimId: claim.claimId, proposition, revision, evidence: [] }); return []; },
   }, undefined, options);
   return asked;
 }
@@ -153,8 +169,9 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
     transport = globalThis.fetch, signal, policy = BALANCED, verify = {} } = options;
   if (!apiKey) throw new Error('TYPESAFE_API_KEY is missing. Configure it locally.');
   const asked = questionsAsked(claims, revisions, policy, verify);
-  const byClaim = new Map<string, string[]>();
-  for (const entry of asked) byClaim.set(entry.claimId, [...byClaim.get(entry.claimId) ?? [], entry.proposition]);
+  const byClaim = new Map<string, { proposition: string; revision: Side }[]>();
+  for (const entry of asked) byClaim.set(entry.claimId,
+    [...byClaim.get(entry.claimId) ?? [], { proposition: entry.proposition, revision: entry.revision }]);
   const claimsById = new Map(claims.map(claim => [claim.claimId, claim]));
   const log: CrossFamilyAnswer[] = [];
   const skippedClaims: string[] = [];
@@ -162,7 +179,7 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
   for (const [claimId, propositions] of byClaim) {
     if (calls >= limits.maxCalls) { skippedClaims.push(claimId); continue; }
     const claim = claimsById.get(claimId)!;
-    const questions = propositions.map((proposition, index) => ({ key: `p${index}`, proposition }));
+    const questions = propositions.map((item, index) => ({ key: `p${index}`, ...item }));
     const body = jevRequest(jevState(claim, revisions, diff), questions);
     const end = startSpan('jev.http', { claimId, questions: questions.length,
       requestBytes: Buffer.byteLength(body), requestHash: traceHash(body) }, 3);
@@ -179,8 +196,8 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
       if (Buffer.byteLength(text) > 2000000) throw new ProviderRequestError('inference');
       const probabilities = jevAnswers(JSON.parse(text), questions);
       for (const question of questions) {
-        log.push({ claimId, proposition: question.proposition,
-          evidence: [evidenceFor(question.proposition, probabilities.get(question.key)!)] });
+        log.push({ claimId, proposition: question.proposition, revision: question.revision,
+          evidence: [evidenceFor(question.proposition, probabilities.get(question.key)!, question.revision)] });
       }
       end({ outcome: 'returned', status });
     } catch (error) {
@@ -193,5 +210,8 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
   return { log, calls, skippedClaims };
 }
 
-export const evidenceFor = (proposition: string, probability: number): Evidence =>
-  ({ rung: 'cross_family_llm', check: `jev noul: ${proposition}`, result: probability });
+// The revision is in the label because a reader of the report has to be able to tell
+// which side the model was judging, exactly as the symbolic labels say "at the merge
+// base".
+export const evidenceFor = (proposition: string, probability: number, revision: Side = 'head'): Evidence =>
+  ({ rung: 'cross_family_llm', check: `jev noul${revision === 'base' ? ' at the merge base' : ''}: ${proposition}`, result: probability });

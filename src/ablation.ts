@@ -12,6 +12,11 @@ import type { Policy, ReviewVerdict } from './policy.js';
 
 // Replays what the cross-family rung answered in a recorded run. Questions outside the
 // log return nothing, which is what a rung that cannot reach a proposition looks like.
+// Keyed on the claim and the proposition's text, deliberately not on its revision. The
+// revision is part of the question now, but two propositions of one claim that read
+// identically are the same question written twice, not two questions — and leaving the
+// key alone keeps recorded runs from before the revision was carried replayable exactly,
+// which is what makes a past run a measurement rather than an anecdote.
 export function recordedRung(log: CrossFamilyAnswer[]): CrossFamilyRung {
   const answers = new Map(log.map(entry => [`${entry.claimId}\u0000${entry.proposition}`, entry.evidence]));
   return { settle: (proposition, claim) => answers.get(`${claim.claimId}\u0000${proposition}`) ?? [] };
