@@ -70,8 +70,8 @@ Each claim needs:
 That last field is the one that matters. A check establishes a fact about text; your claim is about behavior, and the two are not the same statement. "The body of update() lacks the text owner !== account" does not by itself establish "any account can update any record" — the comparison may have moved into a helper, no caller may reach the function, or a middleware may already enforce it. Enumerate those steps as separate propositions. A claim whose propositions are not all established does not ship, so a claim missing a step is a claim thrown away.
 
 The checks available are:
-- declaration_contains(symbol, pattern): the line declaring symbol contains pattern.
-- body_contains(symbol, pattern): the body of symbol contains pattern.
+- declaration_contains(symbol, pattern): the line declaring symbol contains pattern. This is the only assertion that sees the signature, so a parameter name, a type annotation or a modifier is checked here.
+- body_contains(symbol, pattern): the body of symbol contains pattern. The declaration line is not part of the body, so a parameter that appears only in the signature is absent here. That is what makes body_contains(f, "actorId", expect: absent) the way to say a parameter is accepted and never used, which is often the sharpest statement of an authorization defect.
 - file_contains(path, pattern): the file at path contains pattern. Use this, not body_contains, whenever the proposition is about a file rather than about one definition — what a test asserts, what a caller passes. body_contains needs a real declaration to scope to, and a file path or a bare call name is not one.
 - referenced_outside(symbol, path): symbol is referenced outside path.
 Each takes expect: "present" (the default) or "absent". Use "absent" when the proposition is that something is missing — a removed guard, an unapplied bound. Each also takes revision: "head" (the default) or "base". Patterns are literal text, not regular expressions. A proposition you cannot express as a check is still worth stating; leave its check out and say so.

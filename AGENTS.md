@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 300 tests: 298 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 302 tests: 300 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -122,6 +122,35 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   prose are now rejected at emit time (`PROSE` in `src/claim.ts`); the general hole,
   that verification settles propositions and never asks whether the type fits, is still
   open for code files.
+- **The recall ceiling was rung 1 being asked the wrong question, not a missing rung.**
+  Categorised every correct claim across the 31 runs on disk — correct meaning located in
+  `examples/suggestion-demo/accounts.mjs` and describing the missing ownership check. 57
+  emitted, 37 shipped, 20 did not. Replaying all 20 through the verifier showed **every
+  one of the 20 was settleable by a rung already present**; none needed a rung the
+  reviewer does not have. Ten now ship: six from the `jevState` fix and four from the
+  `bodyOf` fix below. The other ten carry checks written by emitter versions that predate
+  `file_contains` and the prompt guidance, and a replay cannot recover them because the
+  check bytes are frozen — none of those failure shapes recurs in the 20 most recent runs.
+- **`body_contains` did not mean the body, and that alone killed four correct claims.**
+  `bodyOf` sliced from the declaration line inclusive, so the signature was searched too.
+  `renameAccount(accounts, actorId, accountId, displayName)` mentions `actorId` exactly
+  once, in its parameter list, so the proposition *"actorId is not referenced in the
+  function body"* — true, and the sharpest statement of this defect, a parameter accepted
+  and never used — was refuted by the parameter list itself. The invariant now holds and
+  is tested, not just commented: **`declaration_contains` reads the declaration line,
+  `body_contains` reads everything under it, and the two do not overlap.** The one
+  exception is a definition with nothing indented under it, which is its own body;
+  otherwise an `expect: 'present'` check would be refuted by an empty body.
+- **A cheaper rung can be wrong, and the ladder's ordering assumes it cannot.** Rung 1 is
+  ordered first because it is deterministic and free, and a refutation from it is final —
+  no later rung argues with it. The `actorId` case broke that: rung 1 refuted, rung 3
+  answered 0.92 that the proposition held, and **rung 3 was right**. Determinism is not
+  correctness; it only means the same wrong answer every time. So a disagreement between
+  rungs is evidence about the cheaper rung's *definitions*, not only about the claim, and
+  the useful thing to do with one is read the check's semantics rather than pick a winner.
+  That is how the `bodyOf` bug was found, and it is why `--question-refutations` looked
+  valuable: it was compensating for this bug at rung 3's price. Fix the cheap rung first;
+  a model call is a bad way to pay for a grep that means the wrong thing.
 - Rung 3 contributed nothing to claim selection in the one measured ablation — no claim
   gained or lost, no proposition settled that symbolic had not already settled. Its only
   effect was raising the surviving finding to high confidence, moving the verdict from

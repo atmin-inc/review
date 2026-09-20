@@ -55,7 +55,17 @@ function bodyOf(revision: Revision, path: string, line: number): { text: string;
   const opening = indentOf(lines[0] ?? '');
   let end = 1;
   while (end < lines.length && (!lines[end]!.trim() || indentOf(lines[end]!) > opening)) end++;
-  return { text: lines.slice(0, end).join('\n'), capped: end === lines.length && lines.length === BODY_LINES };
+  // The declaration line belongs to `declaration_contains`, which reads exactly that
+  // line. Including it here made the two assertions overlap on it and broke the negative
+  // form of this one: `body_contains(f, "actorId", expect: 'absent')` is how a reviewer
+  // says a parameter is accepted and never used, and the parameter list refuted it every
+  // time. Measured 2026-09-20 over 31 runs: four correct `auth_bypass` claims died on
+  // that alone, with nothing downstream able to see why.
+  // A definition with nothing indented under it has no body separate from its
+  // declaration, so there the line stays; dropping it would leave an empty body that
+  // refutes every `expect: 'present'` check.
+  const body = end > 1 ? lines.slice(1, end) : lines.slice(0, end);
+  return { text: body.join('\n'), capped: end === lines.length && lines.length === BODY_LINES };
 }
 
 export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome {
