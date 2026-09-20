@@ -4,7 +4,8 @@ import { loadReview, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
 import { investigateClaims, type ClaimInvestigation } from './investigator.js';
 import { verifyClaims, type CrossFamilyRung, type Verification } from './lifecycle.js';
-import { contributionOf, type RungContribution } from './ablation.js';
+import { contributionOf, recordedRung, type RungContribution } from './ablation.js';
+import { askJev } from './jev.js';
 import { BALANCED } from './policy.js';
 import { price, type Model, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
@@ -17,8 +18,15 @@ import type { Rung } from './evidence.js';
 // The two passes share no state but the claims, which is the point.
 export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification }
 
+// How rung 3 is answered for this run. 'none' leaves it silent, which is what every
+// run before this one did. 'jev' asks the TypeSafe API once per surviving claim,
+// before verification, and the verifier then replays those answers — see jev.ts for
+// why the asking is its own phase.
+export type CrossFamilySource = 'none' | 'jev';
+
 export async function runClaimReview(directory: string, profile: Profile,
-  injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung): Promise<ClaimReview> {
+  injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
+  crossFamilySource: CrossFamilySource = 'none'): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
   if (profile.provider === 'codex-local' && !injectedModel) {
     throw new Error('Local subscription experiments require the benchmark Codex adapter; hosted execution is not supported');
@@ -42,7 +50,11 @@ export async function runClaimReview(directory: string, profile: Profile,
 
   // The verifier is handed the claims and the revision, and nothing else. Whatever the
   // investigator believed does not travel with them.
-  const verification = verifyClaims(investigation.claims, revisions, BALANCED, crossFamily);
+  let rung = crossFamily;
+  if (!rung && crossFamilySource === 'jev' && investigation.claims.length) {
+    rung = recordedRung((await askJev(investigation.claims, revisions, context.diff, { signal })).log);
+  }
+  const verification = verifyClaims(investigation.claims, revisions, BALANCED, rung);
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
