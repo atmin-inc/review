@@ -66,12 +66,31 @@ test('the questions asked are exactly the ones the verifier would put to the run
 // it to agree with the claim rather than judge the code.
 test('the state carries the location and the code, never the investigator conclusion', t => {
   const { claims, revisions } = setUp(t, [SURVIVES]);
-  const state = jevState(claims[0], revisions, 'diff text');
-  const serialized = JSON.stringify(state);
+  const serialized = JSON.stringify(jevState(claims[0], revisions, 'diff text', 'base'));
   assert.match(serialized, /update\.ts/);
   assert.match(serialized, /owner !== account/); // the base side still has the guard
   assert.doesNotMatch(serialized, /record lock/);
   assert.doesNotMatch(serialized, /requests for the same record/);
+});
+
+// The state holds ONE revision, so a question asked against it has one reading. Naming
+// the revision in the question instead was tried on 2026-09-20 and measurably backfired:
+// with both sides present, "the tests expect a Forbidden error" reads as "does a
+// Forbidden error still happen after this change", and Jev answered 0.1 to a fact grep
+// had confirmed. Three wordings suppressed it equally, so the fix is structural.
+test('the state holds one revision, and it is the one asked about', t => {
+  const { claims, revisions } = setUp(t, [SURVIVES]);
+  for (const [revision, present, absent] of [['base', /owner !== account/, null], ['head', null, /owner !== account/]]) {
+    const state = jevState(claims[0], revisions, 'diff text', revision);
+    assert.equal(state.revision, revision);
+    // One source per file, not a head and a base side to choose between.
+    for (const file of state.files) assert.deepEqual(Object.keys(file).sort(), ['path', 'source']);
+    const serialized = JSON.stringify(state);
+    if (present) assert.match(serialized, present);
+    if (absent) assert.doesNotMatch(serialized, absent);
+  }
+  // Head is the default, because a review is about the state after the change.
+  assert.equal(jevState(claims[0], revisions, 'diff text').revision, 'head');
 });
 
 // A question about a statement is not a request for an opinion of the change, and the
@@ -86,23 +105,14 @@ test('each proposition becomes one noul question', t => {
   assert.equal(typeof body.questions.p1.criteria.false, 'string');
 });
 
-// The state carries both sides of the change and the diff, so an unqualified statement
-// has two readings and the model is free to pick either. Measured 2026-09-20: asked
-// "the body of renameAccount lacks account.ownerId" with no side named, Jev answered for
-// the side where it is present, contradicting a grep that was right, and a correct
-// auth_bypass was held back. The revision is in the question and in both criteria.
-test('a question names the revision it is to be judged at', () => {
-  const at = revision => JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.', revision }])).questions.p0;
-  assert.match(at('head').instructions, /head revision: the state AFTER the change/);
-  assert.match(at('base').instructions, /base revision: the state BEFORE the change/);
-  for (const revision of ['head', 'base']) {
-    assert.match(at(revision).criteria.true, new RegExp(`${revision} revision`));
-    assert.match(at(revision).criteria.false, new RegExp(`${revision} revision`));
-  }
-  // Anything that is not 'base' is head, matching propositionSide's default. Asking
-  // about the code before the change is the failure this exists to stop, so it is never
-  // what an absent value means.
-  assert.match(at(undefined).instructions, /head revision/);
+// The question itself names no revision. The state does. Measured 2026-09-20: naming it
+// here narrowed the model to the changed file and suppressed true statements about files
+// the change did not touch, whatever the wording, costing a run its finding.
+test('a question is the proposition, with no revision talk attached', () => {
+  const question = JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.', revision: 'base' }])).questions.p0;
+  assert.equal(question.instructions, 'A holds.');
+  assert.doesNotMatch(question.criteria.true, /base|head|revision/);
+  assert.doesNotMatch(question.criteria.false, /base|head|revision/);
 });
 
 // A response that does not match the published schema must stop the run. Coercing an

@@ -21,7 +21,11 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 // them: the two phases cannot drift apart.
 //
 // Second, Jev answers many questions against one state in a single call, so one call
-// covers one claim and all of its propositions.
+// covers one claim and all of its propositions AT ONE REVISION. A claim with
+// propositions on both sides of the change — which is the normal shape for a regression,
+// one proposition at base and one at head — takes two calls. That is the cost of each
+// state holding a single revision, and it is small: Jev bills input tokens, and each of
+// the two calls carries half the source the combined one did.
 
 // WIRE FORMAT — verified against the live API on 2026-09-20, and against the schema it
 // publishes at https://api.typesafe.ai/openapi.json, which is the contract that
@@ -31,19 +35,17 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 // `NoulAnswer`: `type: 'noul'` with the probability of yes in `noul`. Parsing stays
 // strict: a response that does not match fails loudly rather than being coerced into a
 // probability, because a wrong number here silently decides whether claims ship.
-// The state carries both revisions and the diff, because a claim about a regression is
-// unanswerable without them, so the question has to say which side decides. Measured
-// 2026-09-20: asked the bare sentence "the body of renameAccount lacks account.ownerId",
-// Jev answered for the side where it is present. Rung 1 had run at head and missed,
-// correctly, and `suspectChecks` held back a correct `auth_bypass`. Neither rung was
-// wrong; they were answering different questions.
-// Tested on 'base', not on 'head', so that a value that is somehow neither falls to head
-// — the same default `propositionSide` applies. Defaulting the other way would quietly
-// ask about the code before the change, which is the mistake this whole function exists
-// to stop.
-const judgeAt = (revision: Side): string => revision === 'base'
-  ? 'Judge this at the base revision: the state BEFORE the change. The head revision and the diff are context only.'
-  : 'Judge this at the head revision: the state AFTER the change. The base revision and the diff are context only.';
+// A question is pinned to its revision by the STATE, not by a sentence telling the model
+// which side to think about. Both were tried on 2026-09-20 and the sentence backfired:
+// with both revisions in the state, naming one made Jev read "the tests expect a
+// Forbidden error" as "does a Forbidden error still happen after this change" — true of
+// the test file as written, false of the changed code — and answer 0.1 to a fact grep had
+// confirmed. Contradicted checks went from 1 in 52 propositions to 8 in 94, and one run
+// lost the finding entirely. Three wordings were measured and all three suppressed it
+// equally, so the phrasing was never the problem: it was asking a question about two
+// revisions at once. Sending the one revision the question is about scored 6 of 7 against
+// 4 for both-sides and 3 for both-sides-plus-a-qualifier, on statements all true of the
+// code. Structure, not instruction.
 
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
@@ -56,17 +58,17 @@ export function jevRequest(state: unknown, questions: JevQuestion[]): string {
     state,
     questions: Object.fromEntries(questions.map(question => [question.key, {
       type: 'noul',
-      instructions: `${question.proposition}\n\n${judgeAt(question.revision)}`,
+      instructions: question.proposition,
       // The criteria say what "yes" means, because the proposition is a statement and
       // a Noul answers a question. Without this the model is free to read the
       // statement as a request for its opinion of the change. `true` and `false` are
       // the two sides of the Noul, so both are stated rather than leaving the model
-      // to infer the negative. Both name the revision, because the state carries the
-      // other one too and a statement about a change is true on one side and false on
-      // the other.
+      // to infer the negative. They say "the state as given" and name no revision,
+      // because the state holds exactly one and naming it measurably narrows the model's
+      // attention to the changed file.
       criteria: {
-        true: `This statement is true of the ${question.revision} revision as given. Judge the code, not the intent of the change.`,
-        false: `This statement is not true of the ${question.revision} revision as given.`,
+        true: 'This statement is true of the code in the state as given. Judge the code, not the intent of the change.',
+        false: 'This statement is not true of the code in the state as given.',
       },
     }])),
   });
@@ -98,14 +100,20 @@ export function jevAnswers(body: unknown, questions: JevQuestion[]): Map<string,
 // concluded, and rung 3 exists to settle the steps independently of that. Location and
 // type stay, because a proposition like "no ownership comparison remains in the
 // function body" is unanswerable without knowing which body.
-export function jevState(claim: Claim, revisions: Revisions, diff: string): unknown {
+export function jevState(claim: Claim, revisions: Revisions, diff: string, revision: Side = 'head'): unknown {
   const { path: located, line } = parseLocation(claim.location);
+  const source = revision === 'base' ? revisions.base : revisions.head;
   return {
     claim: { type: claim.type, location: claim.location },
+    // One revision, named, and the files are that revision's. A question asked against
+    // this state has one reading available to it.
+    revision,
     files: statePaths(claim).map(path => {
       const at = path === located ? line : 1;
-      return { path, head: window(revisions.head, path, at), base: window(revisions.base, path, at) };
+      return { path, source: window(source, path, at) };
     }),
+    // The diff stays: a claim about a regression is about a difference, and removing it
+    // changed nothing measurable either way. It is context, and the files are the answer.
     diff: diff.length > MAX_DIFF_BYTES ? `${diff.slice(0, MAX_DIFF_BYTES)}\n[diff truncated]` : diff,
   };
 }
@@ -169,19 +177,23 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
     transport = globalThis.fetch, signal, policy = BALANCED, verify = {} } = options;
   if (!apiKey) throw new Error('TYPESAFE_API_KEY is missing. Configure it locally.');
   const asked = questionsAsked(claims, revisions, policy, verify);
-  const byClaim = new Map<string, { proposition: string; revision: Side }[]>();
-  for (const entry of asked) byClaim.set(entry.claimId,
-    [...byClaim.get(entry.claimId) ?? [], { proposition: entry.proposition, revision: entry.revision }]);
+  // Grouped by claim AND revision, because one state holds one revision.
+  const byClaim = new Map<string, string[]>();
+  for (const entry of asked) {
+    const key = `${entry.claimId}\u0000${entry.revision}`;
+    byClaim.set(key, [...byClaim.get(key) ?? [], entry.proposition]);
+  }
   const claimsById = new Map(claims.map(claim => [claim.claimId, claim]));
   const log: CrossFamilyAnswer[] = [];
   const skippedClaims: string[] = [];
   let calls = 0;
-  for (const [claimId, propositions] of byClaim) {
+  for (const [key, propositions] of byClaim) {
+    const [claimId, revision] = key.split('\u0000') as [string, Side];
     if (calls >= limits.maxCalls) { skippedClaims.push(claimId); continue; }
     const claim = claimsById.get(claimId)!;
-    const questions = propositions.map((item, index) => ({ key: `p${index}`, ...item }));
-    const body = jevRequest(jevState(claim, revisions, diff), questions);
-    const end = startSpan('jev.http', { claimId, questions: questions.length,
+    const questions = propositions.map((proposition, index) => ({ key: `p${index}`, proposition, revision }));
+    const body = jevRequest(jevState(claim, revisions, diff, revision), questions);
+    const end = startSpan('jev.http', { claimId, revision, questions: questions.length,
       requestBytes: Buffer.byteLength(body), requestHash: traceHash(body) }, 3);
     calls++;
     let status: number | null = null;
