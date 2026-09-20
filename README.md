@@ -245,12 +245,13 @@ beside the snapshot.
 Whether a rung earns its place is a measurement, not an assumption:
 
 ```sh
-npx atmin-review claim-ablate ./private-review
+npx atmin-review claim-ablate ./private-review --rung cross_family_llm
+npx atmin-review claim-ablate ./private-review --rung symbolic
 ```
 
-That re-verifies a finished run with the cross-family rung switched off, replaying
-its recorded answers rather than asking again, so the difference between the two
-is the rung and nothing else. It spends nothing and changes nothing. The report
+That re-verifies a finished run with one rung switched off, replaying recorded
+model answers on both sides, so the difference between the two is that rung and
+nothing else. It spends nothing and changes nothing. The report
 counts what the rung added, what it took away, what it raised and what it called
 into question, because a rung that only removes findings is still earning its
 place when those findings were wrong.

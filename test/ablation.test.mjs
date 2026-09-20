@@ -4,7 +4,7 @@ import { repository } from './helpers.mjs';
 import { assignClaimIds } from '../dist/claim.js';
 import { revisionFrom } from '../dist/symbolic.js';
 import { verifyClaims } from '../dist/lifecycle.js';
-import { contributionOfCrossFamily, recordedRung, tally } from '../dist/ablation.js';
+import { contributionOf, contributionOfCrossFamily, recordedRung, tally } from '../dist/ablation.js';
 import { BALANCED } from '../dist/policy.js';
 import { sourceText } from '../dist/snapshot.js';
 
@@ -107,4 +107,30 @@ test('a rung that only raises confidence is reported as raising it', t => {
   assert.equal(contribution.without.confidence.moderate, 1);
   assert.equal(contribution.with.confidence.high, 1);
   assert.equal(contribution.decisionChanged, true, 'high confidence on a P1 is what blocks');
+});
+
+// The same comparison, pointed at rung 1. Switching it off leaves every proposition
+// unsettled, so what it contributes is everything the model could not reach on its own.
+// The model answers are replayed on both sides, so this isolates rung 1 rather than
+// measuring the two rungs against each other.
+test('rung 1 is measured the same way, against the same claims with its checks removed', t => {
+  const { revisions, claims, run } = setUp(t, [GREPPABLE, NEEDS_JUDGMENT],
+    proposition => proposition.startsWith('Concurrent') ? 0.93 : 0.12);
+  const contribution = contributionOf('symbolic', claims, revisions, BALANCED, run().crossFamilyLog);
+
+  assert.equal(contribution.rung, 'symbolic');
+  assert.equal(contribution.without.propositions.symbolic, 0, 'with its checks gone, rung 1 settles nothing');
+  assert.equal(contribution.with.propositions.symbolic, 2);
+  assert.ok(contribution.without.verdicts.refuted > 0,
+    'the model alone denies the greppable proposition, and without a check nothing contradicts it');
+  assert.equal(contribution.with.verdicts.refuted, 0);
+});
+
+// Rung 2 reads CI output and does not run in v1. Asking for its contribution is asking
+// about a rung that never fired, which is a mistake worth failing on rather than a row
+// of zeroes that reads like a measurement.
+test('asking to measure a rung that does not run fails loudly', t => {
+  const { revisions, claims, run } = setUp(t, [GREPPABLE], () => 0.9);
+  assert.throws(() => contributionOf('ci_output', claims, revisions, BALANCED, run().crossFamilyLog),
+    /does not run in v1/);
 });

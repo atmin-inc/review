@@ -4,12 +4,13 @@ import { loadReview, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
 import { investigateClaims, type ClaimInvestigation } from './investigator.js';
 import { verifyClaims, type CrossFamilyRung, type Verification } from './lifecycle.js';
-import { contributionOfCrossFamily, type RungContribution } from './ablation.js';
+import { contributionOf, type RungContribution } from './ablation.js';
 import { BALANCED } from './policy.js';
 import { price, type Model, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import type { Claim } from './claim.js';
+import type { Rung } from './evidence.js';
 
 // The whole lifecycle over one prepared snapshot: a wide pass emits claims, a separate
 // pass settles them against the same frozen revision, and code composes the verdict.
@@ -55,7 +56,7 @@ export async function runClaimReview(directory: string, profile: Profile,
 // The same claims, verified again with the cross-family rung switched off. Emission is
 // not repeated and the model is not re-asked — the recorded answers are replayed — so
 // the difference is the rung's contribution and nothing else.
-export function ablateCrossFamily(directory: string): RungContribution {
+export function ablate(directory: string, rung: Rung = 'cross_family_llm'): RungContribution {
   const { packet } = loadReview(directory);
   const repository = join(directory, 'source.git');
   const revisions = { head: revisionFrom(repository, packet.headSha), base: revisionFrom(repository, packet.mergeBaseSha) };
@@ -66,5 +67,5 @@ export function ablateCrossFamily(directory: string): RungContribution {
   };
   const verification = read('verification.json') as Verification;
   if (!Array.isArray(verification.crossFamilyLog)) throw new Error('This run predates cross-family recording; re-run claim-review to measure the rung');
-  return contributionOfCrossFamily(read('claims.json'), revisions, BALANCED, verification.crossFamilyLog);
+  return contributionOf(rung, read('claims.json'), revisions, BALANCED, verification.crossFamilyLog);
 }

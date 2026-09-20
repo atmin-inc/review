@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist } from './helpers.mjs';
-import { ablateCrossFamily, runClaimReview } from '../dist/claim-run.js';
+import { ablate, runClaimReview } from '../dist/claim-run.js';
 import { renderClaimReview } from '../dist/render-claim.js';
 
 const profile = { provider: 'openai', model: 'gpt-5.4-2026-03-05', maxUsd: 2, maxTurns: 6,
@@ -145,7 +145,7 @@ test('a finished run can be measured for what the cross-family rung contributed'
   const fake = model([action('record_claim', TRUE_CLAIM), action('end_investigation', { complete: true, limitations: [] })]);
   await runClaimReview(directory, profile, fake);
 
-  const contribution = ablateCrossFamily(directory);
+  const contribution = ablate(directory);
   assert.equal(contribution.rung, 'cross_family_llm');
   assert.deepEqual(contribution.gained, [], 'no rung 3 is configured, so it contributed nothing here');
   assert.equal(contribution.with.verdicts.confirmed, contribution.without.verdicts.confirmed);
