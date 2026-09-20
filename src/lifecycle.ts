@@ -1,7 +1,7 @@
-import type { Claim, Proposition } from './claim.js';
+import { propositionSide, type Claim, type Proposition } from './claim.js';
 import type { PropositionStatus } from './evidence.js';
 import { composeChain, llmSignal, DEFAULT_THRESHOLDS, type Chain, type Evidence, type PropositionRecord, type Thresholds } from './evidence.js';
-import { runCheck, sideOf, type Revisions, type Side, type SymbolicCheck } from './symbolic.js';
+import { runCheck, type Revisions, type Side, type SymbolicCheck } from './symbolic.js';
 import { decide, findingsFrom, policyRejection, type Decision, type Policy } from './policy.js';
 
 // The verification half of the lifecycle: a claim set in, a verdict composed in code
@@ -13,7 +13,10 @@ import { decide, findingsFrom, policyRejection, type Decision, type Policy } fro
 // coin flip. "Is this an auth bypass?" is the composite question. "Does any caller
 // compare owner to account before update()?" is the factual one, and it is also the
 // step rung 1 could not express.
-export interface CrossFamilyRung { settle(proposition: string, claim: Claim): Evidence[] }
+// The revision is passed, not implied. A rung that is sent both sides of a change and
+// asked an unqualified sentence will answer for whichever side it reads as the subject,
+// and it will not be wrong to do so.
+export interface CrossFamilyRung { settle(proposition: string, claim: Claim, revision: Side): Evidence[] }
 export interface Verification { chains: Chain[]; decision: Decision; limitations: string[]; crossFamilyLog: CrossFamilyAnswer[] }
 // Off by default: `questionRefutations` reverses the rule that no rung argues with a
 // deterministic refutation, and every claim it saves costs a model call on a claim that
@@ -24,14 +27,14 @@ export interface VerifyOptions { questionRefutations?: boolean }
 // is what makes the rung's contribution measurable: the same claims can be verified
 // again with the rung replayed or switched off, exactly and for free, instead of a
 // second run that spends money and answers differently.
-export interface CrossFamilyAnswer { claimId: string; proposition: string; evidence: Evidence[] }
+export interface CrossFamilyAnswer { claimId: string; proposition: string; revision: Side; evidence: Evidence[] }
 
 // A claim is an argument, and a check settles one step of it. Tracking the steps
 // separately is the whole point: a grep establishes a syntactic fact, and a claim
 // like "any account can update any record" needs several of those facts before it
 // follows. Collapsing them let one hit stand in for the argument.
 export interface PropositionOutcome {
-  proposition: string; status: PropositionStatus; evidence: Evidence[]; limitations: string[];
+  proposition: string; revision: Side; status: PropositionStatus; evidence: Evidence[]; limitations: string[];
 }
 
 // A miss refutes only when it rests on finding something. With `expect: 'absent'` it
@@ -59,18 +62,24 @@ function removedByTheChange(revisions: Revisions, check: SymbolicCheck): boolean
 }
 
 export function settleProposition(revisions: Revisions, item: Proposition): PropositionOutcome {
+  // Resolved once, here, and carried on the outcome, so rung 1 and rung 3 cannot end up
+  // asking about different sides of the change. A check that omits the side inherits the
+  // proposition's rather than silently defaulting to head, which is the case that used to
+  // send rung 1 to the wrong revision without anything recording it.
+  const revision = propositionSide(item);
   if (!item.check) {
-    return { proposition: item.proposition, status: 'unsettled', evidence: [], limitations: [] };
+    return { proposition: item.proposition, revision, status: 'unsettled', evidence: [], limitations: [] };
   }
-  const outcome = runCheck(sideOf(revisions, item.check), item.check);
+  const check: SymbolicCheck = { ...item.check, revision };
+  const outcome = runCheck(revision === 'base' ? revisions.base : revisions.head, check);
   const result = outcome.evidence[0]?.result;
   let status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
   const limitations = [...outcome.limitations];
-  if (status === 'refuted' && removedByTheChange(revisions, item.check)) {
+  if (status === 'refuted' && removedByTheChange(revisions, check)) {
     status = 'unsettled';
     limitations.push(`${outcome.evidence[0]!.check}: the pattern is present on the other side of the change, so this miss is the change itself and cannot refute a claim about it.`);
   }
-  return { proposition: item.proposition, status, evidence: outcome.evidence, limitations };
+  return { proposition: item.proposition, revision, status, evidence: outcome.evidence, limitations };
 }
 
 export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: CrossFamilyRung,
@@ -107,8 +116,8 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
   if (refuted.length) {
     const sole = options.questionRefutations && refuted.length === 1 && refuted[0]!.evidence.length === 1
       ? refuted[0]! : null;
-    const questioned = sole ? crossFamily?.settle(sole.proposition, claim) ?? [] : [];
-    if (questioned.length) log.push({ claimId: claim.claimId, proposition: sole!.proposition, evidence: questioned });
+    const questioned = sole ? crossFamily?.settle(sole.proposition, claim, sole.revision) ?? [] : [];
+    if (questioned.length) log.push({ claimId: claim.claimId, proposition: sole!.proposition, revision: sole!.revision, evidence: questioned });
     if (sole && llmSignal(questioned, thresholds) === 'agrees') {
       const records: PropositionRecord[] = outcomes.map(outcome => outcome === sole
         ? { proposition: outcome.proposition, status: 'unsettled' as const, settledBy: null }
@@ -126,8 +135,8 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
   // only rung that can reach them, and the established ones because a model that
   // contradicts a check is reporting on the check.
   const asked = outcomes.map(outcome => {
-    const evidence = crossFamily?.settle(outcome.proposition, claim) ?? [];
-    if (evidence.length) log.push({ claimId: claim.claimId, proposition: outcome.proposition, evidence });
+    const evidence = crossFamily?.settle(outcome.proposition, claim, outcome.revision) ?? [];
+    if (evidence.length) log.push({ claimId: claim.claimId, proposition: outcome.proposition, revision: outcome.revision, evidence });
     return { ...outcome, model: evidence, signal: llmSignal(evidence, thresholds) };
   });
   const evidence = [...symbolic, ...asked.flatMap(item => item.model)];

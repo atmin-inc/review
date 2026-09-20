@@ -354,3 +354,47 @@ test('only a lone refuting check is questioned, not a claim refuted several ways
   assert.equal(chains[0].verdict, 'refuted');
   assert.deepEqual(crossFamilyLog, [], 'no question asked, so no call paid for');
 });
+
+// The invariant the revision field exists for: whatever side rung 1 ran against, rung 3
+// is asked about that same side. Measured 2026-09-20 on a live run — rung 1 checked at
+// head and missed, correctly; rung 3 got the bare sentence with a state carrying both
+// revisions and answered for base; `suspectChecks` held back a correct auth_bypass.
+// Neither rung was wrong. They were answering different questions.
+test('rung 3 is asked at the revision rung 1 ran against', t => {
+  const asked = [];
+  const recording = { settle: (proposition, claim, revision) => { asked.push({ proposition, revision }); return []; } };
+  const claim = {
+    ...TRUE_CLAIM,
+    evidenceToCheck: [
+      // Named on the check, which is what rung 1 runs against.
+      { proposition: 'The guard ran before the change.',
+        check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', revision: 'base' } },
+      // Named on the proposition, with the check silent. It used to default to head
+      // here, so rung 1 looked at the wrong revision with nothing recording that it had.
+      { proposition: 'The guard is stated in the declaration before the change.', revision: 'base',
+        check: { assertion: 'declaration_contains', symbol: 'update', pattern: 'owner' } },
+      // Neither names a side, so both rungs take head.
+      { proposition: 'No ownership comparison remains in the function body.',
+        check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' } },
+    ],
+  };
+  const { chains } = run(t, [claim], recording);
+
+  assert.deepEqual(asked.map(one => one.revision), ['base', 'base', 'head']);
+  // And rung 1 says so in its own labels, so a reader of the report can check it too.
+  const labels = chains[0].evidence.filter(one => one.rung === 'symbolic').map(one => one.check);
+  assert.equal(labels.filter(label => label.includes('at the merge base')).length, 2);
+});
+
+// A proposition that names base makes the check inherit it. Before, the check ran at
+// head and quietly answered about the wrong code.
+test('a check with no side inherits the propositions own', t => {
+  const claim = {
+    ...TRUE_CLAIM,
+    evidenceToCheck: [{ proposition: 'The guard was present before the change.', revision: 'base',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account' } }],
+  };
+  const { chains } = run(t, [claim]);
+  assert.equal(chains[0].verdict, 'confirmed', 'the guard is there at base; checking head would refute it');
+  assert.match(chains[0].evidence[0].check, /at the merge base/);
+});

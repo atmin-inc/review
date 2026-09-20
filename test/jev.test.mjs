@@ -77,12 +77,32 @@ test('the state carries the location and the code, never the investigator conclu
 // A question about a statement is not a request for an opinion of the change, and the
 // criteria are what say so.
 test('each proposition becomes one noul question', t => {
-  const body = JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.' }, { key: 'p1', proposition: 'B holds.' }]));
+  const body = JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.', revision: 'head' },
+    { key: 'p1', proposition: 'B holds.', revision: 'head' }]));
   assert.deepEqual(Object.keys(body.questions), ['p0', 'p1']);
   assert.equal(body.questions.p0.type, 'noul');
-  assert.equal(body.questions.p0.instructions, 'A holds.');
+  assert.match(body.questions.p0.instructions, /^A holds\./);
   assert.match(body.questions.p1.criteria.true, /Judge the code/);
   assert.equal(typeof body.questions.p1.criteria.false, 'string');
+});
+
+// The state carries both sides of the change and the diff, so an unqualified statement
+// has two readings and the model is free to pick either. Measured 2026-09-20: asked
+// "the body of renameAccount lacks account.ownerId" with no side named, Jev answered for
+// the side where it is present, contradicting a grep that was right, and a correct
+// auth_bypass was held back. The revision is in the question and in both criteria.
+test('a question names the revision it is to be judged at', () => {
+  const at = revision => JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.', revision }])).questions.p0;
+  assert.match(at('head').instructions, /head revision: the state AFTER the change/);
+  assert.match(at('base').instructions, /base revision: the state BEFORE the change/);
+  for (const revision of ['head', 'base']) {
+    assert.match(at(revision).criteria.true, new RegExp(`${revision} revision`));
+    assert.match(at(revision).criteria.false, new RegExp(`${revision} revision`));
+  }
+  // Anything that is not 'base' is head, matching propositionSide's default. Asking
+  // about the code before the change is the failure this exists to stop, so it is never
+  // what an absent value means.
+  assert.match(at(undefined).instructions, /head revision/);
 });
 
 // A response that does not match the published schema must stop the run. Coercing an
