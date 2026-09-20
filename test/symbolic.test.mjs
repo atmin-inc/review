@@ -193,3 +193,41 @@ test('file_contains can ask the base side, and says which side it asked', () => 
   assert.equal(outcome.evidence[0].result, 'hit');
   assert.match(outcome.evidence[0].check, /at the merge base/);
 });
+
+// The invariant, not an example: `declaration_contains` reads the declaration line and
+// `body_contains` reads everything under it, and the two do not overlap. They used to
+// share that line, which made the negative form of `body_contains` unusable — the way a
+// reviewer says "this parameter is accepted and never used" was refuted by the parameter
+// list itself. Measured 2026-09-20 across 31 live runs: four correct `auth_bypass` claims
+// died on exactly that, and no rung downstream could see why.
+test('declaration_contains and body_contains do not overlap', () => {
+  const revision = revisionOf({
+    'accounts.mjs': [
+      'export function renameAccount(accounts, actorId, accountId, displayName) {',
+      '  const account = accounts.get(accountId);',
+      "  if (!account) throw new Error('Account not found');",
+      '  account.displayName = displayName;',
+      '  return account;',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const decl = { assertion: 'declaration_contains', symbol: 'renameAccount', pattern: 'actorId' };
+  const body = { assertion: 'body_contains', symbol: 'renameAccount', pattern: 'actorId' };
+  // The parameter is on the declaration and nowhere else, so exactly one side sees it.
+  assert.equal(runCheck(revision, decl).evidence[0].result, 'hit');
+  assert.equal(runCheck(revision, body).evidence[0].result, 'miss');
+  // Which is what makes the negative form mean what a reviewer means by it.
+  assert.equal(runCheck(revision, { ...body, expect: 'absent' }).evidence[0].result, 'hit');
+  // And the body is still the body: what is inside it is found.
+  assert.equal(runCheck(revision, { ...body, pattern: 'accounts.get' }).evidence[0].result, 'hit');
+});
+
+// The one case where the line has to stay. A definition with nothing indented under it
+// has no body separate from its declaration, and an empty body would refute every
+// `expect: 'present'` check asked about it.
+test('a definition with no indented body is its own body', () => {
+  const revision = revisionOf({ 'enums.rb': 'class Status\n  FIRST = 1\nend\n' });
+  const outcome = runCheck(revision, { assertion: 'body_contains', symbol: 'FIRST', pattern: '= 1' });
+  assert.equal(outcome.evidence[0].result, 'hit');
+});
