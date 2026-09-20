@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 285 tests: 283 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 300 tests: 298 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -82,7 +82,16 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   correctly leaves it alone. The fault is the proposition-to-check mapping, and nothing
   downstream can see it. `--question-refutations` asks rung 3 when a single check
   carries the whole refutation, which turns that trade-off into a number rather than a
-  judgement: it is off by default, and what it costs and what it reverses are measured.
+  judgement. It is off by default. Measured live over 30 runs (PR #2 and PR #4,
+  deepseek-v3.2): it fires on 2 of them, costs 1 extra Jev question each (~$0.0003 a
+  question, $0.0006 across all 30), and reversed 2 of 2 refutations — both of them wrong
+  refutations of a correct `auth_bypass`, with Jev at 0.92 and 0.90. **0 correct
+  refutations reversed, 0 verdicts changed.** So like the circularity rule it buys
+  correctness and not recall: the claim moves from `refuted` to `inconclusive`, which
+  still does not ship.
+  **Measure this one live, not by replay.** A replay reports 0 reversals by
+  construction: the propositions the flag newly reaches were never asked in the recorded
+  run, so the recorded rung returns neutral for them and every refutation stands.
   The sentence to keep whatever happens to the flag: **refutation is the strongest
   verdict the verifier can reach, and it is the one nothing else checks.**
 - **Self-refuting propositions are the live emission failure mode.** The model states a
