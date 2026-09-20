@@ -80,8 +80,11 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   calls it, so the check missed and refuted a correct `auth_bypass`. That miss rests on
   having *found* references, so it is sound as a check and the circularity rule above
   correctly leaves it alone. The fault is the proposition-to-check mapping, and nothing
-  downstream can see it. Whether to ask rung 3 about refutations is a real design
-  decision with a cost, not a bug fix — it reverses a deliberate rule.
+  downstream can see it. `--question-refutations` asks rung 3 when a single check
+  carries the whole refutation, which turns that trade-off into a number rather than a
+  judgement: it is off by default, and what it costs and what it reverses are measured.
+  The sentence to keep whatever happens to the flag: **refutation is the strongest
+  verdict the verifier can reach, and it is the one nothing else checks.**
 - **Self-refuting propositions are the live emission failure mode.** The model states a
   proposition about data shape or intent — "the account object has an ownerId property"
   — and then scopes its check to the changed function's body, where the defect it is
