@@ -69,18 +69,29 @@ const shipped = (chains: Chain[]) => new Map(chains.filter(chain => chain.verdic
   .map(chain => [chain.claimId, chain.verifierConfidence]));
 const RANK: Confidence[] = ['low', 'moderate', 'high'];
 
-// The cross-family rung's contribution over one claim set, measured against the same
-// claims verified without it.
-export function contributionOfCrossFamily(claims: Claim[], revisions: Revisions, policy: Policy,
+// A claim with its checks removed: every proposition survives, and none of them can be
+// settled symbolically. That is what rung 1 being switched off looks like from the
+// claim's side, and it leaves the claim itself untouched so the comparison stays paired.
+const withoutChecks = (claim: Claim): Claim =>
+  ({ ...claim, evidenceToCheck: claim.evidenceToCheck.map(({ proposition }) => ({ proposition })) });
+
+// One rung's contribution over one claim set, measured against the same claims verified
+// without it. Every other rung is held fixed — the model answers are replayed on both
+// sides — so the difference is this rung and nothing else.
+export function contributionOf(rung: Rung, claims: Claim[], revisions: Revisions, policy: Policy,
   log: CrossFamilyAnswer[]): RungContribution {
-  const without = verifyClaims(claims, revisions, policy);
-  const withRung = verifyClaims(claims, revisions, policy, recordedRung(log));
+  if (rung === 'ci_output') throw new Error('Rung 2 does not run in v1, so there is nothing to measure');
+  const replay = recordedRung(log);
+  const without = rung === 'symbolic'
+    ? verifyClaims(claims.map(withoutChecks), revisions, policy, replay)
+    : verifyClaims(claims, revisions, policy);
+  const withRung = verifyClaims(claims, revisions, policy, replay);
   const before = shipped(without.chains);
   const after = shipped(withRung.chains);
   const verdictOf = (verification: Verification) => new Map(verification.chains.map(chain => [chain.claimId, chain.verdict]));
   const priorVerdict = verdictOf(without);
   return {
-    rung: 'cross_family_llm',
+    rung,
     without: tally(without), with: tally(withRung),
     gained: [...after.keys()].filter(id => !before.has(id)),
     lost: [...before.keys()].filter(id => !after.has(id)),
@@ -110,3 +121,6 @@ export function renderContribution(contribution: RungContribution): string {
     `Claims it refuted outright: ${contribution.refuted.length}. Checks it called into question: ${b.suspectChecks}.`,
     contribution.decisionChanged ? 'The rung changed the verdict.' : 'The rung did not change the verdict.', ''].join('\n');
 }
+
+export const contributionOfCrossFamily = (claims: Claim[], revisions: Revisions, policy: Policy,
+  log: CrossFamilyAnswer[]): RungContribution => contributionOf('cross_family_llm', claims, revisions, policy, log);
