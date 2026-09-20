@@ -68,6 +68,20 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   did not produce the bad proposition in those runs. The score was variance. A failure
   mode that appears roughly 1 run in 5-10 cannot be measured by 5 repeats at all; replay
   the captured run that exhibited it instead, which is deterministic and free.
+- **A refutation is never questioned, and that is the asymmetry to watch.**
+  `verifyClaim` short-circuits on the first refuted proposition and never reaches rung
+  3, by design — a symbolically refuted claim is not carried to a later rung. So
+  `suspectChecks`, which exists precisely to catch a check that does not mean what its
+  proposition says, only ever protects *established* checks. A mismatched check that
+  **refutes** is unprotected, and refuting is the strongest verdict there is. Seen
+  2026-09-20: the proposition "there is no other function or middleware that enforces
+  ownership" was checked with `referenced_outside(renameAccount, expect: absent)`, which
+  asks whether the function is called elsewhere — a different statement. The test file
+  calls it, so the check missed and refuted a correct `auth_bypass`. That miss rests on
+  having *found* references, so it is sound as a check and the circularity rule above
+  correctly leaves it alone. The fault is the proposition-to-check mapping, and nothing
+  downstream can see it. Whether to ask rung 3 about refutations is a real design
+  decision with a cost, not a bug fix — it reverses a deliberate rule.
 - **Self-refuting propositions are the live emission failure mode.** The model states a
   proposition about data shape or intent — "the account object has an ownerId property"
   — and then scopes its check to the changed function's body, where the defect it is
