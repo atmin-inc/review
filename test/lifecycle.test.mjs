@@ -398,3 +398,31 @@ test('a check with no side inherits the propositions own', t => {
   assert.equal(chains[0].verdict, 'confirmed', 'the guard is there at base; checking head would refute it');
   assert.match(chains[0].evidence[0].check, /at the merge base/);
 });
+
+// A miss the circularity rule downgraded must not come back as a refutation. composeChain
+// reads any symbolic miss as `refuted` at high confidence, before it looks at the
+// proposition records at all, so leaving the evidence in place overruled the rule one
+// line after it fired. Measured 2026-09-20 over ten live runs: two claims had every
+// proposition established and rung 3 agreeing at 0.97, and still came out `refuted` —
+// one of them cost its run the finding.
+test('a miss that cannot refute does not refute the chain', t => {
+  const claim = {
+    ...TRUE_CLAIM,
+    evidenceToCheck: [
+      // Present at base, gone at head because the change removed it: the miss IS the
+      // change, so it cannot refute a claim about the change.
+      { proposition: 'The guard is gone from the body.',
+        check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account' } },
+    ],
+  };
+  const agreeing = { settle: proposition => [{ rung: 'cross_family_llm', check: `jev noul: ${proposition}`, result: 0.97 }] };
+  const { chains, limitations } = run(t, [claim], agreeing);
+
+  assert.equal(chains[0].propositions[0].status, 'established');
+  assert.equal(chains[0].propositions[0].settledBy, 'cross_family_llm');
+  assert.equal(chains[0].verdict, 'confirmed', 'the rule downgraded the miss, so nothing refutes this');
+  // The check is still reported, as a limitation rather than as live evidence, which is
+  // where every other check that ran and settled nothing goes.
+  assert.ok(limitations.some(one => /cannot refute a claim about it/.test(one)));
+  assert.equal(chains[0].evidence.filter(one => one.result === 'miss').length, 0);
+});
