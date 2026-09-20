@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 306 tests: 304 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 307 tests: 305 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -139,6 +139,17 @@ two calls, each carrying half the source.
   reports "no effect" for a change that has one. Seen twice on 2026-09-20: replaying
   `--question-refutations` reported 0 reversals where a live run reversed 2 of 2. The
   test: does the change alter the set `questionsAsked()` returns? If yes, measure live.
+- **A rule can be enforced at one layer and silently overruled at the next.** The
+  circularity rule downgrades a miss that the change itself caused, from `refuted` to
+  `unsettled`, and it worked — the proposition went to rung 3, which agreed at 0.97, and
+  the record read `established`. The chain still came out `refuted` at high confidence,
+  because `composeChain` reads any symbolic miss in the evidence array as a refutation
+  before it looks at the proposition records at all. Two runs in ten, one of them losing
+  its finding. The evidence is now dropped on downgrade rather than merely relabelled,
+  and the check is reported as a limitation, which is where `inconclusive()` in
+  `symbolic.ts` already puts every check that ran and settled nothing. Worth remembering
+  as a shape: when a fix does not show up in the output, check whether a later layer is
+  reading the raw evidence instead of the decision you made from it.
 - **Self-refuting propositions are the live emission failure mode.** The model states a
   proposition about data shape or intent — "the account object has an ownerId property"
   — and then scopes its check to the changed function's body, where the defect it is

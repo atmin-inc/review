@@ -76,8 +76,16 @@ export function settleProposition(revisions: Revisions, item: Proposition): Prop
   let status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
   const limitations = [...outcome.limitations];
   if (status === 'refuted' && removedByTheChange(revisions, check)) {
-    status = 'unsettled';
+    // The miss is dropped from the evidence, not just downgraded here, because
+    // `composeChain` reads any symbolic miss as a refutation and returns `refuted` at
+    // high confidence before it ever looks at the proposition records. Leaving it in let
+    // this rule be silently overruled one line later: measured 2026-09-20, two runs in
+    // ten had every proposition established, rung 3 agreeing at 0.97, and a chain
+    // verdict of `refuted` — one of them costing the run its finding. A check that ran
+    // and settled nothing belongs in `limitations`, which is where `inconclusive()` in
+    // symbolic.ts puts every other one, and the limitation carries the whole label.
     limitations.push(`${outcome.evidence[0]!.check}: the pattern is present on the other side of the change, so this miss is the change itself and cannot refute a claim about it.`);
+    return { proposition: item.proposition, revision, status: 'unsettled', evidence: [], limitations };
   }
   return { proposition: item.proposition, revision, status, evidence: outcome.evidence, limitations };
 }
