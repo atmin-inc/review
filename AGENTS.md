@@ -89,11 +89,23 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   refutations reversed, 0 verdicts changed.** So like the circularity rule it buys
   correctness and not recall: the claim moves from `refuted` to `inconclusive`, which
   still does not ship.
-  **Measure this one live, not by replay.** A replay reports 0 reversals by
-  construction: the propositions the flag newly reaches were never asked in the recorded
-  run, so the recorded rung returns neutral for them and every refutation stands.
+  It stays off until there is evidence it is worth a default, and 2 firings is not that.
+  Flip it when a run set of 30 or more produces at least 10 firings, still with no
+  correct refutation reversed; or flip it sooner if a single correct refutation is ever
+  reversed, in the other direction — that is the result that would retire the flag
+  instead. Until then the cost of leaving it off is nothing, and turning it on is one
+  line in `src/cli.ts`.
   The sentence to keep whatever happens to the flag: **refutation is the strongest
   verdict the verifier can reach, and it is the one nothing else checks.**
+- **A replay cannot measure a change that alters which questions get asked.** Replay is
+  the right tool for a change to how recorded answers are *composed*, and the wrong one
+  for a change to *reach* — anything that sends a rung somewhere it did not go before.
+  The recorded log holds answers only to the questions the old code asked, so a
+  proposition the new code newly reaches has no recorded answer, the replaying rung
+  returns neutral, and the old outcome survives by construction. The measurement then
+  reports "no effect" for a change that has one. Seen twice on 2026-09-20: replaying
+  `--question-refutations` reported 0 reversals where a live run reversed 2 of 2. The
+  test: does the change alter the set `questionsAsked()` returns? If yes, measure live.
 - **Self-refuting propositions are the live emission failure mode.** The model states a
   proposition about data shape or intent — "the account object has an ownerId property"
   — and then scopes its check to the changed function's body, where the defect it is
