@@ -91,3 +91,22 @@ test('a control-flow statement is never mistaken for a definition', () => {
     assert.equal(enclosingSymbol(`function outer() {\n${line}\n    body();\n  }\n}`, 3), 'outer');
   }
 });
+
+// Measured on 2026-09-20 against PR #4, a documentation-only change: one run in five
+// emitted 9 claims about the prose — a stale commit hash, an unreproducible test count,
+// undefined jargon — typed error_handling_gap and contract_break because those are the
+// only words the vocabulary offers. Six were confirmed at high confidence, because as
+// statements about the text their propositions really are established. Verification
+// settles propositions and never asks whether the type fits what it is about, so the
+// claim has to be refused where it is made.
+test('a claim about a document is rejected, whatever type it is given', () => {
+  for (const path of ['docs/handoff.md', 'README.markdown', 'notes.txt', 'guide.rst', 'book.adoc', 'page.mdx']) {
+    assert.match(claimRejection(draft({ location: `${path}:3` }), null), /does not describe documents/,
+      `${path} is prose`);
+  }
+  // Data and config are not prose: a defect in a workflow or a schema is a real defect
+  // these types can describe, so they must keep passing.
+  for (const path of ['.github/workflows/ci.yml', 'tsconfig.json', 'Makefile', 'src/update.ts']) {
+    assert.equal(claimRejection(draft({ location: `${path}:1` }), null), null, `${path} is not prose`);
+  }
+});

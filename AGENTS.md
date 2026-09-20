@@ -45,8 +45,21 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
   `/Forbidden/` at `test/suggestion-demo.test.mjs:12` and Jev returned 0.12 on the same
   proposition. The state now carries every file the claim's checks name, capped at four.
   The general rule: a rung may only be asked about what it was sent.
-- Run-to-run variance is high: three runs on one frozen snapshot gave three claim sets
-  and three verdicts. Single-run precision numbers mean little.
+- Run-to-run variance was high before those fixes. Measured again over 5 repeats per PR
+  at `03fda12`: PR #2 returned `block` 5/5 with 0 unsettled propositions out of 46, and
+  the surviving finding was the `auth_bypass` itself every time. Claim counts still vary
+  (2 to 3) and the emitter picks different line numbers for the same defect, but the
+  spread is between correct verdicts rather than between a correct one and a miss.
+- **Keep a negative control in any run set.** PR #4 (242 lines of docs, nothing to find)
+  is the one here. Without it, "blocks a real defect 5/5" cannot be told apart from a
+  reviewer that blocks everything. It returned `merge` with no claims 4/5.
+- **A claim's type is not verified against what it is about.** The fifth control run
+  emitted 9 claims about the documentation — a stale commit hash, undefined jargon —
+  typed `error_handling_gap` and `contract_break`, and confirmed 6 at high confidence,
+  because as statements about the text the propositions are true. Claims located in
+  prose are now rejected at emit time (`PROSE` in `src/claim.ts`); the general hole,
+  that verification settles propositions and never asks whether the type fits, is still
+  open for code files.
 - Rung 3 contributed nothing to claim selection in the one measured ablation — no claim
   gained or lost, no proposition settled that symbolic had not already settled. Its only
   effect was raising the surviving finding to high confidence, moving the verdict from

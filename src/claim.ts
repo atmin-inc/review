@@ -113,6 +113,21 @@ export function claimId(draft: ClaimDraft, source: string | null): string {
 
 const normalizeProse = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+// Every type in CLAIM_TYPES is a statement about how code behaves, and a document does
+// not behave. Without this, a run over a documentation-only change emits claims about
+// prose — a stale commit hash, an unreproducible test count, undefined jargon — typed
+// `error_handling_gap` or `contract_break` because those are the only words on offer.
+// Their propositions are true statements about the text, so verification establishes
+// them and they reach high confidence. Measured on 2026-09-20 against PR #4, a docs-only
+// change: one run in five emitted 9 such claims and confirmed 6 of them.
+//
+// The answer is not a documentation type. That would invite the model to produce more of
+// exactly this and let the reviewer score itself on prose. It is that this vocabulary
+// does not reach documents, so a claim located in one is malformed. Data and config
+// files are deliberately absent from this list: a defect in a CI workflow or a JSON
+// schema is a real defect these types can describe.
+const PROSE = /\.(md|markdown|mdx|rst|adoc|asciidoc|txt|text)$/i;
+
 // Rules 1 to 4 of spec/claim-schema.md. Rule 5 is an investigator instruction, and
 // rule 2 is only partly decidable here: code can reject a restatement of the
 // description, but whether a condition truly names a trigger is a judgment call.
@@ -124,7 +139,10 @@ export function claimRejection(draft: ClaimDraft, source: string | null): string
   if (normalizeProse(draft.suspectedCondition) === normalizeProse(draft.description)) {
     return 'suspectedCondition restates description rather than naming a trigger';
   }
-  const { line } = parseLocation(draft.location);
+  const { path, line } = parseLocation(draft.location);
+  if (PROSE.test(path)) {
+    return `${draft.type} is a claim about how code behaves, and ${path} is prose; this vocabulary does not describe documents`;
+  }
   if (source !== null && (line < 1 || line > source.split('\n').length)) {
     return `location line ${line} does not resolve in the reviewed revision`;
   }
