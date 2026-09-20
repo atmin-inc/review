@@ -6,8 +6,9 @@ import { assess, unverified } from './assessment.js';
 import { checkCurrent, loadReview, prepare } from './snapshot.js';
 import { renderMarkdown } from './render.js';
 import { readProfile, runReview } from './run.js';
-import { runClaimReview } from './claim-run.js';
+import { ablateCrossFamily, runClaimReview } from './claim-run.js';
 import { renderClaimReview } from './render-claim.js';
+import { renderContribution } from './ablation.js';
 import { accountedUsd } from './investigation.js';
 import { costReport } from './cost-report.js';
 
@@ -15,6 +16,7 @@ const help = `atmin review — source investigation and evidence tools
 
   atmin-review review <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
   atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>]
+  atmin-review claim-ablate <directory>
   atmin-review prepare <https://github.com/owner/repo/pull/number> [--out <new-directory>]
   atmin-review render <directory> [--format markdown|json] [--check-current] [--out <new-file>]
   atmin-review investigate <directory> --profile <profile.json>
@@ -27,6 +29,9 @@ investigate sends frozen source to the configured API, with bounded reads and us
 claim-review runs the claim lifecycle: a wide pass emits falsifiable claims, a separate
 pass settles each one against the frozen revision, and the verdict is composed from what
 survived. Claims that die are shown, not hidden.
+claim-ablate re-verifies a finished claim-review with the cross-family rung switched
+off, replaying its recorded answers rather than asking again, and reports what that
+rung contributed. It spends nothing and changes nothing.
 No repository scripts, GitHub writes or merge approvals. Required execution remains not-run.
 `;
 
@@ -36,6 +41,11 @@ async function main(): Promise<void> {
   if (values.help || !positionals.length) { process.stdout.write(help); return; }
   const [operation, input] = positionals;
   if (!input || positionals.length !== 2) throw new Error('Expected one command and one input; use --help');
+  if (operation === 'claim-ablate') {
+    if (values.profile || values.format || values['check-current'] || values.out) throw new Error('claim-ablate takes only a directory');
+    process.stdout.write(renderContribution(ablateCrossFamily(resolve(input))));
+    return;
+  }
   if (operation === 'claim-review') {
     if (!values.profile || values.format || values['check-current']) throw new Error('claim-review requires --profile and accepts only --out');
     const profile = readProfile(resolve(values.profile));
@@ -70,7 +80,7 @@ async function main(): Promise<void> {
     } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
     return;
   }
-  if (values.profile) throw new Error('--profile is only valid for review or investigate');
+  if (values.profile) throw new Error('--profile is only valid for review, investigate or claim-review');
   if (operation === 'cost') {
     if (values.format || values['check-current']) throw new Error('cost accepts only --out');
     const output = `${JSON.stringify(costReport(resolve(input)), null, 2)}\n`;
@@ -84,7 +94,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify({ directory, headSha: packet.headSha, baseSha: packet.baseSha, changedFiles: packet.changedFiles.length, investigation: 'not-started' }, null, 2)}\n`);
     return;
   }
-  if (operation !== 'render') throw new Error('Unknown command; use prepare, investigate, claim-review or render.');
+  if (operation !== 'render') throw new Error('Unknown command; use prepare, investigate, claim-review, claim-ablate or render.');
   if (values.format && !['markdown', 'json'].includes(values.format)) throw new Error('Format must be markdown or json');
   const { packet, result } = loadReview(resolve(input));
   const assessment = assess(packet, result, values['check-current'] ? checkCurrent(packet) : unverified());

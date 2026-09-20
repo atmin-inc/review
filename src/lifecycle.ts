@@ -1,5 +1,6 @@
 import type { Claim, Proposition } from './claim.js';
-import { composeChain, llmSignal, DEFAULT_THRESHOLDS, type Chain, type Evidence, type Thresholds } from './evidence.js';
+import type { PropositionStatus } from './evidence.js';
+import { composeChain, llmSignal, DEFAULT_THRESHOLDS, type Chain, type Evidence, type PropositionRecord, type Thresholds } from './evidence.js';
 import { runCheck, sideOf, type Revisions } from './symbolic.js';
 import { decide, findingsFrom, policyRejection, type Decision, type Policy } from './policy.js';
 
@@ -13,13 +14,17 @@ import { decide, findingsFrom, policyRejection, type Decision, type Policy } fro
 // compare owner to account before update()?" is the factual one, and it is also the
 // step rung 1 could not express.
 export interface CrossFamilyRung { settle(proposition: string, claim: Claim): Evidence[] }
-export interface Verification { chains: Chain[]; decision: Decision; limitations: string[] }
+export interface Verification { chains: Chain[]; decision: Decision; limitations: string[]; crossFamilyLog: CrossFamilyAnswer[] }
+// Every question the cross-family rung was asked and what it answered. Recording them
+// is what makes the rung's contribution measurable: the same claims can be verified
+// again with the rung replayed or switched off, exactly and for free, instead of a
+// second run that spends money and answers differently.
+export interface CrossFamilyAnswer { claimId: string; proposition: string; evidence: Evidence[] }
 
 // A claim is an argument, and a check settles one step of it. Tracking the steps
 // separately is the whole point: a grep establishes a syntactic fact, and a claim
 // like "any account can update any record" needs several of those facts before it
 // follows. Collapsing them let one hit stand in for the argument.
-export type PropositionStatus = 'established' | 'refuted' | 'unsettled';
 export interface PropositionOutcome {
   proposition: string; status: PropositionStatus; evidence: Evidence[]; limitations: string[];
 }
@@ -35,18 +40,22 @@ export function settleProposition(revisions: Revisions, item: Proposition): Prop
 }
 
 export function verifyClaim(claim: Claim, revisions: Revisions,
-  crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): { chain: Chain; limitations: string[] } {
+  crossFamily?: CrossFamilyRung, thresholds: Thresholds = DEFAULT_THRESHOLDS): { chain: Chain; limitations: string[]; asked: CrossFamilyAnswer[] } {
   const outcomes = claim.evidenceToCheck.map(item => settleProposition(revisions, item));
   const collected = outcomes.flatMap(outcome => outcome.limitations);
   const symbolic = outcomes.flatMap(outcome => outcome.evidence);
-  const chain = (verdict: Chain['verdict'], verifierConfidence: Chain['verifierConfidence'],
-    evidence: Evidence[], limitations: string[], suspectChecks: string[] = []): { chain: Chain; limitations: string[] } =>
-    ({ chain: { claimId: claim.claimId, verdict, evidence, verifierConfidence, suspectChecks, limitations }, limitations: collected });
+  const log: CrossFamilyAnswer[] = [];
+  const chain = (verdict: Chain['verdict'], verifierConfidence: Chain['verifierConfidence'], evidence: Evidence[],
+    propositions: PropositionRecord[], limitations: string[], suspectChecks: string[] = []) =>
+    ({ chain: { claimId: claim.claimId, verdict, evidence, verifierConfidence, propositions, suspectChecks, limitations },
+      limitations: collected, asked: log });
 
   // One proposition shown false is enough: the argument cannot hold without it, and no
   // later rung is invited to argue with a deterministic fact.
   if (outcomes.some(outcome => outcome.status === 'refuted')) {
-    return { chain: composeChain(claim.claimId, claim.severity, symbolic, thresholds), limitations: collected };
+    const records: PropositionRecord[] = outcomes.map(outcome =>
+      ({ proposition: outcome.proposition, status: outcome.status, settledBy: outcome.status === 'unsettled' ? null : 'symbolic' }));
+    return { chain: { ...composeChain(claim.claimId, claim.severity, symbolic, thresholds), propositions: records }, limitations: collected, asked: log };
   }
 
   // Rung 3 is asked about every proposition: the unsettled ones because it may be the
@@ -54,34 +63,39 @@ export function verifyClaim(claim: Claim, revisions: Revisions,
   // contradicts a check is reporting on the check.
   const asked = outcomes.map(outcome => {
     const evidence = crossFamily?.settle(outcome.proposition, claim) ?? [];
+    if (evidence.length) log.push({ claimId: claim.claimId, proposition: outcome.proposition, evidence });
     return { ...outcome, model: evidence, signal: llmSignal(evidence, thresholds) };
   });
-  const modelEvidence = asked.flatMap(item => item.model);
-  const evidence = [...symbolic, ...modelEvidence];
+  const evidence = [...symbolic, ...asked.flatMap(item => item.model)];
+  const records: PropositionRecord[] = asked.map(item => item.status !== 'unsettled'
+    ? { proposition: item.proposition, status: item.status, settledBy: 'symbolic' }
+    : item.signal === 'agrees' ? { proposition: item.proposition, status: 'established', settledBy: 'cross_family_llm' }
+    : item.signal === 'disagrees' ? { proposition: item.proposition, status: 'refuted', settledBy: 'cross_family_llm' }
+    : { proposition: item.proposition, status: 'unsettled', settledBy: null });
 
   // A model that disagrees with a check is not a vote against the code. It means the
   // check is a text proxy that may not mean what its proposition says, so the claim
   // does not ship and the check is recorded for tightening.
   const contradicted = asked.filter(item => item.status === 'established' && item.signal === 'disagrees');
   if (contradicted.length) {
-    return chain('inconclusive', 'low', evidence,
+    return chain('inconclusive', 'low', evidence, records,
       ['A check the model contradicts may not establish what its proposition says.'],
       contradicted.flatMap(item => item.evidence.map(one => one.check)));
   }
 
-  const refuted = asked.filter(item => item.status === 'unsettled' && item.signal === 'disagrees');
-  if (refuted.length) {
-    return chain('refuted', 'moderate', evidence,
-      refuted.map(item => `The model reports this proposition does not hold: ${JSON.stringify(item.proposition)}`));
+  const denied = records.filter(record => record.status === 'refuted');
+  if (denied.length) {
+    return chain('refuted', 'moderate', evidence, records,
+      denied.map(record => `The model reports this proposition does not hold: ${JSON.stringify(record.proposition)}`));
   }
 
-  const unsettled = asked.filter(item => item.status === 'unsettled' && item.signal !== 'agrees');
-  if (unsettled.length || !asked.length) {
-    return chain('inconclusive', 'low', evidence,
+  const unsettled = records.filter(record => record.status === 'unsettled');
+  if (unsettled.length || !records.length) {
+    return chain('inconclusive', 'low', evidence, records,
       [evidence.length
-        ? `${unsettled.length} of ${asked.length} propositions were not settled, so the claim does not follow from what was established.`
+        ? `${unsettled.length} of ${records.length} propositions were not settled, so the claim does not follow from what was established.`
         : 'No rung produced evidence for this claim.',
-      ...unsettled.map(item => `Unsettled: ${JSON.stringify(item.proposition)}`)]);
+      ...unsettled.map(record => `Unsettled: ${JSON.stringify(record.proposition)}`)]);
   }
 
   // Every step holds. An argument is only as strong as its weakest one, so a claim
@@ -89,11 +103,11 @@ export function verifyClaim(claim: Claim, revisions: Revisions,
   // it was established. Rung 2 is absent by construction in v1: it reads CI output
   // this corpus does not carry, and composeChain records that rather than passing
   // over it.
-  const modelOnly = asked.some(item => item.status === 'unsettled');
+  const modelOnly = records.some(record => record.settledBy === 'cross_family_llm');
   return {
-    chain: composeChain(claim.claimId, claim.severity, evidence, thresholds, claim.severity,
-      modelOnly ? 'moderate' : 'high'),
-    limitations: collected,
+    chain: { ...composeChain(claim.claimId, claim.severity, evidence, thresholds, claim.severity,
+      modelOnly ? 'moderate' : 'high'), propositions: records },
+    limitations: collected, asked: log,
   };
 }
 
@@ -108,5 +122,6 @@ export function verifyClaims(claims: Claim[], revisions: Revisions, policy: Poli
     chains,
     decision: decide(findingsFrom(chains, id => types.get(id)!), policy),
     limitations: verified.flatMap(item => item.limitations),
+    crossFamilyLog: verified.flatMap(item => item.asked),
   };
 }
