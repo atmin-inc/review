@@ -155,3 +155,37 @@ test('the call cap skips claims rather than exceeding it', async t => {
   assert.equal(calls, 1);
   assert.equal(skippedClaims.length, 1);
 });
+
+// The state has to carry every file the claim's checks name, not only the one the
+// claim is located in. A `file_contains` proposition is about another file, and a
+// state without it asks Jev about text it was never shown — it answers no, correctly,
+// and the verifier reads that as rung 3 contradicting a true symbolic fact. Observed
+// live on 2026-09-20: grep confirmed a test asserts /Forbidden/ and Jev returned 0.12
+// on the same proposition, which held back a correct auth_bypass.
+test('the state carries the files the checks name, not just the located file', () => {
+  const files = {
+    'update.ts': 'export function update(record, account) {\n  record.value = 1;\n}\n',
+    'update.test.ts': "test('rejects another account', () => {\n  assert.throws(() => update(r, other), /Forbidden/);\n});\n",
+  };
+  const revision = {
+    search: () => ({ matches: [], truncated: false }),
+    lineAt: (path, line) => files[path]?.split('\n')[line - 1] ?? null,
+    slice: (path, startLine, count) => files[path]
+      ? files[path].split('\n').slice(startLine - 1, startLine - 1 + count).join('\n') : null,
+  };
+  const claim = {
+    claimId: 'c-test', type: 'auth_bypass', location: 'update.ts:1',
+    description: 'update() no longer compares owner to account.',
+    suspectedCondition: 'Another account submits a known record id.',
+    severity: 'P1',
+    evidenceToCheck: [
+      { proposition: 'A test expects the rejection.',
+        check: { assertion: 'file_contains', path: 'update.test.ts', pattern: 'Forbidden' } },
+    ],
+  };
+
+  const state = jevState(claim, { head: revision, base: revision }, 'diff text');
+  assert.deepEqual(state.files.map(file => file.path), ['update.ts', 'update.test.ts'],
+    'the located file first, then every path a check names');
+  assert.match(JSON.stringify(state), /Forbidden/, 'the text the proposition is about is in the state');
+});

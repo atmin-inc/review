@@ -21,6 +21,7 @@ const check = (assertion: string, fields: Record<string, object>) => ({
 const symbolicCheck = { oneOf: [
   check('declaration_contains', { symbol: str, pattern: str }),
   check('body_contains', { symbol: str, pattern: str }),
+  check('file_contains', { path: str, pattern: str }),
   check('referenced_outside', { symbol: str, path: str }),
 ] };
 const side = { type: 'string', enum: ['head', 'base'] };
@@ -71,6 +72,7 @@ That last field is the one that matters. A check establishes a fact about text; 
 The checks available are:
 - declaration_contains(symbol, pattern): the line declaring symbol contains pattern.
 - body_contains(symbol, pattern): the body of symbol contains pattern.
+- file_contains(path, pattern): the file at path contains pattern. Use this, not body_contains, whenever the proposition is about a file rather than about one definition — what a test asserts, what a caller passes. body_contains needs a real declaration to scope to, and a file path or a bare call name is not one.
 - referenced_outside(symbol, path): symbol is referenced outside path.
 Each takes expect: "present" (the default) or "absent". Use "absent" when the proposition is that something is missing — a removed guard, an unapplied bound. Each also takes revision: "head" (the default) or "base". Patterns are literal text, not regular expressions. A proposition you cannot express as a check is still worth stating; leave its check out and say so.
 

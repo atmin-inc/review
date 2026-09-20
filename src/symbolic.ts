@@ -108,6 +108,25 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     };
   }
 
+  if (check.assertion === 'file_contains') {
+    const label = `grep: ${check.path}${at} ${expect === 'present' ? 'contains' : 'lacks'} ${JSON.stringify(check.pattern)}`;
+    // A file that is not in this revision settles nothing. Reading it as "the pattern
+    // is absent" would let a claim about a test be supported by the test not existing,
+    // which is a different claim and one nobody made.
+    if (revision.slice(check.path, 1, 1) === null) {
+      return inconclusive(label, `${check.path} does not exist in this revision`);
+    }
+    const { matches, truncated } = revision.search(check.pattern);
+    const inFile = matches.filter(match => match.path === check.path);
+    // The search caps, and a cap proves nothing about what it did not reach. Absence
+    // stays unestablished rather than being reported as the refutation a miss is.
+    if (!inFile.length && truncated) {
+      return inconclusive(label, 'the search truncated before it could rule out a match in this file');
+    }
+    const where = inFile.length ? ` (${check.path}:${inFile[0]!.line})` : ` (${check.path})`;
+    return { evidence: [{ rung: 'symbolic', check: `${label}${where}`, result: settle(inFile.length > 0, expect) }], limitations: [] };
+  }
+
   const label = `grep: \`${check.symbol}\` ${expect === 'present' ? 'referenced' : 'unreferenced'} outside ${check.path}${at}`;
   const { matches, truncated } = revision.search(check.symbol);
   const outside = matches.filter(match => match.path !== check.path);

@@ -23,9 +23,18 @@ export type ClaimType = typeof CLAIM_TYPES[number];
 export type Expectation = 'present' | 'absent';
 export type Side = 'head' | 'base';
 interface Sided { expect?: Expectation; revision?: Side }
+//
+// `file_contains` exists because the other three are all scoped to a symbol, and the
+// claims a reviewer most wants to make about a change are often about a *file*: the
+// test that covers the changed function, the caller that relies on it. The first live
+// runs (2026-09-20, see AGENTS.md) showed the cost of not having it: the model reached
+// for `body_contains` with `symbol: "test"` or with a file path, no declaration was
+// found, the proposition went unsettled, and one unsettled proposition is enough to
+// make a whole claim inconclusive. That produced a merge verdict on a real auth bypass.
 export type SymbolicCheck =
   | ({ assertion: 'declaration_contains'; symbol: string; pattern: string } & Sided)
   | ({ assertion: 'body_contains'; symbol: string; pattern: string } & Sided)
+  | ({ assertion: 'file_contains'; path: string; pattern: string } & Sided)
   | ({ assertion: 'referenced_outside'; symbol: string; path: string } & Sided);
 
 // A proposition is one thing that must hold for the claim to follow, paired with the
