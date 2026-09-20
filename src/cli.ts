@@ -15,7 +15,7 @@ import { costReport } from './cost-report.js';
 const help = `atmin review — source investigation and evidence tools
 
   atmin-review review <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
-  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>]
+  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>] [--cross-family none|jev]
   atmin-review claim-ablate <directory> [--rung symbolic|cross_family_llm]
   atmin-review prepare <https://github.com/owner/repo/pull/number> [--out <new-directory>]
   atmin-review render <directory> [--format markdown|json] [--check-current] [--out <new-file>]
@@ -29,6 +29,8 @@ investigate sends frozen source to the configured API, with bounded reads and us
 claim-review runs the claim lifecycle: a wide pass emits falsifiable claims, a separate
 pass settles each one against the frozen revision, and the verdict is composed from what
 survived. Claims that die are shown, not hidden.
+--cross-family jev answers rung 3 with Jev over the TypeSafe API, using TYPESAFE_API_KEY.
+Without it rung 3 stays silent and no claim reaches high confidence through agreement.
 claim-ablate re-verifies a finished claim-review with one rung switched off, replaying
 recorded model answers on both sides so the difference is that rung alone, and reports
 what it contributed. It spends nothing and changes nothing.
@@ -37,26 +39,28 @@ No repository scripts, GitHub writes or merge approvals. Required execution rema
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, strict: true,
-    options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' } } });
+    options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' }, 'cross-family': { type: 'string' } } });
   if (values.help || !positionals.length) { process.stdout.write(help); return; }
   const [operation, input] = positionals;
   if (!input || positionals.length !== 2) throw new Error('Expected one command and one input; use --help');
   if (operation === 'claim-ablate') {
-    if (values.profile || values.format || values['check-current'] || values.out) throw new Error('claim-ablate takes only a directory and --rung');
+    if (values.profile || values.format || values['check-current'] || values.out || values['cross-family']) throw new Error('claim-ablate takes only a directory and --rung');
     const rung = values.rung ?? 'cross_family_llm';
     if (rung !== 'symbolic' && rung !== 'cross_family_llm') throw new Error('Measurable rungs are symbolic and cross_family_llm');
     process.stdout.write(renderContribution(ablate(resolve(input), rung)));
     return;
   }
   if (operation === 'claim-review') {
-    if (!values.profile || values.format || values['check-current']) throw new Error('claim-review requires --profile and accepts only --out');
+    if (!values.profile || values.format || values['check-current']) throw new Error('claim-review requires --profile and accepts only --out and --cross-family');
+    const crossFamily = values['cross-family'] ?? 'none';
+    if (crossFamily !== 'none' && crossFamily !== 'jev') throw new Error('--cross-family must be none or jev');
     const profile = readProfile(resolve(values.profile));
     const directory = input.startsWith('https://') ? prepare(input, values.out).directory : resolve(input);
     const controller = new AbortController();
     const cancel = () => controller.abort();
     process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
     try {
-      const { claims, investigation, verification } = await runClaimReview(directory, profile, undefined, controller.signal);
+      const { claims, investigation, verification } = await runClaimReview(directory, profile, undefined, controller.signal, undefined, crossFamily);
       process.stdout.write(renderClaimReview(claims, verification, investigation));
       process.stderr.write(`Private review artifacts: ${directory}\n`);
       if (investigation.stopReason !== 'finished') process.exitCode = 2;
@@ -84,6 +88,7 @@ async function main(): Promise<void> {
   }
   if (values.profile) throw new Error('--profile is only valid for review, investigate or claim-review');
   if (values.rung) throw new Error('--rung is only valid for claim-ablate');
+  if (values['cross-family']) throw new Error('--cross-family is only valid for claim-review');
   if (operation === 'cost') {
     if (values.format || values['check-current']) throw new Error('cost accepts only --out');
     const output = `${JSON.stringify(costReport(resolve(input)), null, 2)}\n`;

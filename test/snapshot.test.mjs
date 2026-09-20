@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, renameSync, unlinkSync, symlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { capture, loadReview, parsePullUrl, readPull, compareCurrent, prepare, sourceText, searchSource, changedSourceRanges } from '../dist/snapshot.js';
+import { capture, loadReview, parsePullUrl, readPull, refPath, compareCurrent, prepare, sourceText, searchSource, changedSourceRanges } from '../dist/snapshot.js';
 import { defaultPolicy } from '../dist/contracts.js';
 import { repository, completed, finding, persist } from './helpers.mjs';
 
@@ -148,7 +148,18 @@ test('current target ref is fetched separately from stale PR base metadata', t =
       : { object: { type: 'commit', sha: f.state.baseSha } };
   });
   assert.equal(state.baseSha, f.state.baseSha);
-  assert.equal(requests[1], 'repos/test/review-fixture/git/ref/heads/release%2Fnext');
+  // The slash separates path segments; encoding it to %2F made GitHub reject the
+  // request, so every PR targeting a branch with a slash in its name failed to prepare.
+  assert.equal(requests[1], 'repos/test/review-fixture/git/ref/heads/release/next');
+});
+
+// The encoding still has to stop a ref from walking out of the endpoint it is
+// interpolated into, which is what encoding the whole ref bought.
+test('a target branch cannot walk out of the ref endpoint', () => {
+  for (const ref of ['../../../../secrets', 'release/../../x', 'release//next', './next']) {
+    assert.throws(() => refPath(ref), /not a valid ref path/);
+  }
+  assert.equal(refPath('feature/a b?c'), 'feature/a%20b%3Fc');
 });
 
 test('head movement, target movement, retargeting and closed PR all supersede', t => {

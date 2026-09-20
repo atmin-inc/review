@@ -68,6 +68,17 @@ export function parsePullUrl(input: string): { repository: string; pr: number } 
   requireValue(Number.isSafeInteger(pr), 'Invalid PR number');
   return { repository: `${match[1]}/${match[2]}`, pr };
 }
+// A branch name is several path segments, not one. Encoding the whole ref turns the
+// separators in `codex/suggestion-demo-base` into %2F, which GitHub rejects, so every
+// PR targeting a branch with a slash in its name looked unpreparable. Each segment is
+// still encoded, and `.` and `..` are refused, so a ref cannot walk out of the
+// endpoint it was interpolated into.
+export function refPath(ref: string): string {
+  const segments = ref.split('/');
+  requireValue(segments.every(segment => segment.length > 0 && segment !== '.' && segment !== '..'),
+    'Target branch name is not a valid ref path');
+  return segments.map(encodeURIComponent).join('/');
+}
 type Request = (endpoint: string) => unknown;
 const api: Request = endpoint => JSON.parse(decode(command('gh', ['api', '--hostname', 'github.com', endpoint])));
 function record(value: unknown): Record<string, unknown> {
@@ -84,7 +95,7 @@ export function readPull(repository: string, pr: number, request: Request = api)
   requireValue(pull.number === pr && typeof baseRepo.full_name === 'string' && baseRepo.full_name.toLowerCase() === repository.toLowerCase(), 'GitHub PR identity changed');
   requireValue(typeof base.ref === 'string' && base.ref.length > 0, 'Missing target branch');
   // The PR object's base.sha may lag the actual target branch.
-  const ref = record(request(`repos/${repository}/git/ref/heads/${encodeURIComponent(base.ref)}`));
+  const ref = record(request(`repos/${repository}/git/ref/heads/${refPath(base.ref)}`));
   const object = record(ref.object);
   requireValue(object.type === 'commit' && typeof object.sha === 'string' && shaPattern.test(object.sha), 'Cannot resolve current target commit');
   requireValue(typeof head.sha === 'string' && shaPattern.test(head.sha), 'Cannot resolve PR head');
