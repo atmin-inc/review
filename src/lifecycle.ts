@@ -1,7 +1,7 @@
 import type { Claim, Proposition } from './claim.js';
 import type { PropositionStatus } from './evidence.js';
 import { composeChain, llmSignal, DEFAULT_THRESHOLDS, type Chain, type Evidence, type PropositionRecord, type Thresholds } from './evidence.js';
-import { runCheck, sideOf, type Revisions } from './symbolic.js';
+import { runCheck, sideOf, type Revisions, type Side, type SymbolicCheck } from './symbolic.js';
 import { decide, findingsFrom, policyRejection, type Decision, type Policy } from './policy.js';
 
 // The verification half of the lifecycle: a claim set in, a verdict composed in code
@@ -29,14 +29,43 @@ export interface PropositionOutcome {
   proposition: string; status: PropositionStatus; evidence: Evidence[]; limitations: string[];
 }
 
+// A miss refutes only when it rests on finding something. With `expect: 'absent'` it
+// does: the pattern was there, which contradicts the proposition outright. With
+// `expect: 'present'` it rests on NOT finding a literal string, and absence of a string
+// is not absence of the property the proposition names — the comparison may have moved
+// to a helper, or be spelled another way.
+//
+// That inference fails hardest in the one place a review looks. If the same pattern is
+// on the other side of the change, the miss IS the change, and a claim about the change
+// cannot be refuted by the change itself. Measured 2026-09-20 on PR #2: the proposition
+// "the account object has an ownerId property" was checked as
+// body_contains(renameAccount, "ownerId") at head, where the very deletion being
+// reported guarantees the miss. That refuted a correct auth_bypass, and refuted is the
+// strongest verdict there is — worse than the inconclusive an unsettled step gives,
+// because it asserts the claim is false rather than unproven.
+//
+// So such a miss is downgraded to unsettled and handed to a later rung, which is what
+// an unreached proposition has always meant. A miss that is not circular still refutes.
+function removedByTheChange(revisions: Revisions, check: SymbolicCheck): boolean {
+  if ((check.expect ?? 'present') !== 'present') return false;
+  const otherSide: Side = check.revision === 'base' ? 'head' : 'base';
+  const other = otherSide === 'base' ? revisions.base : revisions.head;
+  return runCheck(other, { ...check, revision: otherSide }).evidence[0]?.result === 'hit';
+}
+
 export function settleProposition(revisions: Revisions, item: Proposition): PropositionOutcome {
   if (!item.check) {
     return { proposition: item.proposition, status: 'unsettled', evidence: [], limitations: [] };
   }
   const outcome = runCheck(sideOf(revisions, item.check), item.check);
   const result = outcome.evidence[0]?.result;
-  const status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
-  return { proposition: item.proposition, status, evidence: outcome.evidence, limitations: outcome.limitations };
+  let status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
+  const limitations = [...outcome.limitations];
+  if (status === 'refuted' && removedByTheChange(revisions, item.check)) {
+    status = 'unsettled';
+    limitations.push(`${outcome.evidence[0]!.check}: the pattern is present on the other side of the change, so this miss is the change itself and cannot refute a claim about it.`);
+  }
+  return { proposition: item.proposition, status, evidence: outcome.evidence, limitations };
 }
 
 export function verifyClaim(claim: Claim, revisions: Revisions,

@@ -225,3 +225,67 @@ test('a claim whose trigger already existed at the merge base is refuted, not re
   assert.equal(chains[0].verifierConfidence, 'high');
   assert.equal(decision.verdict, 'merge', 'a pre-existing condition is not this change to answer for');
 });
+
+// Measured on PR #2 of this repository, 2026-09-20. The model wrote the proposition
+// "the account object has an ownerId property" and checked it with
+// body_contains(renameAccount, "ownerId") at head — inside the very function whose
+// deleted guard was the only mention of ownerId. The grep missed because the defect
+// removed it, and a miss on rung 1 refutes, so a correct auth_bypass came back as a
+// confident denial. Absence of a string is not absence of a property, and a claim about
+// a change cannot be refuted by that change.
+test('a miss that the change itself caused does not refute the claim about it', t => {
+  const circular = {
+    type: 'auth_bypass', location: 'update.ts:2',
+    description: 'update() no longer compares owner to account.',
+    suspectedCondition: 'A different account submits a known record id.',
+    severity: 'P1',
+    evidenceToCheck: [
+      // True of the code, and checked in the one place the deletion guarantees a miss.
+      { proposition: 'The comparison operands are owner and account.',
+        check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account' } },
+    ],
+  };
+  const { chains } = run(t, [circular]);
+  assert.notEqual(chains[0].verdict, 'refuted', 'the change cannot refute a claim about the change');
+  assert.equal(chains[0].propositions[0].status, 'unsettled');
+  assert.equal(chains[0].propositions[0].settledBy, null, 'it is handed on, not settled');
+});
+
+// The other half of the rule, and the reason it is narrow. A miss still refutes when it
+// is not the change that caused it: the pattern is absent on both sides, so the model
+// was simply wrong about the code. Keeping this conclusive is what stops the fix above
+// from turning every failed lookup into a shrug.
+test('a miss the change did not cause still refutes', t => {
+  const wrong = {
+    type: 'auth_bypass', location: 'update.ts:2',
+    description: 'update() delegates to a permissions service.',
+    suspectedCondition: 'A different account submits a known record id.',
+    severity: 'P1',
+    evidenceToCheck: [
+      { proposition: 'update() calls the permissions service.',
+        check: { assertion: 'body_contains', symbol: 'update', pattern: 'permissions.check(' } },
+    ],
+  };
+  const { chains } = run(t, [wrong]);
+  assert.equal(chains[0].verdict, 'refuted');
+  assert.equal(chains[0].propositions[0].status, 'refuted');
+});
+
+// An `expect: absent` miss rests on having FOUND the pattern, which is positive
+// evidence and contradicts the proposition outright. It must keep refuting whether or
+// not the other side also has it, or the rule above would swallow the legitimate
+// refutations this repository's audit cases were written for.
+test('a miss that rests on finding the pattern still refutes', t => {
+  const found = {
+    type: 'contract_break', location: 'update.ts:1',
+    description: 'update() takes no owner argument.',
+    suspectedCondition: 'A caller passes an owner and it is ignored.',
+    severity: 'P2',
+    evidenceToCheck: [
+      { proposition: 'update() does not mention owner at all.',
+        check: { assertion: 'declaration_contains', symbol: 'update', pattern: 'owner', expect: 'absent' } },
+    ],
+  };
+  const { chains } = run(t, [found]);
+  assert.equal(chains[0].verdict, 'refuted');
+});
