@@ -289,3 +289,68 @@ test('a miss that rests on finding the pattern still refutes', t => {
   const { chains } = run(t, [found]);
   assert.equal(chains[0].verdict, 'refuted');
 });
+
+// A refutation is the strongest verdict available and, until --question-refutations,
+// the least protected: verifyClaim returned before rung 3, so suspectChecks only ever
+// guarded propositions a check ESTABLISHED. Measured 2026-09-20 on PR #2 — "there is no
+// other function or middleware that enforces ownership" checked with
+// referenced_outside(expect: absent), which asks whether the function is called at all.
+// The test file calls it, the check missed, and a correct auth_bypass died.
+const MISMATCHED = {
+  type: 'auth_bypass', location: 'update.ts:2',
+  description: 'update() no longer compares owner to account.',
+  suspectedCondition: 'A different account submits a known record id.',
+  severity: 'P1',
+  evidenceToCheck: [
+    // The proposition is about whether the function enforces ownership. The check asks
+    // whether the word "owner" appears in its declaration — which it does, as a
+    // parameter name. Two different statements, and the parameter survives the change
+    // that removed the guard, so the check refutes a claim that is true.
+    { proposition: 'update() takes no notion of an owner into account.',
+      check: { assertion: 'declaration_contains', symbol: 'update', pattern: 'owner', expect: 'absent' } },
+  ],
+};
+const answering = probability => ({ settle: proposition => [{ rung: 'cross_family_llm', check: `jev noul: ${proposition}`, result: probability }] });
+const withOptions = (t, claims, crossFamily, options) => {
+  const fixture = repository(t);
+  const withIds = assignClaimIds(claims, path => sourceText(fixture.source, fixture.packet.headSha, path));
+  return verifyClaims(withIds, revisionsOf(fixture), BALANCED, crossFamily, undefined, options);
+};
+
+test('a lone refuting check is not questioned unless asked to be', t => {
+  const { chains, crossFamilyLog } = withOptions(t, [MISMATCHED], answering(0.95), {});
+  assert.equal(chains[0].verdict, 'refuted', 'the default keeps the rule that no rung argues with a refutation');
+  assert.deepEqual(crossFamilyLog, [], 'and spends nothing doing it');
+});
+
+test('a model that contradicts a lone refuting check holds the claim back instead', t => {
+  const { chains, crossFamilyLog } = withOptions(t, [MISMATCHED], answering(0.95), { questionRefutations: true });
+  assert.equal(chains[0].verdict, 'inconclusive', 'a contradicted check does not get to assert the claim is false');
+  assert.equal(chains[0].propositions[0].status, 'unsettled');
+  assert.equal(chains[0].suspectChecks.length, 1, 'the check is recorded for tightening');
+  assert.equal(crossFamilyLog.length, 1, 'exactly one extra question, on the claim that turned on it');
+});
+
+test('a model that agrees with a lone refuting check leaves the refutation standing', t => {
+  const { chains } = withOptions(t, [MISMATCHED], answering(0.02), { questionRefutations: true });
+  assert.equal(chains[0].verdict, 'refuted', 'corroborated, so nothing changes');
+});
+
+test('a neutral answer leaves the refutation standing too', t => {
+  const { chains } = withOptions(t, [MISMATCHED], answering(0.5), { questionRefutations: true });
+  assert.equal(chains[0].verdict, 'refuted', 'an answer that settles nothing does not reverse a check');
+});
+
+// Narrow on purpose. With several propositions refuted there is no single point of
+// failure to question, and paying for a call on every dying claim is the cost the flag
+// exists to bound.
+test('only a lone refuting check is questioned, not a claim refuted several ways', t => {
+  const twoWays = { ...MISMATCHED, evidenceToCheck: [
+    MISMATCHED.evidenceToCheck[0],
+    { proposition: 'update() calls a permissions service.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'permissions.check(' } },
+  ] };
+  const { chains, crossFamilyLog } = withOptions(t, [twoWays], answering(0.95), { questionRefutations: true });
+  assert.equal(chains[0].verdict, 'refuted');
+  assert.deepEqual(crossFamilyLog, [], 'no question asked, so no call paid for');
+});

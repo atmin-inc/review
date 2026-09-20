@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { loadReview, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
 import { investigateClaims, type ClaimInvestigation } from './investigator.js';
-import { verifyClaims, type CrossFamilyRung, type Verification } from './lifecycle.js';
+import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptions } from './lifecycle.js';
 import { contributionOf, recordedRung, type RungContribution } from './ablation.js';
 import { askJev } from './jev.js';
 import { BALANCED } from './policy.js';
@@ -26,7 +26,7 @@ export type CrossFamilySource = 'none' | 'jev';
 
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
-  crossFamilySource: CrossFamilySource = 'none'): Promise<ClaimReview> {
+  crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {}): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
   if (profile.provider === 'codex-local' && !injectedModel) {
     throw new Error('Local subscription experiments require the benchmark Codex adapter; hosted execution is not supported');
@@ -52,9 +52,9 @@ export async function runClaimReview(directory: string, profile: Profile,
   // investigator believed does not travel with them.
   let rung = crossFamily;
   if (!rung && crossFamilySource === 'jev' && investigation.claims.length) {
-    rung = recordedRung((await askJev(investigation.claims, revisions, context.diff, { signal })).log);
+    rung = recordedRung((await askJev(investigation.claims, revisions, context.diff, { signal, verify })).log);
   }
-  const verification = verifyClaims(investigation.claims, revisions, BALANCED, rung);
+  const verification = verifyClaims(investigation.claims, revisions, BALANCED, rung, undefined, verify);
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
