@@ -21,14 +21,13 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 // Second, Jev answers many questions against one state in a single call, so one call
 // covers one claim and all of its propositions.
 
-// WIRE FORMAT — UNVERIFIED. SMOKE_TEST_JEV.md documents the endpoint, the Bearer
-// header, that `state` is a JSON object, that `questions` is a map evaluated in
-// parallel against it, and that a Noul returns the probability of yes and carries no
-// separate confidence. It does not record the field names of the request body or the
-// response, and `.smoke/jev-schema.json` is not in this repository. The shapes below
-// are this adapter's assumption, kept in these two functions alone so that one live
-// call either confirms them or corrects exactly one place. Parsing is strict: a
-// response that does not match fails loudly rather than being coerced into a
+// WIRE FORMAT — verified against the live API on 2026-09-20, and against the schema it
+// publishes at https://api.typesafe.ai/openapi.json, which is the contract that
+// `.smoke/jev-schema.json` was missing from this repository. A question is a
+// `NoulQuestion`: `type: 'noul'`, the statement in `instructions`, and a `NoulCriteria`
+// object under `criteria` with a `true` and a `false` side. An answer is a
+// `NoulAnswer`: `type: 'noul'` with the probability of yes in `noul`. Parsing stays
+// strict: a response that does not match fails loudly rather than being coerced into a
 // probability, because a wrong number here silently decides whether claims ship.
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
@@ -41,11 +40,16 @@ export function jevRequest(state: unknown, questions: JevQuestion[]): string {
     state,
     questions: Object.fromEntries(questions.map(question => [question.key, {
       type: 'noul',
-      question: question.proposition,
+      instructions: question.proposition,
       // The criteria say what "yes" means, because the proposition is a statement and
       // a Noul answers a question. Without this the model is free to read the
-      // statement as a request for its opinion of the change.
-      criteria: 'Answer yes only if this statement is true of the code in the state as given. Judge the code, not the intent of the change.',
+      // statement as a request for its opinion of the change. `true` and `false` are
+      // the two sides of the Noul, so both are stated rather than leaving the model
+      // to infer the negative.
+      criteria: {
+        true: 'This statement is true of the code in the state as given. Judge the code, not the intent of the change.',
+        false: 'This statement is not true of the code in the state as given.',
+      },
     }])),
   });
 }
@@ -59,7 +63,11 @@ export function jevAnswers(body: unknown, questions: JevQuestion[]): Map<string,
   const answers = record(record(body).answers);
   return new Map(questions.map(question => {
     const answer = record(answers[question.key]);
-    const probability = answer.probability;
+    // An Answer is a union discriminated on `type`, and only a Noul carries a
+    // probability. A Score or a Choice in this slot is the wrong answer to the
+    // question we asked, not a number to read.
+    if (answer.type !== 'noul') throw new ProviderRequestError('inference');
+    const probability = answer.noul;
     if (typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) {
       throw new ProviderRequestError('inference');
     }

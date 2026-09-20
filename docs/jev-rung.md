@@ -22,7 +22,7 @@ proposition returns nothing, which the lifecycle already reads as unsettled. A r
 key is the exception: it throws, because a whole review with every rung-3 question
 silently unanswered looks like a review where the model had nothing to add.
 
-## The wire format is unverified
+## The wire format, verified
 
 `SMOKE_TEST_JEV.md` records the endpoint (`POST https://api.typesafe.ai/v1/systemone`),
 the `Authorization: Bearer` header, that `state` is a JSON object, that `questions` is a
@@ -31,18 +31,36 @@ probability of yes and carries no separate confidence. It does not record the fi
 names of the request body or of the response, and `.smoke/jev-schema.json` is not in
 this repository.
 
-`jevRequest` and `jevAnswers` are this adapter's assumption about those names, and
-nothing else in the codebase depends on them. The assumed response is:
+The API publishes those names itself, at `https://api.typesafe.ai/openapi.json`. The
+first live call was made on 2026-09-20 and `jevRequest` and `jevAnswers` now match what
+it returned. The adapter's earlier assumption was wrong in three places, all of them
+inside those two functions as intended:
+
+| | Assumed | Actual |
+| --- | --- | --- |
+| the statement | `question` | `instructions` |
+| the criteria | a string | a `NoulCriteria` object with a `true` and a `false` side |
+| the probability | `answers.<key>.probability` | `answers.<key>.noul`, beside `type: "noul"` |
+
+A request and the response it now gets:
 
 ```json
-{ "answers": { "p0": { "probability": 0.94 } } }
+{ "model": "jev-latest", "state": { ... },
+  "questions": { "p0": { "type": "noul", "instructions": "<the proposition>",
+    "criteria": { "true": "...", "false": "..." } } } }
+```
+
+```json
+{ "model": "jev-1.13.0", "answers": { "p0": { "type": "noul", "noul": 0.98 } },
+  "usage": { "input_tokens": 334, "output_tokens": 21 } }
 ```
 
 `jevAnswers` parses strictly and throws on anything else, rather than hunting for a
-number somewhere in the body. A wrong probability here decides whether claims ship, so
-an unrecognized shape must stop the run and not be coerced into one. The first live
-call either confirms these two functions or corrects them, and it corrects nothing
-else.
+number somewhere in the body. It checks `type` as well as the number, because an
+`Answer` is a union discriminated on `type` and only a Noul carries a probability: a
+Score or a Choice in that slot is the wrong answer to the question we asked, not a
+number to read. A wrong probability here decides whether claims ship, so an
+unrecognized shape must stop the run and not be coerced into one.
 
 ## What the model is told
 

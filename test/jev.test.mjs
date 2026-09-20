@@ -80,19 +80,22 @@ test('each proposition becomes one noul question', t => {
   const body = JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.' }, { key: 'p1', proposition: 'B holds.' }]));
   assert.deepEqual(Object.keys(body.questions), ['p0', 'p1']);
   assert.equal(body.questions.p0.type, 'noul');
-  assert.equal(body.questions.p0.question, 'A holds.');
-  assert.match(body.questions.p1.criteria, /Judge the code/);
+  assert.equal(body.questions.p0.instructions, 'A holds.');
+  assert.match(body.questions.p1.criteria.true, /Judge the code/);
+  assert.equal(typeof body.questions.p1.criteria.false, 'string');
 });
 
-// The wire format is documented only in prose, so a response that does not match it
-// must stop the run. Coercing an unexpected shape into a number would let a made-up
-// probability decide whether a claim ships.
-test('a response that does not match the assumed shape fails rather than being coerced', () => {
+// A response that does not match the published schema must stop the run. Coercing an
+// unexpected shape into a number would let a made-up probability decide whether a
+// claim ships. `type` is checked too: an Answer is a union, and only a Noul carries a
+// probability, so a Score or a Choice in that slot is the wrong answer, not a number.
+test('a response that does not match the published shape fails rather than being coerced', () => {
   const questions = [{ key: 'p0', proposition: 'A holds.' }];
-  assert.equal(jevAnswers({ answers: { p0: { probability: 0.9 } } }, questions).get('p0'), 0.9);
-  for (const body of [{}, { answers: {} }, { answers: { p0: {} } }, { answers: { p0: { probability: '0.9' } } },
-    { answers: { p0: { probability: 1.4 } } }, { answers: { p0: { probability: Number.NaN } } },
-    { answers: { p1: { probability: 0.9 } } }]) {
+  assert.equal(jevAnswers({ answers: { p0: { type: 'noul', noul: 0.9 } } }, questions).get('p0'), 0.9);
+  for (const body of [{}, { answers: {} }, { answers: { p0: {} } }, { answers: { p0: { type: 'noul', noul: '0.9' } } },
+    { answers: { p0: { type: 'noul', noul: 1.4 } } }, { answers: { p0: { type: 'noul', noul: Number.NaN } } },
+    { answers: { p0: { type: 'score', score: 3 } } }, { answers: { p0: { noul: 0.9 } } },
+    { answers: { p1: { type: 'noul', noul: 0.9 } } }]) {
     assert.throws(() => jevAnswers(body, questions), /Provider/);
   }
 });
@@ -101,7 +104,7 @@ test('a response that does not match the assumed shape fails rather than being c
 // answers come back as a log the verifier replays rather than as a live call inside it.
 test('one call answers every proposition of a claim, and the log verifies', async t => {
   const { claims, revisions } = setUp(t, [SURVIVES, DIES]);
-  const transport = transportReturning(() => ok({ answers: { p0: { probability: 0.94 }, p1: { probability: 0.91 } } }));
+  const transport = transportReturning(() => ok({ answers: { p0: { type: 'noul', noul: 0.94 }, p1: { type: 'noul', noul: 0.91 } } }));
   const { log, calls, skippedClaims } = await askJev(claims, revisions, 'diff text',
     { apiKey: 'test-key', transport });
   assert.equal(calls, 1);
@@ -146,7 +149,7 @@ test('a rejected key stops the run rather than silently emptying rung 3', async 
 // The cap is on calls, not on claims, so a wide pass cannot turn into unbounded spend.
 test('the call cap skips claims rather than exceeding it', async t => {
   const { claims, revisions } = setUp(t, [SURVIVES, { ...SURVIVES, location: 'update.ts:3', severity: 'P3' }]);
-  const transport = transportReturning(() => ok({ answers: { p0: { probability: 0.8 }, p1: { probability: 0.8 } } }));
+  const transport = transportReturning(() => ok({ answers: { p0: { type: 'noul', noul: 0.8 }, p1: { type: 'noul', noul: 0.8 } } }));
   const { calls, skippedClaims } = await askJev(claims, revisions, 'diff text',
     { apiKey: 'test-key', transport, limits: { maxCalls: 1, timeoutMs: 1000 } });
   assert.equal(calls, 1);
