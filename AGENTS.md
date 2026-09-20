@@ -34,11 +34,17 @@ the public export. `GET /v1/models` lists `jev-latest` and `jev-preview`. Verifi
 
 - A real model emits usable claims: it found the defect every run, typed and located it
   correctly, and wrote propositions the symbolic rung settled.
-- **Known gap.** Its dominant failure mode is scoping a check to a symbol that is not a
-  declaration — `symbol: "test"`, or a file path. The check finds nothing, the
-  proposition is unsettled, and one unsettled proposition makes the whole claim
-  inconclusive. That alone produced a merge verdict on a real auth bypass. There is no
-  assertion that scopes a pattern to a *file* rather than a symbol.
+- **Closed since.** Its dominant failure mode was scoping a check to a symbol that is
+  not a declaration — `symbol: "test"`, or a file path — which left the proposition
+  unsettled and made the whole claim inconclusive. `file_contains(path, pattern)` was
+  added for this; the model now reaches for it and no proposition goes unsettled.
+- **Watch the state, not just the check.** Adding `file_contains` exposed a second bug:
+  `jevState` sent Jev only the file the claim was *located* in, so a proposition about
+  a test asked the model about text it had never been shown. It answered no, correctly,
+  and the verifier read that as rung 3 contradicting a true symbolic fact — grep found
+  `/Forbidden/` at `test/suggestion-demo.test.mjs:12` and Jev returned 0.12 on the same
+  proposition. The state now carries every file the claim's checks name, capped at four.
+  The general rule: a rung may only be asked about what it was sent.
 - Run-to-run variance is high: three runs on one frozen snapshot gave three claim sets
   and three verdicts. Single-run precision numbers mean little.
 - Rung 3 contributed nothing to claim selection in the one measured ablation — no claim

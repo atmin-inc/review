@@ -37,6 +37,18 @@ Each entry is `{ proposition, check? }`. The proposition is one thing that must
 hold for the claim to follow; the check is the rung-1 assertion that settles
 that one proposition, selected and parameterized from the closed catalogue.
 
+The catalogue is closed: `declaration_contains(symbol, pattern)`,
+`body_contains(symbol, pattern)`, `file_contains(path, pattern)` and
+`referenced_outside(symbol, path)`. Each takes `expect` (`present` by default, or
+`absent`) and `revision`. The first two and the last scope to a symbol;
+`file_contains` scopes to a file, and it is the right one whenever the proposition
+is about a file rather than about one definition — what a test asserts, what a
+caller passes. The first live runs, on 2026-09-20, recorded what its absence cost:
+the model expressed such propositions as `body_contains` with `symbol: "test"` or
+with a file path, no declaration was found, the proposition went unsettled, and one
+unsettled proposition is enough to make a claim inconclusive. A real `auth_bypass`
+was correctly identified and then discarded for want of a check to state it with.
+
 A check names the side it asks about with `revision`: `head` by default, or
 `base` for the merge base. Every review claim is a claim that this change
 introduced something, so a claim about a removed guard or a new behaviour needs

@@ -135,3 +135,61 @@ test('a declaration body cut off at the cap cannot establish absence for the set
   assert.deepEqual(outcome.evidence, []);
   assert.match(outcome.limitations[0], /could not be inspected in full/);
 });
+
+// The gap the first live runs found (2026-09-20): every other check is scoped to a
+// symbol, so a proposition about a test had nowhere to go. The model wrote
+// body_contains with symbol "test", no declaration was found, the proposition went
+// unsettled, and one unsettled proposition made the whole claim inconclusive — a merge
+// verdict on a real auth bypass. A file is a legitimate thing to make a claim about.
+test('a proposition about a test file settles, where the same one scoped to a symbol does not', () => {
+  const files = {
+    'accounts.mjs': 'export function renameAccount(accounts, actorId, accountId) {\n  return accounts.get(accountId);\n}\n',
+    'test/accounts.test.mjs': "test('forbids a non-owner', () => {\n  assert.throws(() => renameAccount(a, 'bob', 'account-1'), /Forbidden/);\n});\n",
+  };
+  const revision = revisionOf(files);
+  const pattern = 'assert.throws(() => renameAccount';
+
+  const scopedToFile = runCheck(revision, { assertion: 'file_contains', path: 'test/accounts.test.mjs', pattern });
+  assert.equal(scopedToFile.evidence[0].result, 'hit');
+  assert.match(scopedToFile.evidence[0].check, /test\/accounts\.test\.mjs:2/);
+  assert.deepEqual(scopedToFile.limitations, []);
+
+  // The shape the model actually reached for, kept here so the regression is visible:
+  // `test` is a call, not a declaration, so this settles nothing.
+  const scopedToSymbol = runCheck(revision, { assertion: 'body_contains', symbol: 'test', pattern });
+  assert.deepEqual(scopedToSymbol.evidence, []);
+  assert.equal(scopedToSymbol.limitations.length, 1);
+});
+
+// Polarity is load-bearing on this rung: a miss refutes outright. So absence may only
+// be reported once it is actually established, never merely because nothing was found.
+test('file_contains reports absence only when it established it', () => {
+  const present = { 'test/a.test.mjs': 'assert.throws(call, /Forbidden/);\n' };
+  const absent = { 'test/a.test.mjs': 'assert.equal(call(), 1);\n' };
+
+  assert.equal(runCheck(revisionOf(absent), { assertion: 'file_contains', path: 'test/a.test.mjs', pattern: 'Forbidden', expect: 'absent' }).evidence[0].result, 'hit');
+  assert.equal(runCheck(revisionOf(present), { assertion: 'file_contains', path: 'test/a.test.mjs', pattern: 'Forbidden', expect: 'absent' }).evidence[0].result, 'miss');
+
+  // A file that is not in this revision is not evidence that the pattern is gone from
+  // it. Reading it that way would let "the test no longer asserts Forbidden" be
+  // supported by the test file never having existed.
+  const missing = runCheck(revisionOf(present), { assertion: 'file_contains', path: 'test/gone.test.mjs', pattern: 'Forbidden', expect: 'absent' });
+  assert.deepEqual(missing.evidence, []);
+  assert.match(missing.limitations[0], /does not exist in this revision/);
+
+  // A capped search proves nothing about what it did not reach.
+  const noisy = Object.fromEntries([...Array(60)].map((_, i) => [`noise${i}.mjs`, 'Forbidden\n']));
+  const truncated = runCheck(revisionOf({ ...noisy, 'test/a.test.mjs': 'nothing here\n' }, 50),
+    { assertion: 'file_contains', path: 'test/a.test.mjs', pattern: 'Forbidden', expect: 'absent' });
+  assert.deepEqual(truncated.evidence, []);
+  assert.match(truncated.limitations[0], /truncated/);
+});
+
+// A regression claim is a claim about the difference, so the check has to be able to
+// ask the same question of the merge base.
+test('file_contains can ask the base side, and says which side it asked', () => {
+  const outcome = runCheck(revisionOf({ 'test/a.test.mjs': 'assert.throws(call, /Forbidden/);\n' }),
+    { assertion: 'file_contains', path: 'test/a.test.mjs', pattern: 'Forbidden', revision: 'base' });
+  assert.equal(outcome.evidence[0].result, 'hit');
+  assert.match(outcome.evidence[0].check, /at the merge base/);
+});

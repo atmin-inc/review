@@ -81,14 +81,30 @@ export function jevAnswers(body: unknown, questions: JevQuestion[]): Map<string,
 // type stay, because a proposition like "no ownership comparison remains in the
 // function body" is unanswerable without knowing which body.
 export function jevState(claim: Claim, revisions: Revisions, diff: string): unknown {
-  const { path, line } = parseLocation(claim.location);
+  const { path: located, line } = parseLocation(claim.location);
   return {
     claim: { type: claim.type, location: claim.location },
-    file: { path, head: window(revisions.head, path, line), base: window(revisions.base, path, line) },
+    files: statePaths(claim).map(path => {
+      const at = path === located ? line : 1;
+      return { path, head: window(revisions.head, path, at), base: window(revisions.base, path, at) };
+    }),
     diff: diff.length > MAX_DIFF_BYTES ? `${diff.slice(0, MAX_DIFF_BYTES)}\n[diff truncated]` : diff,
   };
 }
 const MAX_DIFF_BYTES = 24000;
+// Every file the claim's checks name, not only the one it is located in. A proposition
+// settled by `file_contains` is about a different file — the test that covers the
+// change, the caller that relies on it — and a state carrying only the located file
+// asks Jev about text it was never shown. It answers no, correctly, and the verifier
+// reads that as rung 3 contradicting a symbolic fact that is true. Seen on 2026-09-20:
+// grep confirmed a test asserts /Forbidden/ at test/suggestion-demo.test.mjs:12 while
+// Jev returned 0.12 on the same proposition, which was enough to hold back a correct
+// auth_bypass. Capped, because one claim must not send the whole repository.
+const MAX_STATE_FILES = 4;
+function statePaths(claim: Claim): string[] {
+  const named = claim.evidenceToCheck.flatMap(({ check }) => check && 'path' in check ? [check.path] : []);
+  return [...new Set([parseLocation(claim.location).path, ...named])].slice(0, MAX_STATE_FILES);
+}
 // A window around the claim's line rather than the head of the file: a claim at line
 // 900 is not served by the first 200 lines. `slice` caps a read at 200 lines and at
 // 24 KB and returns null past either, so a file of very long lines falls back to a
