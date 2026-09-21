@@ -111,6 +111,10 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const seen = new Set<string>();
   const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0 };
   const transcript: unknown[] = [];
+  // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
+  // time rather than mid-exchange. Kept in step with `transcript` by the splice below.
+  const roundStart: number[] = [];
+  let droppedTurns = 0;
   let toolCalls = 0;
   let done = false;
   let settled = 0;
@@ -122,18 +126,38 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // looking and close out honestly, rather than being cut off mid-investigation.
       const closing = turn === limits.maxTurns - 1 || toolCalls >= limits.maxToolCalls - 1;
       const tools = claimToolDefinitions.filter(tool => closing ? tool.name === 'end_investigation' : true);
-      const input: TurnInput = {
-        instructions: claimInstructions,
-        context: JSON.stringify({ ...(context as object), controllerBudget: {
-          remainingTurns: limits.maxTurns - turn, recordedClaims: drafts.length,
-          instruction: closing
-            ? 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.'
-            : 'Read the change and its dependencies, then emit every claim you can support with propositions.',
-        } }),
-        transcript, tools,
-      };
-      const inputTokens = await model.count(input, signal);
+      const contextFor = (dropped: number) => JSON.stringify({ ...(context as object), controllerBudget: {
+        remainingTurns: limits.maxTurns - turn, recordedClaims: drafts.length,
+        ...(dropped ? { droppedEarlierTurns: dropped,
+          note: 'The oldest turns were dropped to fit the context window. Recorded claims are kept; re-read anything you still need.' } : {}),
+        instruction: closing
+          ? 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.'
+          : 'Read the change and its dependencies, then emit every claim you can support with propositions.',
+      } });
+      const input: TurnInput = { instructions: claimInstructions, context: contextFor(0), transcript, tools };
+      let inputTokens = await model.count(input, signal);
       signal.throwIfAborted();
+      // A long investigation on a real PR outgrows the window: measured 2026-09-21 over
+      // 45 runs on the Martian cases, between a third and a half of runs on the larger
+      // ones stopped here, discarding whatever the remaining turns would have found. The
+      // guard itself is right -- nothing sizes a request from `maxInputTokens`, so
+      // raising it past what the provider accepts only trades a clear error for an opaque
+      // one. What was wrong was treating a full transcript as fatal. Recorded claims live
+      // in `drafts`, not in the transcript, so dropping the oldest turns costs reading the
+      // model can redo and loses no finding. A turn is dropped whole, because a tool call
+      // separated from its result is not a conversation any provider will accept.
+      let dropped = 0;
+      while (Number.isSafeInteger(inputTokens) && inputTokens > limits.maxInputTokens && roundStart.length > 1) {
+        const cut = roundStart[1]!;
+        transcript.splice(0, cut);
+        roundStart.shift();
+        for (let index = 0; index < roundStart.length; index++) roundStart[index]! -= cut;
+        dropped++;
+        input.context = contextFor(dropped);
+        inputTokens = await model.count(input, signal);
+        signal.throwIfAborted();
+      }
+      droppedTurns += dropped;
       if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > limits.maxInputTokens) {
         throw new Error('Input token count unavailable or exceeds the configured limit');
       }
@@ -149,6 +173,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       reservation = 0;
       outcome.spentUsd = settled;
       if (reply.status !== 'completed') throw new Error('Provider response incomplete; recorded claims preserved');
+      roundStart.push(transcript.length);
       transcript.push(...reply.continuation);
       if (!reply.calls.length) {
         transcript.push({ role: 'user', content: 'Use the supplied tools. Prose alone emits no claim.' });
@@ -223,6 +248,11 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
     outcome.complete = false;
     outcome.limitations.push(reason);
     outcome.spentUsd = settled + reservation;
+  }
+  // Reported once with the total rather than per turn, because a long investigation
+  // trims repeatedly and a reader needs the shortfall, not a running commentary.
+  if (droppedTurns) {
+    outcome.limitations.push(`The oldest ${droppedTurns} turn(s) of reading were dropped to fit the context window, so later turns did not see them.`);
   }
   // Claims emitted before a failure are kept: they are cheap to verify and the
   // verifier, not this pass, decides what they are worth.
