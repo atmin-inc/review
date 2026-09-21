@@ -482,3 +482,31 @@ frozen snapshots rather than judged. Full table with each finding's text in
   these runs emit obvious near-duplicates. How much cannot be computed while
   `OPENAI_API_KEY` has no credit, and the upstream `offline/` package with
   `score_profiles.py` and the judge is not in this repository either.
+
+## Severity of what is caught and what is missed (2026-09-21)
+
+Against the severity labels the benchmark ships with its comments, over the 15 baseline
+runs on the five cases.
+
+| | Critical | High | Medium | Low |
+| --- | --- | --- | --- | --- |
+| caught | 1 of 1 | 2 of 2 | 2 of 4 | 2 of 5 |
+| missed | 0 | 0 | 2 | 3 |
+
+- **Nothing above Medium is missed.** The five misses are the CSS `ordinal-group` values,
+  a Grafana test gap, the Python mutable dataclass default, and two pure style nits — a
+  typo in a test name and a method called `empty_array` that tests a dict. The headline
+  "7 of 12" understates this, because the misses are the cheap end of the list.
+- **So recall is not where to spend.** Noise is, and the sharp version of the criterion is
+  that the tool should emit nothing that would ask for an incorrect change. **About 24 of
+  the 65 shipped findings would** — the 21 speculations plus the 3 overstated case-046
+  P1s. The 7 restatements are wasteful rather than harmful.
+- **This reweighs the fork recorded above.** Requiring a claim to declare two concrete
+  sites that disagree would cost 2 of the 7 comments found, and one of them is case-005's
+  concurrent `retryCount` increment, a **High** — and it is borderline whether that defect
+  can be put in that form at all. Worse trade than it first appeared.
+- **Cheaper thing to measure first:** 15 of the 21 speculative findings are on case-016, a
+  pure-CSS diff. A reviewer that recognises a stylistic change offers nothing falsifiable
+  and stays quiet would remove roughly a quarter of all noise for 2 Low findings. That is
+  a coverage decision, not a filter over emitted claims, so it does not repeat the
+  mechanism that has now failed five times.
