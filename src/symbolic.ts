@@ -87,6 +87,16 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     const readable = bodies.flatMap(item => item.body ? [{ site: item.site, body: item.body }] : []);
     if (!readable.length) return inconclusive(label, `the body of \`${check.symbol}\` could not be read`);
     const containing = readable.filter(item => item.body.text.includes(check.pattern));
+    // A search that hit its cap did not reach every declaration, so finding nothing
+    // among the ones it did reach establishes nothing either way. Without this, a
+    // common symbol name in a large repository refutes whatever is asked about it.
+    // Measured 2026-09-21 on Martian case-005: `handler` has more declarations than the
+    // search returns, the pattern the claim named sits in one the search never reached,
+    // and a true High-severity concurrency finding was refuted at high confidence with
+    // no limitation recorded. The claim's own location named the right file.
+    if (!containing.length && truncated) {
+      return inconclusive(label, `the search truncated before it could reach every declaration of \`${check.symbol}\`, so this says nothing about the ones it did not read`);
+    }
     // Absence has to hold across all of them, so a body that was cut off at the cap,
     // or one that could not be read at all, leaves it unestablished.
     const incomplete = readable.filter(item => item.body.capped).length + (bodies.length - readable.length);
@@ -111,6 +121,11 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
         : inconclusive(label, `no declaration of \`${check.symbol}\` was found in this revision`);
     }
     const matching = found.filter(item => item.text.includes(check.pattern));
+    // Same as `body_contains`: nothing found among an incomplete set of declarations is
+    // not evidence about the ones the search never reached.
+    if (!matching.length && truncated) {
+      return inconclusive(label, `the search truncated before it could reach every declaration of \`${check.symbol}\`, so this says nothing about the ones it did not read`);
+    }
     const site = (matching[0] ?? found[0])!;
     return {
       evidence: [{ rung: 'symbolic', check: `${label} (${site.path}:${site.line})`, result: settle(matching.length > 0, expect) }],
