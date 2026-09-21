@@ -157,6 +157,53 @@ across the five. $0.37 for all five.
   like the noise. None separates the two groups, which is what says the separation is not
   available at verification time. Fix it at emission.
 
+## Trying to raise precision, and what it cost (2026-09-21)
+
+Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
+`/mnt/project-files/precision-attempt-2026-09-21.md`.
+
+| | baseline | emitter change | + symbol fixes |
+| --- | --- | --- | --- |
+| golden found at least once | 6 of 12 | 5 of 12 | 2 of 12 |
+| emitted / shipped | 105 / 65 | 76 / 42 | 69 / 43 |
+| stopped on the token cap | 4 | 4 | 8 |
+
+- **The true and false positives ship for the same bad reason.** On a noisy claim every
+  proposition restates the diff — "had margin-top at base", "does not at head" — which
+  the checking pass confirms every time, while the claim's actual assertion goes untested.
+  The `-ms-align-items` finding, a real golden comment, rests on exactly the same kind of
+  proposition. **That is why no filter applied at verification time separates them**, and
+  three cheap ones were measured against runs already on disk to confirm it: hedged
+  wording (removes 33 of 58 and one real finding), same-type-same-location merging (6 of
+  58), and requiring a check `path` outside the changed files (does not see symbol-scoped
+  evidence, so the real findings score like the noise).
+- **Asking the emitter to filter itself does not work either.** Telling it that a claim
+  needs a proposition about something the change did not touch cut shipped findings by a
+  third and cost recall, so it was reverted. It also looks like it drives the transcript
+  past the token cap, though 3 repeats cannot separate that from variance.
+- **Two real bugs fell out of asking why one case lost its findings entirely**, both the
+  house rule again — a rung must be asked a question it can answer. `Class.method` never
+  resolved, because that string does not appear in source and the bare member name
+  exceeds the search cap; it is now looked up through the owner's declaration. And
+  `declaration_contains` read one line, so a wrapped parameter list hid the parameter it
+  was asked about and **refuted** a correct claim; the signature is now read to the end of
+  its parameter list, with the line count handed to `bodyOf` so the two assertions stay
+  disjoint. The case-046 repeat that shipped 0 of 7 claims before shipped 6 of 6 after.
+- **The symbol fixes were checked for damage deterministically, not by another run.**
+  Re-settling every recorded proposition across the 15 baseline runs against the same
+  frozen snapshots costs nothing and answers the only question that matters about a change
+  to rung 1, whose misses refute outright: **no proposition that was established became
+  refuted, and none was lost.** 7 that settled nothing now settle, 14 that needed a Jev
+  call are now free and deterministic, 1 wrong refutation became established, and 17
+  refutations weakened to unsettled, which is the safe direction. (The 146 rung-3
+  establishments that read as unsettled are the comparison running rung 1 alone, not a
+  regression.) This is the right tool here because the change alters what rung 1 *answers*,
+  not which questions rung 3 is *asked*; the replay trap below applies to the latter.
+
+- **Rung 3 can fail silently.** One run asked 0 questions where 7 claims needed it, every
+  claim came out inconclusive, and nothing in the output says the rung never ran. A failed
+  Jev call pushes nothing to the log and `skippedClaims` is not persisted.
+
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
 - A real model emits usable claims: it found the defect every run, typed and located it
