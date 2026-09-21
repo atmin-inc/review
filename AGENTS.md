@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 310 tests: 308 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 312 tests: 310 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -100,6 +100,15 @@ across the five. $0.37 for all five.
   budgets, use `profiles/martian-deepseek.json` on real PRs rather than raising
   `baseline-deepseek.json`, which would silently change what every earlier demo number
   means.
+- **`maxInputTokens` must stay under the model's real context window.** It is only a
+  local guard — nothing sizes a request from it — so setting it above what the provider
+  accepts does not enlarge anything, it just replaces a clear local error with an opaque
+  one. Set it to 400000 on 2026-09-21 and nine of fifteen runs came back
+  "Investigation failed; provider or source operation unavailable" after about a cent,
+  where the baseline's 100000 had been reporting "Input token count exceeds profile
+  limit" and saying which case. `deepseek/deepseek-v3.2` is 163840 in and up to 65536
+  out per `https://openrouter.ai/api/v1/models`, which is the place to read it rather
+  than guess; the profile now caps input at 150000.
 - Read the numbers as a pilot, not a score: one run per case, and precision against the
   70% floor needs the upstream semantic judge in `benchmarks/martian-grade.py`, which
   calls OpenAI and so cannot run while that key has no credit. Matching here is by hand.

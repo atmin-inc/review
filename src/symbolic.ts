@@ -1,4 +1,4 @@
-import { declaresSymbol, type Expectation, type Side, type SymbolicCheck } from './claim.js';
+import { declaresSymbol, searchable, type Expectation, type Side, type SymbolicCheck } from './claim.js';
 import { searchSource, sourceSlice } from './snapshot.js';
 import type { Evidence } from './evidence.js';
 
@@ -71,6 +71,16 @@ function bodyOf(revision: Revision, path: string, line: number): { text: string;
 export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome {
   const expect = check.expect ?? 'present';
   const at = check.revision === 'base' ? ' at the merge base' : '';
+  // `search` rejects anything that is not a single literal line of at most 200
+  // characters, and it rejects it by throwing. A claim carrying one is not a claim rung
+  // 1 can run, and it must not be able to end the review: before this, one such pattern
+  // threw out of verification and lost every other claim in the run with it. Claims are
+  // screened at emit time too, but a claim can also arrive from a file or a fixture.
+  const literals = [...('pattern' in check ? [check.pattern] : []), ...('symbol' in check ? [check.symbol] : [])];
+  if (literals.some(value => !searchable(value))) {
+    return inconclusive(`${check.assertion}${at}`,
+      'the check names a pattern or symbol the search cannot run: it must be a single line of at most 200 characters');
+  }
   if (check.assertion === 'body_contains') {
     const label = `grep: body of \`${check.symbol}\`${at} ${expect === 'present' ? 'contains' : 'lacks'} ${JSON.stringify(check.pattern)}`;
     const { found, truncated } = declarations(revision, check.symbol);

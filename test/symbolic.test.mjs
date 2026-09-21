@@ -257,3 +257,24 @@ test('a truncated declaration search settles nothing either way', () => {
   assert.equal(runCheck(small, { assertion: 'body_contains', symbol: 'handler', pattern: 'count + 1' }).evidence[0].result, 'hit');
   assert.equal(runCheck(small, { assertion: 'body_contains', symbol: 'handler', pattern: 'nothing here' }).evidence[0].result, 'miss');
 });
+
+// Claims are screened at emit time, but one can also arrive from a file or a fixture, and
+// `search` rejects an unrunnable pattern by throwing. A check it cannot run settles
+// nothing; it must never be able to end the review. Measured 2026-09-21 on Martian
+// case-016, where one such pattern lost every other claim in the run with it.
+test('a check the search cannot run is inconclusive, not an exception', () => {
+  const revision = revisionOf({ 'update.ts': 'function update(owner, account) {\n  return account;\n}\n' });
+  for (const check of [
+    { assertion: 'body_contains', symbol: 'update', pattern: 'a\nb' },
+    { assertion: 'declaration_contains', symbol: 'update', pattern: 'x'.repeat(201) },
+    { assertion: 'file_contains', path: 'update.ts', pattern: 'a\nb' },
+    { assertion: 'referenced_outside', symbol: 'u'.repeat(201), path: 'update.ts' },
+  ]) {
+    const outcome = runCheck(revision, check);
+    assert.deepEqual(outcome.evidence, [], `${check.assertion} must settle nothing`);
+    assert.match(outcome.limitations[0], /search cannot run/);
+  }
+  // A runnable check still runs.
+  assert.equal(runCheck(revision, { assertion: 'body_contains', symbol: 'update', pattern: 'return account' })
+    .evidence[0].result, 'hit');
+});
