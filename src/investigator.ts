@@ -181,8 +181,15 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
             // verifier cannot test is noise it would have to carry to the end.
             const rejection = claimRejection(draft, sourceOf(parseLocation(draft.location).path));
             if (rejection) throw new ReviewInputError(`Claim rejected: ${rejection}`);
-            const fingerprint = JSON.stringify(draft);
-            if (seen.has(fingerprint)) throw new ReviewInputError('That claim is already recorded');
+            // A claim is identified by the assertion it makes, not by the checks
+            // proposed for it. Fingerprinting the whole draft let the same claim be
+            // recorded once per set of checks the model tried: measured 2026-09-21 on
+            // Martian case-005, seven records of one `error_handling_gap`, differing
+            // only in their checks and two of them carrying none, which burned the turn
+            // budget the investigation then ran out of. The first record keeps its
+            // checks, which were also the most complete.
+            const fingerprint = JSON.stringify([draft.type, draft.location, draft.description, draft.suspectedCondition]);
+            if (seen.has(fingerprint)) throw new ReviewInputError('That claim is already recorded. Record each claim once, with the checks you want it verified by; to add a different claim, state a different defect.');
             seen.add(fingerprint);
             drafts.push(draft);
             output = { recorded: true, claims: drafts.length };
