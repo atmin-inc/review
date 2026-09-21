@@ -432,3 +432,53 @@ Computed from run artifacts already on disk. Full write-up in
   invented compliance; the checkability requirement is what is meant to stop that. One
   15-run set answers it, at the $2.28 to $2.50 those sets have cost. Pass is golden recall
   holding at 7 of 12 with the shipped count roughly halved.
+
+## What the 65 shipped findings actually are (2026-09-21, hand classified)
+
+Every finding the 15 baseline runs shipped, read and classified; four verified against the
+frozen snapshots rather than judged. Full table with each finding's text in
+`/mnt/project-files/what-the-52-unmatched-findings-are-2026-09-21.md`.
+
+| | count | of 65 |
+| --- | --- | --- |
+| matched a human comment | 13 | 20% |
+| verified real, no human comment | 4 | 6% |
+| plausible, unverified | 17 | 26% |
+| restates the change, asserts no defect | 7 | 11% |
+| speculation about a consequence | 21 | 32% |
+| overstated — the named mechanism is not what the code does | 3 | 5% |
+
+- **About 17 of 65 are defensible, 34 at the most generous reading, at least 31 are noise.**
+- **The noise concentrates where there is least to find.** 15 of the 21 speculative
+  findings are on case-016, the discourse CSS change — a stylistic diff with nothing
+  falsifiable to say, so the reviewer fills the space with "removing this may cause
+  crowding". case-023 shipped 4 findings, 3 of them restatements of the diff.
+- **A correction to the standing example.** case-046's three P1 signature mismatches were
+  cited here and elsewhere as real bugs no human commented on. Checked properly, **all
+  three are overstated**: `sync_source` is optional with a default, and Jira's
+  `sync_status_outbound` takes `**kwargs`, so nothing breaks at runtime. The genuinely
+  real member of that family is `ExampleIntegration.sync_status_outbound`, which has no
+  `**kwargs` — not the one that was being cited. Earlier sections of this file that name
+  those mismatches should be read against this paragraph.
+- **The split supports fixing emission, not filtering.** The four verified findings each
+  name a concrete second thing the code disagrees with: a vendor prefix its siblings carry,
+  a template still using a removed class, an abstract signature, a sibling's return
+  annotation. The 21 speculative ones name a consequence with no replacement to point at.
+  That is the same split the corrective-form measurement found, arrived at independently.
+
+## How the benchmark scores (read from the grader, 2026-09-21)
+
+- **50 PRs, 173 human comments.** The development split is 15 PRs carrying **41**; the 35
+  reserved carry 132. The five cases run so far carry **12 of the 41**, so "15 cases" and
+  the "15 runs" of a repeat set are different things and must not be conflated.
+- Categories across the 15 development cases: bug 21, concurrency 5, security 5, style 3,
+  speculative 2, api 2, doc_defect 2, test_gap 1. It is a record of what reviewers wrote,
+  not an audit of every defect.
+- **`benchmarks/martian-grade.py` extracts findings, dedups them, then judges them against
+  that comment list. There is no "is this actually a bug" oracle**, so a correct finding
+  no human commented on scores as a false positive. 13 of 65 is therefore close to real
+  precision, about 20% against the 70% floor, not a conservative floor.
+- The dedup step groups near-duplicate findings before judging, which should help, since
+  these runs emit obvious near-duplicates. How much cannot be computed while
+  `OPENAI_API_KEY` has no credit, and the upstream `offline/` package with
+  `score_profiles.py` and the judge is not in this repository either.
