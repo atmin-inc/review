@@ -212,8 +212,10 @@ Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
   accepts, and the total is reported as a limitation. The cap still stops a single turn
   that cannot fit, since there is no older turn to drop.
 
-  Both are tested and both tests fail against the previous code. Neither is measured on
-  real PRs yet -- the OpenRouter balance is $3.61 and a 15-run set costs about $2.50.
+  Both are tested and both tests fail against the previous code. **The trimming is now
+  measured: across the 15 runs of 2026-09-21 not one stopped on the token cap, against 4
+  in the baseline and 8 in the set before.** Those runs stop on `Provider response
+  incomplete` instead, which is a cut stream and a different problem.
 
 - **The fix the diagnosis points at is `--question-conclusion`, off by default.** Nothing
   ever asked whether the claim its propositions were meant to establish actually holds.
@@ -226,10 +228,28 @@ Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
   draws a neutral answer and neutral must not be enough for a conclusion. A rung that did
   not answer changes nothing, so an outage cannot turn every claim inconclusive.
   Costs one call per surviving claim, roughly a third of a cent across a run set.
-  **Unmeasured.** The thing to watch is whether it also withholds real findings: the
-  `-ms-align-items` golden comment is weak on entailment too, and it is the honest test
-  of whether this trades noise for recall like the emitter change did. Same flip rule as
-  `--question-refutations`: turn it on by default only on numbers, never on the argument.
+
+  **Measured 2026-09-21 over 15 runs, and it stays off: it removes the good findings
+  faster than the bad ones.** Isolated by re-verifying the same runs with the gate off,
+  replaying the recorded answers, which is valid here because turning it off only ignores
+  a question that was asked and reaches nowhere new. It withheld **5 claims of 41**, not
+  the third the raw cross-set comparison suggested -- that comparison was confounded,
+  because this set emitted 71 claims against the baseline's 105 for reasons upstream of
+  the gate. Of the 5 it withheld, one is golden comment [1] on case-016 word for word --
+  *"the align-items mixin contains a duplicate -ms-align-items property that appears to be
+  a typo"* -- and two more read as genuine defects, including a P1 signature mismatch on
+  case-046 in the same family as the ones it let through.
+  **The reason is worth more than the flag: asking a model whether a claim holds selects
+  for confident phrasing, not for correctness.** A speculative claim about the diff is a
+  true description of what the code does, so it is affirmed; a precise technical claim
+  that turns on outside knowledge -- is `-ms-align-items` a real CSS property -- draws a
+  hedge. That is the third precision mechanism to fail, and all three failed the same
+  way: **every mechanism that scores a claim after it has been made removes good findings
+  faster than bad ones.** Precision has to come from claims being about something
+  falsifiable, not from judging them afterwards.
+
+  Flip rule if it is ever revisited: it earns a default only when a run set shows it
+  withholding claims that are wrong, and none that match a golden comment.
 
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
