@@ -386,3 +386,49 @@ Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
   gained or lost, no proposition settled that symbolic had not already settled. Its only
   effect was raising the surviving finding to high confidence, moving the verdict from
   `security_review` to `block`. Treat it as escalation, not filtering.
+
+## What separates a real finding from noise (2026-09-21, 60 runs, no spend)
+
+Computed from run artifacts already on disk. Full write-up in
+`/mnt/project-files/what-separates-real-findings-2026-09-21.md`.
+
+- **Two hand-matching errors in the frozen repeats report are corrected there, not in
+  it.** case-005's concurrency comment *was* found and shipped (case-005-r1, describing
+  the consequence backwards but naming the same race on the same line), and case-016's
+  float comment was found in all three repeats, not one. Corrected: **7 of 12 golden
+  comments found at least once, 13 shipped claims matching, not 9.** Those were my errors,
+  not the reviewer's, and the conclusion of that report is unchanged.
+- **Every structural property of a claim is flat between the 13 golden-matching findings
+  and the other 52.** Which rung settled its propositions (23% all-grep against 25%), how
+  many propositions it carries (3.11 against 2.86), whether its evidence reaches outside
+  its own file, whether its propositions span base and head. **Two run backwards:** golden
+  claims name *fewer* distinct check subjects (38% name two or more, against 60% of the
+  noise) and are *more* likely to carry a mirrored check, because the two case-016 float
+  findings are built exactly that way. So "a real defect is a contradiction between two
+  sites" is wrong as stated, and so is every filter built on reach.
+- **The only property pointing the right way is whether the claim says what the code
+  should have been.** Every golden comment is "X should be Y" — `OR` should be `AND`,
+  `-ms-align-items` should be `-ms-flex-align`, `"alias"` should be `"idp-alias-" + i`,
+  `session.identityProviders().getById()` should be `idpDelegate.getById()`. The noise is
+  "X, which may cause Y". Claims naming a specific alternative and predicting no
+  consequence: **3 of 13 golden against 1 of 52 noise**. The form is rare and stably so —
+  about **6% of shipped findings in every one of the four run sets**.
+- **Read that as headroom, not as a filter.** As a filter the keyword test keeps 4 of 65
+  claims, which is 23% recall and would be the sixth mechanism to fail the way the other
+  five did. The corrective form is rare *because nothing asks for it*: a claim is a
+  description, a location, a suspected condition and propositions, every one of which
+  describes the code as it is. There is no field for the norm, so the emitter smuggles it
+  into an adjective — "incorrect", "unintended" — where nothing can check it.
+- **The change the diagnosis points at is a required, checkable replacement on the
+  claim**, rejected at `record_claim` time the way `PROSE` already is: name the text,
+  symbol or value the code should have carried, absent at the claim's location and, when
+  it is a cross-reference, present somewhere the claim names. A real defect can always
+  fill that field, because a defect is a departure from something; "removing `margin-top`
+  may cause crowding" cannot, because there is no replacement text to point at. **That is
+  what distinguishes it from the five failed mechanisms: it does not judge a claim, it
+  makes an unfalsifiable claim inexpressible.**
+- **Unmeasured, and the failure mode to watch is known.** Told to name a replacement, the
+  model may invent one for speculative claims too, exactly as the previous emitter change
+  invented compliance; the checkability requirement is what is meant to stop that. One
+  15-run set answers it, at the $2.28 to $2.50 those sets have cost. Pass is golden recall
+  holding at 7 of 12 with the shipped count roughly halved.
