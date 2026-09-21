@@ -102,13 +102,27 @@ across the five. $0.37 for all five.
   means.
 - **`maxInputTokens` must stay under the model's real context window.** It is only a
   local guard — nothing sizes a request from it — so setting it above what the provider
-  accepts does not enlarge anything, it just replaces a clear local error with an opaque
-  one. Set it to 400000 on 2026-09-21 and nine of fifteen runs came back
-  "Investigation failed; provider or source operation unavailable" after about a cent,
-  where the baseline's 100000 had been reporting "Input token count exceeds profile
-  limit" and saying which case. `deepseek/deepseek-v3.2` is 163840 in and up to 65536
-  out per `https://openrouter.ai/api/v1/models`, which is the place to read it rather
-  than guess; the profile now caps input at 150000.
+  accepts trades a clear local error for an opaque one. `deepseek/deepseek-v3.2` is
+  163840 in and up to 65536 out per `https://openrouter.ai/api/v1/models`, which is the
+  place to read it rather than guess; the profile caps input at 150000. (This was fixed
+  on 2026-09-21 after being blamed for a run of failures it did not cause — see below.)
+- **"Investigation failed; provider or source operation unavailable" hides everything,
+  so read the real error before theorising.** The outer catch in `src/investigator.ts`
+  allows only a short list of message prefixes through, deliberately, because provider
+  text can carry repository content. Twice on 2026-09-21 that opacity cost a full
+  measurement round to a wrong guess. The cheap way to see it: copy `dist/investigator.js`
+  aside, insert a `process.stderr.write` of `error.constructor.name` and `error.message`
+  before the `const reason =` line, run one case, restore the copy. On 2026-09-21 that
+  turned "must be my profile" into `ProviderRequestError: Provider funding unavailable`
+  in one run.
+- **Check the funding numbers, not just that a call works.** A tiny request can succeed
+  while every real one fails: the investigation reserves
+  `price(inputTokens, maxOutputTokens)` up front, so with `maxOutputTokens` at 8192 an
+  almost-empty account serves an 8-token curl and 402s the reviewer. As of 2026-09-21
+  the OpenRouter account is spent — `GET https://openrouter.ai/api/v1/credits` reports
+  `total_credits 10, total_usage 10.18` — and `OPENAI_API_KEY` has no credits either, so
+  no profile in this repository can currently run. `GET /api/v1/key` is not enough on its
+  own: it reported no key limit while the account balance was already gone.
 - Read the numbers as a pilot, not a score: one run per case, and precision against the
   70% floor needs the upstream semantic judge in `benchmarks/martian-grade.py`, which
   calls OpenAI and so cannot run while that key has no credit. Matching here is by hand.
