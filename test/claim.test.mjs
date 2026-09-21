@@ -110,3 +110,34 @@ test('a claim about a document is rejected, whatever type it is given', () => {
     assert.equal(claimRejection(draft({ location: `${path}:1` }), null), null, `${path} is not prose`);
   }
 });
+
+// Rung 1 searches for a single literal line of at most 200 characters. A claim carrying
+// anything else names a check that cannot be run, and before this it was accepted at
+// emit time and threw during verification, ending the review and losing every other
+// claim in it. Measured 2026-09-21 on Martian case-016: three runs out of three, after
+// the pilot had recorded that case as a clean merge.
+test('a check pattern the search cannot run is refused at emit time', () => {
+  const draft = {
+    type: 'auth_bypass', location: 'update.ts:2',
+    description: 'update() returns without comparing owner to account.',
+    suspectedCondition: 'A different account submits a known record id.',
+    severity: 'P1',
+    evidenceToCheck: [{ proposition: 'The guard is gone.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'if (owner !== account) {\n  throw new Error();\n}' } }],
+  };
+  assert.match(claimRejection(draft, null), /single line/);
+
+  const long = { ...draft, evidenceToCheck: [{ proposition: 'The guard is gone.',
+    check: { assertion: 'body_contains', symbol: 'update', pattern: 'x'.repeat(201) } }] };
+  assert.match(claimRejection(long, null), /at most 200 characters, and this one is 201/);
+
+  // A symbol is searched for too, so it is held to the same rule.
+  const symbol = { ...draft, evidenceToCheck: [{ proposition: 'The guard is gone.',
+    check: { assertion: 'body_contains', symbol: 'a'.repeat(300), pattern: 'owner' } }] };
+  assert.match(claimRejection(symbol, null), /check symbol/);
+
+  // And a runnable one is still accepted.
+  const fine = { ...draft, evidenceToCheck: [{ proposition: 'The guard is gone.',
+    check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account' } }] };
+  assert.equal(claimRejection(fine, null), null);
+});

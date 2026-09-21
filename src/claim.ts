@@ -161,8 +161,27 @@ export function claimRejection(draft: ClaimDraft, source: string | null): string
   if (source !== null && (line < 1 || line > source.split('\n').length)) {
     return `location line ${line} does not resolve in the reviewed revision`;
   }
+  // Rung 1 searches for a single literal line of at most 200 characters, so a longer or
+  // multi-line pattern names a check that cannot be run. Measured 2026-09-21 on Martian
+  // case-016: the model wrote a reasonable multi-line pattern, the claim was accepted,
+  // and the search threw during verification and took the whole review with it — three
+  // runs out of three, after the pilot had recorded that case as a clean merge.
+  for (const { check } of draft.evidenceToCheck) {
+    for (const [field, value] of [['pattern', check && 'pattern' in check ? check.pattern : null],
+      ['symbol', check && 'symbol' in check ? check.symbol : null]] as const) {
+      if (typeof value !== 'string' || searchable(value)) continue;
+      return /[\r\n]/.test(value)
+        ? `a check ${field} must be a single line, and this one spans several; search for one distinctive line instead`
+        : `a check ${field} must be at most ${SEARCH_LIMIT} characters, and this one is ${value.length}; search for a shorter distinctive fragment`;
+    }
+  }
   return null;
 }
+// What `search` in src/snapshot.ts accepts, restated where claims are judged so the two
+// cannot drift apart.
+export const SEARCH_LIMIT = 200;
+export const searchable = (value: string): boolean =>
+  value.length > 0 && value.length <= SEARCH_LIMIT && !/[\0\r\n]/.test(value);
 
 // Two claims colliding within one run get an appended ordinal. The first keeps the
 // bare id so a single-claim run is stable against a later collision elsewhere.
