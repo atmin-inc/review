@@ -278,3 +278,69 @@ test('a check the search cannot run is inconclusive, not an exception', () => {
   assert.equal(runCheck(revision, { assertion: 'body_contains', symbol: 'update', pattern: 'return account' })
     .evidence[0].result, 'hit');
 });
+
+// The same invariant where the declaration wraps. A parameter list split across lines is
+// still the declaration, not the body, and the two must not both claim those lines.
+// Measured 2026-09-21 on Martian case-046: `IssueSyncIntegration.sync_status_outbound`
+// declares `assignment_source` six lines below `def`, the check read only the first line,
+// and a correct claim was refuted at the strongest verdict rung 1 can reach.
+test('a declaration that wraps is read to the end of its parameter list', () => {
+  const revision = revisionOf({
+    'issues.py': [
+      'class IssueSyncIntegration:',
+      '    def sync_status_outbound(',
+      '        self,',
+      '        external_issue,',
+      '        assignment_source: AssignmentSource | None = None,',
+      '    ):',
+      '        raise NotImplementedError',
+      '',
+    ].join('\n'),
+  });
+  const decl = { assertion: 'declaration_contains', symbol: 'sync_status_outbound', pattern: 'assignment_source' };
+  const body = { assertion: 'body_contains', symbol: 'sync_status_outbound', pattern: 'assignment_source' };
+  assert.equal(runCheck(revision, decl).evidence[0].result, 'hit');
+  // Still disjoint: the wrapped parameter lines belong to the declaration alone, so the
+  // negative form keeps meaning "accepted and never used".
+  assert.equal(runCheck(revision, body).evidence[0].result, 'miss');
+  assert.equal(runCheck(revision, { ...body, pattern: 'NotImplementedError' }).evidence[0].result, 'hit');
+});
+
+// `Owner.member` is how a reviewer names a method when a repository has several of them,
+// and it is not text that appears in the source, so the literal search finds nothing. On
+// Martian case-046 every limitation in one run was this, and the claims were correct. A
+// second global search does not rescue it either: the bare member name returns more
+// matches than the search caps at, so the owner's file is never among them.
+test('a qualified member resolves through its owner declaration', () => {
+  const files = {
+    'issues.py': [
+      'class IssueSyncIntegration:',
+      '    def should_sync(self, sync_source = None):',
+      '        return True',
+      '',
+    ].join('\n'),
+  };
+  // Enough other declarations of the bare name to exhaust the search cap, which is the
+  // situation the monorepo actually presents.
+  for (let index = 0; index < 60; index++) files[`other${index}.py`] = 'def should_sync(self):\n    return False\n';
+  const revision = revisionOf(files);
+  const outcome = runCheck(revision, { assertion: 'declaration_contains',
+    symbol: 'IssueSyncIntegration.should_sync', pattern: 'sync_source' });
+  assert.equal(outcome.evidence[0].result, 'hit');
+  assert.match(outcome.evidence[0].check, /issues\.py:2/);
+  // The fallback only ever runs when the literal name found nothing, so a symbol that
+  // resolves on its own is never reinterpreted.
+  assert.equal(runCheck(revision, { assertion: 'declaration_contains',
+    symbol: 'should_sync', pattern: 'sync_source' }).evidence[0].result, 'hit');
+});
+
+// Not finding the member inside the owner is not evidence that it is absent: the owner's
+// body is read only as far as the cap. Reporting a miss here would let a claim be refuted
+// by how far the reader got.
+test('a member missing from its owner settles nothing', () => {
+  const revision = revisionOf({ 'issues.py': 'class IssueSyncIntegration:\n    def other(self):\n        return 1\n' });
+  const outcome = runCheck(revision, { assertion: 'declaration_contains',
+    symbol: 'IssueSyncIntegration.should_sync', pattern: 'sync_source' });
+  assert.equal(outcome.evidence.length, 0);
+  assert.equal(outcome.limitations.length, 1);
+});
