@@ -118,11 +118,13 @@ across the five. $0.37 for all five.
 - **Check the funding numbers, not just that a call works.** A tiny request can succeed
   while every real one fails: the investigation reserves
   `price(inputTokens, maxOutputTokens)` up front, so with `maxOutputTokens` at 8192 an
-  almost-empty account serves an 8-token curl and 402s the reviewer. As of 2026-09-21
-  the OpenRouter account is spent — `GET https://openrouter.ai/api/v1/credits` reports
-  `total_credits 10, total_usage 10.18` — and `OPENAI_API_KEY` has no credits either, so
-  no profile in this repository can currently run. `GET /api/v1/key` is not enough on its
-  own: it reported no key limit while the account balance was already gone.
+  almost-empty account serves an 8-token curl and 402s the reviewer. That is exactly how
+  the OpenRouter account ran dry on 2026-09-21, at `total_usage 10.18` against
+  `total_credits 10`; Lors topped it up the same day. `GET /api/v1/key` is not enough on
+  its own — it reported no key limit while the account balance was already gone — so read
+  `GET https://openrouter.ai/api/v1/credits` and compare the two numbers.
+  `OPENAI_API_KEY` remains at zero, which is separate and still blocks
+  `profiles/smoke-openai.json` and the grading script.
 - Read the numbers as a pilot, not a score: one run per case, and precision against the
   70% floor needs the upstream semantic judge in `benchmarks/martian-grade.py`, which
   calls OpenAI and so cannot run while that key has no credit. Matching here is by hand.
