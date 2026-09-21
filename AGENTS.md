@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 308 tests: 306 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 310 tests: 308 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -89,9 +89,17 @@ across the five. $0.37 for all five.
 - **A symbol-scoped check cannot say which file it means.** The claim's own location named
   the right one. This is the monorepo form of the same rule below: the check could not
   express the question the proposition asked.
-- Operational limits bite on real PRs: case-005 stopped on `Model turn limit reached`
-  after emitting the same claim six times (no deduplication), and case-032 on
-  `Input token count unavailable or exceeds the configured limit`.
+- **Operational limits bite on real PRs, and one of them was a bug.** Case-005 stopped on
+  `Model turn limit reached` after recording the same `error_handling_gap` seven times;
+  case-032 stopped on `Input token count unavailable or exceeds the configured limit`.
+  The duplicates were not a missing feature: `record_claim` deduplicated on
+  `JSON.stringify(draft)`, so the same assertion recorded again with different checks —
+  twice with none at all — counted as a new claim each time. A claim is the assertion it
+  makes; the checks are how it would be tested. The fingerprint is now type, location,
+  description and suspected condition, and the first record keeps its checks. For the
+  budgets, use `profiles/martian-deepseek.json` on real PRs rather than raising
+  `baseline-deepseek.json`, which would silently change what every earlier demo number
+  means.
 - Read the numbers as a pilot, not a score: one run per case, and precision against the
   70% floor needs the upstream semantic judge in `benchmarks/martian-grade.py`, which
   calls OpenAI and so cannot run while that key has no credit. Matching here is by hand.

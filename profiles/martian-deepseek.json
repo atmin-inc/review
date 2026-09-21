@@ -1,0 +1,10 @@
+{
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v3.2",
+  "maxUsd": 2,
+  "maxTurns": 60,
+  "maxToolCalls": 200,
+  "maxInputTokens": 400000,
+  "maxOutputTokens": 8192,
+  "deadlineMs": 1800000
+}

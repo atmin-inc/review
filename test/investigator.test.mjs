@@ -99,6 +99,33 @@ test('re-recording the same claim is refused rather than counted twice', async t
   assert.match(emitted.toolErrors[0].reason, /already recorded/);
 });
 
+// A claim is the assertion it makes, so the same defect recorded again with different
+// checks is the same claim. Fingerprinting the whole draft missed that: measured
+// 2026-09-21 on Martian case-005, the same `error_handling_gap` was recorded seven
+// times, differing only in its checks and twice carrying none at all, which spent the
+// turn budget the investigation then ran out of.
+test('the same claim with different checks is still the same claim', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const variant = { ...GUARD_CLAIM, evidenceToCheck: [{ proposition: GUARD_CLAIM.evidenceToCheck[0].proposition }] };
+  const emitted = await investigateClaims(revisions, sourceOf, {},
+    model([action('record_claim', GUARD_CLAIM), action('record_claim', variant), end()]), LIMITS);
+  assert.equal(emitted.claims.length, 1);
+  assert.match(emitted.toolErrors[0].reason, /already recorded/);
+  // The first record keeps its checks rather than being replaced by a barer one.
+  assert.equal(emitted.claims[0].evidenceToCheck.length, GUARD_CLAIM.evidenceToCheck.length);
+});
+
+// A different defect at the same place is a different claim, so the key must not be so
+// loose that it swallows one.
+test('a different defect at the same location is still recorded', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const other = { ...GUARD_CLAIM, description: 'A second, unrelated defect at the same line.' };
+  const emitted = await investigateClaims(revisions, sourceOf, {},
+    model([action('record_claim', GUARD_CLAIM), action('record_claim', other), end()]), LIMITS);
+  assert.equal(emitted.claims.length, 2);
+  assert.deepEqual(emitted.toolErrors, []);
+});
+
 // The investigator must never be cut off mid-read with nothing recorded. On its last
 // turn the source tools are withdrawn, so the only move left is to close out and say
 // what was left unresolved.
