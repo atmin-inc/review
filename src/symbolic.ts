@@ -29,13 +29,83 @@ export type { Expectation, Side, SymbolicCheck };
 
 const inconclusive = (check: string, why: string): CheckOutcome => ({ evidence: [], limitations: [`${check}: ${why}`] });
 
-function declarations(revision: Revision, symbol: string) {
+interface Declaration { path: string; line: number; text: string; span: number }
+
+// A declaration is not always one line. Python and TypeScript both wrap a long parameter
+// list, and `declaration_contains` reading only the first line makes the parameter it was
+// asked about invisible: measured 2026-09-21 on Martian case-046, where
+// `IssueSyncIntegration.sync_status_outbound` declares `assignment_source` six lines below
+// `def`, so the check missed and refuted a correct claim at the strongest verdict there
+// is. Read the signature to the end of its parameter list instead, and hand the line count
+// to `bodyOf` so the two assertions stay disjoint rather than both claiming these lines.
+const DECLARATION_LINES = 40;
+function declarationAt(revision: Revision, path: string, line: number, first: string): { text: string; span: number } {
+  const depth = (value: string) => [...value].reduce((open, ch) => open + (ch === '(' ? 1 : ch === ')' ? -1 : 0), 0);
+  if (depth(first) <= 0) return { text: first, span: 1 };
+  const text = revision.slice(path, line, DECLARATION_LINES);
+  if (text === null) return { text: first, span: 1 };
+  const lines = text.split('\n');
+  let open = 0;
+  for (let index = 0; index < lines.length; index++) {
+    open += depth(lines[index]!);
+    if (open <= 0) return { text: lines.slice(0, index + 1).join('\n'), span: index + 1 };
+  }
+  return { text: first, span: 1 };
+}
+interface Declarations { found: Declaration[]; truncated: boolean }
+const indentOf = (value: string) => value.length - value.trimStart().length;
+
+function declaredAs(revision: Revision, symbol: string): Declarations {
   const { matches, truncated } = revision.search(symbol);
   const found = matches.flatMap(match => {
     const text = revision.lineAt(match.path, match.line);
-    return text !== null && declaresSymbol(text, symbol) ? [{ ...match, text }] : [];
+    return text !== null && declaresSymbol(text, symbol)
+      ? [{ ...match, ...declarationAt(revision, match.path, match.line, text) }] : [];
   });
   return { found, truncated };
+}
+
+// A member written the way a reader would name it - `IssueSyncIntegration.should_sync` -
+// is not text that appears in the source, so the literal search finds nothing and the
+// proposition goes unsettled with a limitation nobody downstream can act on. Measured
+// 2026-09-21 on Martian case-046: all eleven limitations in one run were this, and the
+// claims they belonged to were correct.
+//
+// A second global search does not resolve it either: `sync_status_outbound` alone returns
+// more matches than the search caps at, so the owner's file is never among them. The
+// owner's name is distinctive, so look that up instead and read the member out of its
+// body.
+function withinOwner(revision: Revision, owner: string, member: string): Declarations {
+  const found = declaredAs(revision, owner).found.flatMap(match => {
+    const text = revision.slice(match.path, match.line, BODY_LINES);
+    if (text === null) return [];
+    const lines = text.split('\n');
+    const opening = indentOf(lines[0] ?? '');
+    const inside: Declaration[] = [];
+    for (let offset = 1; offset < lines.length; offset++) {
+      const line = lines[offset]!;
+      if (line.trim() && indentOf(line) <= opening) break;
+      if (declaresSymbol(line, member))
+        inside.push({ path: match.path, line: match.line + offset, ...declarationAt(revision, match.path, match.line + offset, line) });
+    }
+    return inside;
+  });
+  // The owner's body is read only as far as the cap, so finding nothing inside it does
+  // not establish that the member is absent -- the same reservation a truncated search
+  // carries, and reported the same way.
+  return { found, truncated: found.length === 0 };
+}
+
+// The fallback runs only when the literal name found nothing, so a symbol that resolves
+// on its own is never reinterpreted, and it can only settle a proposition that would
+// otherwise settle nothing.
+function declarations(revision: Revision, symbol: string) {
+  const literal = declaredAs(revision, symbol);
+  const dot = symbol.lastIndexOf('.');
+  if (literal.found.length || literal.truncated || dot <= 0) return literal;
+  const owner = symbol.slice(0, dot), member = symbol.slice(dot + 1);
+  if (!searchable(owner) || !searchable(member)) return literal;
+  return withinOwner(revision, owner, member);
 }
 
 // The assertion is evaluated in its positive form, then read against what the claim
@@ -47,13 +117,12 @@ const settle = (established: boolean, expect: Expectation = 'present'): 'hit' | 
 // The lines belonging to a definition: everything indented past it, up to the cap.
 // Works for braces and for significant indentation alike, because the closing brace
 // sits back at the definition's own indent.
-function bodyOf(revision: Revision, path: string, line: number): { text: string; capped: boolean } | null {
-  const text = revision.slice(path, line, BODY_LINES);
+function bodyOf(revision: Revision, path: string, line: number, span = 1): { text: string; capped: boolean } | null {
+  const text = revision.slice(path, line, BODY_LINES + span - 1);
   if (text === null) return null;
   const lines = text.split('\n');
-  const indentOf = (value: string) => value.length - value.trimStart().length;
   const opening = indentOf(lines[0] ?? '');
-  let end = 1;
+  let end = span;
   while (end < lines.length && (!lines[end]!.trim() || indentOf(lines[end]!) > opening)) end++;
   // The declaration line belongs to `declaration_contains`, which reads exactly that
   // line. Including it here made the two assertions overlap on it and broke the negative
@@ -64,7 +133,7 @@ function bodyOf(revision: Revision, path: string, line: number): { text: string;
   // A definition with nothing indented under it has no body separate from its
   // declaration, so there the line stays; dropping it would leave an empty body that
   // refutes every `expect: 'present'` check.
-  const body = end > 1 ? lines.slice(1, end) : lines.slice(0, end);
+  const body = end > span ? lines.slice(span, end) : lines.slice(0, end);
   return { text: body.join('\n'), capped: end === lines.length && lines.length === BODY_LINES };
 }
 
@@ -93,7 +162,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     // inspecting one of them is the partial inspection the 2026-09-14 audit recorded
     // as a false-positive mechanism: a module read as far as line 180 was treated as
     // evidence that an initialization at 218 did not exist.
-    const bodies = found.map(site => ({ site, body: bodyOf(revision, site.path, site.line) }));
+    const bodies = found.map(site => ({ site, body: bodyOf(revision, site.path, site.line, site.span) }));
     const readable = bodies.flatMap(item => item.body ? [{ site: item.site, body: item.body }] : []);
     if (!readable.length) return inconclusive(label, `the body of \`${check.symbol}\` could not be read`);
     const containing = readable.filter(item => item.body.text.includes(check.pattern));
