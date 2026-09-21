@@ -129,6 +129,34 @@ across the five. $0.37 for all five.
   70% floor needs the upstream semantic judge in `benchmarks/martian-grade.py`, which
   calls OpenAI and so cannot run while that key has no credit. Matching here is by hand.
 
+## Five cases, three repeats (2026-09-21, deepseek-v3.2)
+
+15 runs, $2.28, same frozen snapshots as the pilot. Full table in
+`/mnt/project-files/martian-repeats-2026-09-21.md`.
+
+- **6 of 12 golden comments found at least once, against 0 in the pilot**, but only one
+  of the six in all three repeats. The other five each appear in a single repeat, so one
+  run per case would have reported anywhere from 2 to 5 of 12 depending on luck.
+  **Repeats are not optional on this benchmark.**
+- **The adjudicated precision the 70% floor is defined against cannot be computed while
+  `OPENAI_API_KEY` has no credit**, because `benchmarks/martian-grade.py` is the judge.
+  Golden-comment match rate is not that number and must not be quoted as it: several
+  non-matching findings are correct — case-046's P1 signature mismatches between
+  `IssueSyncIntegration` and its implementations are real and no human commented on them.
+- **The verifier is barely filtering: 105 claims emitted, 65 shipped, 10 of 12 on one
+  case.** The reason is visible in the propositions rather than the verdicts. On a noisy
+  claim every proposition restates the diff — "had margin-top at base", "does not at
+  head" — which the checking pass confirms every time because the diff already says so,
+  while the claim's actual assertion is never tested. The real findings cite something
+  the change did not touch: the abstract method whose signature the call site no longer
+  matches.
+- **Three cheap filters were measured against the same runs and all three rejected.**
+  Dropping hedged wording removes 33 of 58 findings and one real one. Merging same-type
+  same-location claims is safe but removes 6 of 58. Requiring a check `path` outside the
+  changed files does not see symbol-scoped evidence, so the real findings score exactly
+  like the noise. None separates the two groups, which is what says the separation is not
+  available at verification time. Fix it at emission.
+
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
 - A real model emits usable claims: it found the defect every run, typed and located it
