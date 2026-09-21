@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 312 tests: 310 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 317 tests: 315 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -200,9 +200,20 @@ Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
   regression.) This is the right tool here because the change alters what rung 1 *answers*,
   not which questions rung 3 is *asked*; the replay trap below applies to the latter.
 
-- **Rung 3 can fail silently.** One run asked 0 questions where 7 claims needed it, every
-  claim came out inconclusive, and nothing in the output says the rung never ran. A failed
-  Jev call pushes nothing to the log and `skippedClaims` is not persisted.
+- **Both operational failures this run set exposed are now fixed.** A failed Jev call
+  pushes nothing to the log, so a run that asked 0 questions where 7 claims needed them
+  produced all-inconclusive claims and said nothing about why; `claim-run` now reports the
+  count of claims the rung never reached, and the reason is deliberately left out because
+  provider text can carry repository content. And the input token cap, which stopped
+  between a third and a half of runs on the larger cases, now drops the oldest turns
+  rather than the whole run: recorded claims live in `drafts` and not in the transcript,
+  so trimming costs reading the model can redo and loses no finding. A turn is dropped
+  whole, because a tool call separated from its result is not a conversation any provider
+  accepts, and the total is reported as a limitation. The cap still stops a single turn
+  that cannot fit, since there is no older turn to drop.
+
+  Both are tested and both tests fail against the previous code. Neither is measured on
+  real PRs yet -- the OpenRouter balance is $3.61 and a 15-run set costs about $2.50.
 
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 

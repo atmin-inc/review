@@ -211,3 +211,40 @@ test('spending is settled against what the provider actually reported', async t 
   assert.equal(emitted.spentUsd, (1000 * 2.5 + 50 * 15) / 1_000_000);
   assert.ok(emitted.spentUsd < LIMITS.costOf(1000, LIMITS.maxOutputTokens), 'the reservation is released, not kept');
 });
+
+// A long investigation on a real PR outgrows the context window, and the controller used
+// to treat that as fatal: measured 2026-09-21 over 45 runs on the Martian cases, between
+// a third and a half of runs on the larger cases stopped here, throwing away whatever the
+// remaining turns would have found. Recorded claims live outside the transcript, so the
+// oldest turns can go instead.
+test('a transcript that outgrows the window is trimmed, not fatal', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  // Each turn adds one continuation entry and one tool result, and the count is charged
+  // per transcript entry, so the window is exceeded from the third turn on.
+  let turns = 0;
+  const counting = {
+    async count(input) { return 100 + input.transcript.length * 1000; },
+    async respond() {
+      const step = ++turns >= 5 ? end() : action('search_repository', { side: 'head', query: 'update' });
+      return { model: 'stub', inputTokens: 100, outputTokens: 50, cachedInputTokens: 0,
+        status: 'completed', continuation: [{ role: 'assistant', content: 'looking' }], calls: [step] };
+    },
+    toolOutput: (id, value) => ({ id, value }),
+  };
+  const outcome = await investigateClaims(revisions, sourceOf, {}, counting,
+    { ...LIMITS, maxTurns: 12, maxInputTokens: 4000 });
+  // The run reaches its own ending rather than dying on the cap.
+  assert.equal(outcome.stopReason, 'finished');
+  // And it says what it cost, because a later turn genuinely did not see those reads.
+  assert.equal(outcome.limitations.filter(note => note.includes('dropped to fit the context window')).length, 1);
+});
+
+// The cap still stops a single turn that cannot fit, since there is no older turn to drop
+// and sending it would fail at the provider instead.
+test('a first turn over the window still stops the run', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const huge = { async count() { return 999999; }, async respond() { throw new Error('should not be reached'); },
+    toolOutput: (id, value) => ({ id, value }) };
+  const outcome = await investigateClaims(revisions, sourceOf, {}, huge, LIMITS);
+  assert.match(outcome.stopReason, /Input token count unavailable or exceeds the configured limit/);
+});

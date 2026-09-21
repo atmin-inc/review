@@ -51,10 +51,24 @@ export async function runClaimReview(directory: string, profile: Profile,
   // The verifier is handed the claims and the revision, and nothing else. Whatever the
   // investigator believed does not travel with them.
   let rung = crossFamily;
+  // A claim whose Jev call fails is skipped, which the lifecycle reads as unsettled, and
+  // that is the honest outcome. What was not honest was saying nothing about it: seen
+  // 2026-09-21, a run asked zero questions where seven claims needed them, every claim
+  // came out inconclusive, and the report gave no hint that the rung had never answered.
+  // The count is reported and the reason is not, because provider text can carry
+  // repository content.
+  let unreached: string[] = [];
   if (!rung && crossFamilySource === 'jev' && investigation.claims.length) {
-    rung = recordedRung((await askJev(investigation.claims, revisions, context.diff, { signal, verify })).log);
+    const asked = await askJev(investigation.claims, revisions, context.diff, { signal, verify });
+    rung = recordedRung(asked.log);
+    unreached = [...new Set(asked.skippedClaims)];
   }
   const verification = verifyClaims(investigation.claims, revisions, BALANCED, rung, undefined, verify);
+  if (unreached.length) {
+    verification.limitations.push(unreached.length === investigation.claims.length
+      ? `The cross-family rung answered nothing: all ${unreached.length} claim(s) failed to reach it, so any proposition only it could settle is unsettled.`
+      : `The cross-family rung did not reach ${unreached.length} of ${investigation.claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
+  }
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
