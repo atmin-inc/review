@@ -231,3 +231,29 @@ test('a definition with no indented body is its own body', () => {
   const outcome = runCheck(revision, { assertion: 'body_contains', symbol: 'FIRST', pattern: '= 1' });
   assert.equal(outcome.evidence[0].result, 'hit');
 });
+
+// A search that hit its cap did not reach every declaration, so finding nothing among
+// the ones it reached establishes nothing. Without this a common symbol name refutes
+// whatever is asked about it. Measured 2026-09-21 on Martian case-005 (cal.com): the
+// monorepo has more `handler` declarations than the search returns, the pattern the
+// claim named sits at scheduleSMSReminders.ts:184 in one it never reached, and a true
+// High-severity concurrency finding was refuted at high confidence with no limitation.
+test('a truncated declaration search settles nothing either way', () => {
+  // Sixty files declaring the same name, and only the last one carries the pattern.
+  const files = Object.fromEntries(Array.from({ length: 60 }, (_, index) =>
+    [`route-${index}.ts`, `function handler() {\n  return ${index};\n}\n`]));
+  files['wanted.ts'] = 'function handler() {\n  const next = count + 1;\n}\n';
+  const revision = revisionOf(files, 50);
+
+  for (const assertion of ['body_contains', 'declaration_contains']) {
+    for (const expect of ['present', 'absent']) {
+      const outcome = runCheck(revision, { assertion, symbol: 'handler', pattern: 'count + 1', expect });
+      assert.deepEqual(outcome.evidence, [], `${assertion} ${expect} must not settle on a truncated search`);
+      assert.match(outcome.limitations[0], /truncated/);
+    }
+  }
+  // A complete search still settles, so the guard has not simply disabled the check.
+  const small = revisionOf({ 'wanted.ts': files['wanted.ts'] });
+  assert.equal(runCheck(small, { assertion: 'body_contains', symbol: 'handler', pattern: 'count + 1' }).evidence[0].result, 'hit');
+  assert.equal(runCheck(small, { assertion: 'body_contains', symbol: 'handler', pattern: 'nothing here' }).evidence[0].result, 'miss');
+});

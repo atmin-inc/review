@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 307 tests: 305 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 308 tests: 306 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -63,6 +63,38 @@ phrasing was never the problem. Sending only the revision the question is about 
 true of the code. A state that holds one revision cannot be misread; a sentence asking
 the model to hold one in mind can. One claim with propositions on both sides now takes
 two calls, each carrying half the source.
+
+## First real PRs (2026-09-21, 5 Martian development cases, deepseek-v3.2)
+
+One case per project — 005 cal.com, 016 discourse, 023 grafana, 032 keycloak, 046 sentry
+— which is the three-to-five-case pilot `benchmarks/README.md` prescribes before
+scheduling the suite. Golden comments come from the pinned upstream commit
+`e616e849`, fetched read-only; `offline/` is not in this repository. 12 golden comments
+across the five. $0.37 for all five.
+
+- **Verdicts: merge, merge, nits, nits, merge. Six findings shipped, none matching a
+  golden comment.** The five that shipped on case-032 were plausible-sounding cache and
+  race concerns about the file the change touched, none of them the Critical recursion
+  bug the golden comment names.
+- **The emitter did find one of the twelve, and the verifier refuted it.** Case-005's
+  first claim is golden comment [0] almost word for word — `retryCount: reminder.retryCount + 1`
+  read concurrently and losing increments. Its check was
+  `body_contains(symbol: "handler", pattern: "retryCount: reminder.retryCount + 1")`.
+  `handler` is declared more times in the cal.com monorepo than the search returns, the
+  search truncated, the pattern sits at `scheduleSMSReminders.ts:184` in a declaration it
+  never reached, and the check returned a miss — **refuted at high confidence, with no
+  limitation recorded.** `expect: 'absent'` was already guarded against an incomplete
+  search; `expect: 'present'` was not, and `declaration_contains` had the same hole. Both
+  now return inconclusive when the search truncated and nothing matched.
+- **A symbol-scoped check cannot say which file it means.** The claim's own location named
+  the right one. This is the monorepo form of the same rule below: the check could not
+  express the question the proposition asked.
+- Operational limits bite on real PRs: case-005 stopped on `Model turn limit reached`
+  after emitting the same claim six times (no deduplication), and case-032 on
+  `Input token count unavailable or exceeds the configured limit`.
+- Read the numbers as a pilot, not a score: one run per case, and precision against the
+  70% floor needs the upstream semantic judge in `benchmarks/martian-grade.py`, which
+  calls OpenAI and so cannot run while that key has no credit. Matching here is by hand.
 
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
