@@ -15,7 +15,7 @@ import { costReport } from './cost-report.js';
 const help = `atmin review — source investigation and evidence tools
 
   atmin-review review <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
-  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>] [--cross-family none|jev] [--question-refutations]
+  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>] [--cross-family none|jev] [--question-refutations] [--question-conclusion]
   atmin-review claim-ablate <directory> [--rung symbolic|cross_family_llm]
   atmin-review prepare <https://github.com/owner/repo/pull/number> [--out <new-directory>]
   atmin-review render <directory> [--format markdown|json] [--check-current] [--out <new-file>]
@@ -35,6 +35,12 @@ Without it rung 3 stays silent and no claim reaches high confidence through agre
 refutation. A refutation is the strongest verdict and otherwise the least protected: a
 check that does not mean what its proposition says is never questioned when it refutes.
 Off by default; it costs a call per such claim and most claims are meant to die cheaply.
+--question-conclusion asks rung 3 whether the claim its propositions were meant to
+establish actually holds, before a claim with every proposition established ships. The
+propositions test the premises; nothing else tests the conclusion, which is how a claim
+whose propositions merely restate the diff is confirmed. The gate is agreement, so a
+hedged claim the model will not affirm becomes inconclusive. Off by default; it costs a
+call per surviving claim.
 claim-ablate re-verifies a finished claim-review with one rung switched off, replaying
 recorded model answers on both sides so the difference is that rung alone, and reports
 what it contributed. It spends nothing and changes nothing.
@@ -43,12 +49,12 @@ No repository scripts, GitHub writes or merge approvals. Required execution rema
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, strict: true,
-    options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' }, 'cross-family': { type: 'string' }, 'question-refutations': { type: 'boolean' } } });
+    options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' }, 'cross-family': { type: 'string' }, 'question-refutations': { type: 'boolean' }, 'question-conclusion': { type: 'boolean' } } });
   if (values.help || !positionals.length) { process.stdout.write(help); return; }
   const [operation, input] = positionals;
   if (!input || positionals.length !== 2) throw new Error('Expected one command and one input; use --help');
   if (operation === 'claim-ablate') {
-    if (values.profile || values.format || values['check-current'] || values.out || values['cross-family'] || values['question-refutations']) throw new Error('claim-ablate takes only a directory and --rung');
+    if (values.profile || values.format || values['check-current'] || values.out || values['cross-family'] || values['question-refutations'] || values['question-conclusion']) throw new Error('claim-ablate takes only a directory and --rung');
     const rung = values.rung ?? 'cross_family_llm';
     if (rung !== 'symbolic' && rung !== 'cross_family_llm') throw new Error('Measurable rungs are symbolic and cross_family_llm');
     process.stdout.write(renderContribution(ablate(resolve(input), rung)));
@@ -65,7 +71,8 @@ async function main(): Promise<void> {
     process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
     try {
       const { claims, investigation, verification } = await runClaimReview(directory, profile, undefined, controller.signal, undefined, crossFamily,
-        { questionRefutations: values['question-refutations'] === true });
+        { questionRefutations: values['question-refutations'] === true,
+          questionConclusion: values['question-conclusion'] === true });
       process.stdout.write(renderClaimReview(claims, verification, investigation));
       process.stderr.write(`Private review artifacts: ${directory}\n`);
       if (investigation.stopReason !== 'finished') process.exitCode = 2;
@@ -95,6 +102,7 @@ async function main(): Promise<void> {
   if (values.rung) throw new Error('--rung is only valid for claim-ablate');
   if (values['cross-family']) throw new Error('--cross-family is only valid for claim-review');
   if (values['question-refutations']) throw new Error('--question-refutations is only valid for claim-review');
+  if (values['question-conclusion']) throw new Error('--question-conclusion is only valid for claim-review');
   if (operation === 'cost') {
     if (values.format || values['check-current']) throw new Error('cost accepts only --out');
     const output = `${JSON.stringify(costReport(resolve(input)), null, 2)}\n`;

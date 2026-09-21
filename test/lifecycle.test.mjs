@@ -426,3 +426,32 @@ test('a miss that cannot refute does not refute the chain', t => {
   assert.ok(limitations.some(one => /cannot refute a claim about it/.test(one)));
   assert.equal(chains[0].evidence.filter(one => one.result === 'miss').length, 0);
 });
+
+// Every proposition holding is not the same as the claim holding, and until now nothing
+// asked the difference. Measured 2026-09-21 over 45 runs on the Martian cases: the noisy
+// claims and the real ones are confirmed for the same reason, because their propositions
+// restate the diff. "It had margin-top at base" and "it does not at head" are both true;
+// "therefore the layout breaks" was never put to anything.
+test('a claim whose premises hold still has to have its conclusion affirmed', t => {
+  // The model is asked the claim's own assertion and will not affirm it. Neutral, not
+  // negative — which is exactly what a hedged claim draws, and why the gate is agreement
+  // rather than the absence of disagreement.
+  const unconvinced = { settle: proposition => [{ rung: 'cross_family_llm',
+    check: `jev noul: ${proposition}`, result: proposition === TRUE_CLAIM.description ? 0.5 : 0.95 }] };
+  const gated = withOptions(t, [TRUE_CLAIM], unconvinced, { questionConclusion: true });
+  assert.equal(gated.chains[0].verdict, 'inconclusive');
+  assert.match(gated.chains[0].limitations.join(' '), /does not follow from the premises/);
+  // Off by default, so the same claim and the same model ship as before.
+  assert.equal(withOptions(t, [TRUE_CLAIM], unconvinced, {}).chains[0].verdict, 'confirmed');
+  // And the gate only withholds: a model that affirms the claim changes nothing.
+  assert.equal(withOptions(t, [TRUE_CLAIM], answering(0.95), { questionConclusion: true }).chains[0].verdict, 'confirmed');
+});
+
+// A rung that could not be reached must not become a requirement for shipping, or an
+// outage turns every claim inconclusive. Seen for real on 2026-09-21, when one run's Jev
+// calls all failed and seven claims died without the report saying why.
+test('a silent rung does not withhold the conclusion', t => {
+  const silent = { settle: () => [] };
+  const { chains } = withOptions(t, [TRUE_CLAIM], silent, { questionConclusion: true });
+  assert.equal(chains[0].verdict, 'confirmed');
+});

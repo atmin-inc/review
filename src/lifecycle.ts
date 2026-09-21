@@ -22,7 +22,7 @@ export interface Verification { chains: Chain[]; decision: Decision; limitations
 // deterministic refutation, and every claim it saves costs a model call on a claim that
 // was meant to die on rung 1 for nothing. A flag rather than a change so the two can be
 // compared over the same claims, which is the only way to say what it is worth.
-export interface VerifyOptions { questionRefutations?: boolean }
+export interface VerifyOptions { questionRefutations?: boolean; questionConclusion?: boolean }
 // Every question the cross-family rung was asked and what it answered. Recording them
 // is what makes the rung's contribution measurable: the same claims can be verified
 // again with the rung replayed or switched off, exactly and for free, instead of a
@@ -147,7 +147,7 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
     if (evidence.length) log.push({ claimId: claim.claimId, proposition: outcome.proposition, revision: outcome.revision, evidence });
     return { ...outcome, model: evidence, signal: llmSignal(evidence, thresholds) };
   });
-  const evidence = [...symbolic, ...asked.flatMap(item => item.model)];
+  const evidence: Evidence[] = [...symbolic, ...asked.flatMap(item => item.model)];
   const records: PropositionRecord[] = asked.map(item => item.status !== 'unsettled'
     ? { proposition: item.proposition, status: item.status, settledBy: 'symbolic' }
     : item.signal === 'agrees' ? { proposition: item.proposition, status: 'established', settledBy: 'cross_family_llm' }
@@ -179,11 +179,33 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
       ...unsettled.map(record => `Unsettled: ${JSON.stringify(record.proposition)}`)]);
   }
 
-  // Every step holds. An argument is only as strong as its weakest one, so a claim
-  // with a step no rung but a model could reach caps at moderate however the rest of
-  // it was established. Rung 2 is absent by construction in v1: it reads CI output
-  // this corpus does not carry, and composeChain records that rather than passing
-  // over it.
+  // Every step holds -- and that is not the same as the claim holding. Measured
+  // 2026-09-21 over 45 runs on the Martian cases: the noisy claims and the real ones are
+  // confirmed for the same reason, because their propositions restate the diff. "It had
+  // margin-top at base" and "it does not at head" are both true, the checking pass
+  // confirms them every time, and "therefore the layout breaks" was never asked of
+  // anything. Nothing here tested the conclusion, only the premises.
+  //
+  // So ask it. This is a different question from the ones above, which is why the three
+  // filters measured against the recorded runs could not separate the two groups: they
+  // all re-read answers already given. Rung 3 exists to answer narrow typed questions
+  // about the code, and the claim's own assertion is one.
+  //
+  // The gate is agreement, not the absence of disagreement: a conclusion no rung affirms
+  // is not established, and a hedged claim is exactly the one that draws a neutral
+  // answer. A rung that did not answer at all changes nothing, because an unreachable
+  // rung must not become a requirement for shipping.
+  if (options.questionConclusion) {
+    const affirmed = crossFamily?.settle(claim.description, claim, 'head') ?? [];
+    if (affirmed.length) {
+      log.push({ claimId: claim.claimId, proposition: claim.description, revision: 'head', evidence: affirmed });
+      evidence.push(...affirmed);
+      if (llmSignal(affirmed, thresholds) !== 'agrees') {
+        return chain('inconclusive', 'low', evidence, records,
+          ['Every proposition holds, but the model does not affirm the claim they were meant to establish, so the conclusion does not follow from the premises.']);
+      }
+    }
+  }
   const modelOnly = records.some(record => record.settledBy === 'cross_family_llm');
   return {
     chain: { ...composeChain(claim.claimId, claim.severity, evidence, thresholds, claim.severity,

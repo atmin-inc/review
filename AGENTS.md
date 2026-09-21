@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 317 tests: 315 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 319 tests: 317 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -214,6 +214,22 @@ Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
 
   Both are tested and both tests fail against the previous code. Neither is measured on
   real PRs yet -- the OpenRouter balance is $3.61 and a 15-run set costs about $2.50.
+
+- **The fix the diagnosis points at is `--question-conclusion`, off by default.** Nothing
+  ever asked whether the claim its propositions were meant to establish actually holds.
+  The propositions test the premises; the conclusion was never put to any rung, which is
+  how "it had margin-top at base, it does not at head, therefore the layout breaks" gets
+  confirmed. The flag asks rung 3 the claim's own assertion before a claim with every
+  proposition established ships. **This is why it can separate what the three filters
+  could not: it is a new question, not a re-reading of answers already given.**
+  The gate is agreement rather than the absence of disagreement, because a hedged claim
+  draws a neutral answer and neutral must not be enough for a conclusion. A rung that did
+  not answer changes nothing, so an outage cannot turn every claim inconclusive.
+  Costs one call per surviving claim, roughly a third of a cent across a run set.
+  **Unmeasured.** The thing to watch is whether it also withholds real findings: the
+  `-ms-align-items` golden comment is weak on entailment too, and it is the honest test
+  of whether this trades noise for recall like the emitter change did. Same flip rule as
+  `--question-refutations`: turn it on by default only on numbers, never on the argument.
 
 ## What the first live runs showed (2026-09-20, PR #2, deepseek-v3.2)
 
