@@ -164,7 +164,7 @@ Three sets of 15 runs on the same five frozen cases, $7.40 total. Full table in
 
 | | baseline | emitter change | + symbol fixes |
 | --- | --- | --- | --- |
-| golden found at least once | 6 of 12 | 5 of 12 | 2 of 12 |
+| golden found at least once | 6 of 12 (7, corrected) | 5 of 12 | 2 of 12 (**4**, corrected) |
 | emitted / shipped | 105 / 65 | 76 / 42 | 69 / 43 |
 | stopped on the token cap | 4 | 4 | 8 |
 
@@ -626,3 +626,32 @@ result was not in doubt and the OpenRouter credit was nearly gone. Full table in
 **The rule this adds to the five already here: a change to what the emitter is told is
 not a small change, and bundling three of them makes the result unattributable.** Three
 were measured as one and the loss cannot be assigned to any of them.
+
+## Golden matching is automated now, and it corrected two more hand counts (2026-09-22)
+
+`benchmarks/golden-matcher.mjs` matches a claim to a golden comment deterministically: in
+the comment's file, with every token group present. `benchmarks/score-runs.mjs <dir>`
+scores a run set with it, including **golden comments found per run with its SD**, which
+is the number that sizes an experiment. Checked three ways before use: 13 of 13 against the
+hand labels it was written from; every match and near-miss on the four held-out sets read
+by hand, which found and fixed three false matches and three misses; and each of the 12
+golden comments, used as a claim, matches exactly its own rule and no other.
+
+The standard, stated so it can be argued with: a claim matches when it names the thing
+the comment says is wrong, at the place it says, even if it predicts a different
+consequence. The loosest rule is 016[0], which accepts any claim about a removed float in
+`header.scss`; that is the standard the original hand labels used.
+
+**It corrected two more hand counts, both undercounts.** The "+ symbol fixes" set
+(`martian-rep5`) shipped **4 of 12**, not 2 — its `-ms-align-items` and `deleteMany`
+findings are unambiguous — and the conclusion-gate set (`martian-rep6`) shipped 4, not 3.
+That is three hand-matching errors in two days, in both directions. Do not hand-match
+again.
+
+**None of the set-to-set differences recorded above is statistically distinguishable.**
+Per-run golden found, by set: 0.73 (SD 0.70), 0.60, 0.33, 0.36, and 0.25 for the reverted
+prompt rewrite over 8 runs. At that spread a 15-run set cannot tell apart two reviewers
+that differ by less than about 0.5 golden per run, so "7, then 5, then 4 of 12" is not a
+trend. The rewrite's revert stands on its collapse in claim volume, 83 emitted to 23,
+which is not in doubt. Size every experiment from this SD before spending; the method is
+in `/mnt/project-files/method-2026-09-22.md`.
