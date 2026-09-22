@@ -11,7 +11,7 @@ import type { Evidence } from './evidence.js';
 // only report a miss when it actually established the negative, never when it
 // merely failed to look far enough.
 export interface Revision {
-  search(query: string): { matches: { path: string; line: number }[]; truncated: boolean };
+  search(query: string, within?: string): { matches: { path: string; line: number }[]; truncated: boolean };
   lineAt(path: string, line: number): string | null;
   slice(path: string, startLine: number, count: number): string | null;
 }
@@ -220,7 +220,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     if (revision.slice(check.path, 1, 1) === null) {
       return inconclusive(label, `${check.path} does not exist in this revision`);
     }
-    const { matches, truncated } = revision.search(check.pattern);
+    const { matches, truncated } = revision.search(check.pattern, check.path);
     const inFile = matches.filter(match => match.path === check.path);
     // The search caps, and a cap proves nothing about what it did not reach. Absence
     // stays unestablished rather than being reported as the refutation a miss is.
@@ -254,7 +254,7 @@ export function runChecks(revision: Revision, checks: SymbolicCheck[]): CheckOut
 export function revisionFrom(repository: string, revision: string,
   search = searchSource, slice = sourceSlice): Revision {
   return {
-    search: query => search(repository, revision, query),
+    search: (query, within) => search(repository, revision, query, within),
     lineAt(path, line) {
       try { return slice(repository, revision, path, line, 1).text; } catch { return null; }
     },

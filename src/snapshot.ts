@@ -236,12 +236,20 @@ export function sourcePaths(repository: string, revision: string): string[] {
   const output = gitText(repository, ['ls-tree', '-r', '--name-only', '-z', revision]);
   return output ? output.slice(0, -1).split('\0') : [];
 }
-export function searchSource(repository: string, revision: string, query: string) {
+// `within` narrows the search to one path. A file-scoped check that greps the whole
+// repository and filters afterwards cannot answer its own question: the 50-match cap is
+// reached by matches in other files, and the check returns inconclusive although the
+// answer was one grep away. Measured 2026-09-21 on Martian case-046, where
+// `file_contains(assignment_source.py, "isoformat", expect: 'absent')` could not settle
+// because `isoformat` appears throughout Sentry — which cost a correct finding.
+export function searchSource(repository: string, revision: string, query: string, within?: string) {
   requireValue(shaPattern.test(revision), 'Invalid immutable revision');
   requireValue(query.length > 0 && query.length <= 200 && !/[\0\r\n]/.test(query), 'Search requires a single literal line of 1–200 characters');
+  requireValue(within === undefined || (within.length > 0 && !/[\0\r\n]/.test(within)), 'A search path must be a single line');
   // Native Git searches frozen blobs without a checkout, text conversion or repository scripts.
   // The shared command deadline and 16 MiB output cap also bound broad searches.
-  const output = decode(git(repository, ['grep', '-I', '-n', '-z', '-F', '--no-textconv', '-e', query, revision, '--'], true));
+  const output = decode(git(repository, ['grep', '-I', '-n', '-z', '-F', '--no-textconv', '-e', query, revision, '--',
+    ...(within === undefined ? [] : [within])], true));
   const matches: { path: string; line: number }[] = [];
   for (const match of output.matchAll(/([^\0]+)\0(\d+)\0[^\n]*(?:\n|$)/g)) {
     if (matches.length === 50) return { matches, truncated: true };
