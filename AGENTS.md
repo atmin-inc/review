@@ -655,3 +655,24 @@ that differ by less than about 0.5 golden per run, so "7, then 5, then 4 of 12" 
 trend. The rewrite's revert stands on its collapse in claim volume, 83 emitted to 23,
 which is not in doubt. Size every experiment from this SD before spending; the method is
 in `/mnt/project-files/method-2026-09-22.md`.
+
+## Every claim labelled; the revert above was decided on the wrong metric (2026-09-22)
+
+All 397 claims on disk were labelled against a written rubric, each non-obvious label
+backed by a code fact read from the case's head revision. Data, rubric, code facts and a
+script that reproduces every number: `/mnt/project-files/labelled-claims-2026-09-22/`.
+Harmful means speculation with no named mechanism, or a named mechanism the code does not
+have — acting on either changes code nothing shows is broken.
+
+- **The verifier ships overstated claims at exactly the rate it ships real ones, 48%**, and
+  restatements most of all, 74%. 55% of everything shipped is harmful. Overstated claims are
+  29% of all emitted and are falsifiable in principle — one grep refutes most — but their
+  propositions test the diff rather than the mechanism the claim names.
+- **The prompt rewrite reverted in `94aff15` cut harmful findings from 2.9 to 0.13 per run
+  (t = 4.0), while its drop in acceptable findings, 1.5 to 0.75, is inside noise (t = 1.3).**
+  6 of its 8 shipped findings are acceptable, against 15 of the baseline's 47. It failed
+  the pass rule written before the runs, and that rule stays as written; the rule was set
+  on golden recall, which the section above shows cannot see anything smaller than a
+  catastrophe on 10 runs.
+- One labeller, not independently re-checked. Treat the rewrite result as strong on harm
+  and silent on recall.

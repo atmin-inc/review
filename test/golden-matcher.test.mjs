@@ -17,6 +17,17 @@ test('a claim naming the defect in other words still matches', () => {
   assert.deepEqual(matches({ location: MIX,
     description: 'align-items mixin includes -ms-align-items property which is not a valid CSS property' }),
     ['016[1] -ms-align-items']);
+  assert.deepEqual(matches({ location: MIX,
+    description: 'The align-items mixin includes -ms-align-items vendor prefix which is not a standard CSS property' }),
+    ['016[1] -ms-align-items']);
+  // The corrective form -- what the code should have said -- is the best-phrased version
+  // of a finding, and the first rules missed it because they were written from claims
+  // that describe consequences.
+  for (const description of [
+    'The OR condition in deleteMany creates incorrect logic: it should be AND between method:SMS and the two deletion criteria (past date OR high retry count)',
+    'The deleteMany OR condition should have method: WorkflowMethods.SMS apply to both clauses (past scheduled date AND retryCount > 1), not just the first clause',
+    'The base version only deleted SMS reminders with past scheduled dates, but head version also deletes any reminder with retryCount > 1, expanding the scope of deletion beyond SMS reminders.',
+  ]) assert.deepEqual(matches({ location: SMS, description }), ['005[1] deleteMany non-SMS']);
 });
 
 test('a different defect in the same file does not match', () => {
