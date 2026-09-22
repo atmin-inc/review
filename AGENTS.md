@@ -676,3 +676,7 @@ have — acting on either changes code nothing shows is broken.
   catastrophe on 10 runs.
 - One labeller, not independently re-checked. Treat the rewrite result as strong on harm
   and silent on recall.
+- **Re-applied on Lors's decision, 2026-09-22.** `claimInstructions` is the rewritten prompt
+  again, exactly as measured. The `record_claim` tool description still carries "Claims are
+  cheap", as it did during those runs, so what ships is the configuration the 0.13 figure
+  was measured on. Changing it is a separate, one-change experiment.
