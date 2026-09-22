@@ -514,8 +514,9 @@ runs on the five cases.
 ## Could the reviewer express all 12 human comments? Yes, 11 on grep alone (2026-09-22)
 
 Each of the 12 golden comments was written out by hand as a claim in the current schema,
-with real checks, and run against the frozen snapshots. Script in the session scratchpad
-as `twelve.mjs`.
+with real checks, and run against the frozen snapshots. The script is
+`benchmarks/twelve-claims.mjs`; point `RUNS` at a directory of prepared `case-<id>-r1`
+snapshots. It is not a suite test because those snapshots are not in this repository.
 
 - **24 of 25 propositions settle on rung 1, and 11 of the 12 claims would ship on grep
   alone.** So neither the claim schema nor the four-check vocabulary is the ceiling. The
@@ -554,7 +555,30 @@ settled answer.
 that turns out to be wrong costs almost nothing, because verification kills it before any
 user sees it."*
 
-**That premise is false as measured.** 105 claims emitted, 65 shipped. Verification is not
-the filter the prompt promises, so the instruction to emit speculatively is not a harmless
-invitation — it is the noise generator, and it is deliberate. Any attempt to cut noise that
-leaves that sentence in place is arguing with the prompt.
+**That premise was false as measured.** 105 claims emitted, 65 shipped. Verification is not
+the filter the prompt promised, so the instruction to emit speculatively was not a harmless
+invitation — it was the noise generator, and it was deliberate.
+
+**Rewritten 2026-09-22, and unmeasured until a run set says otherwise.** Three changes, all
+in `claimInstructions`:
+
+1. The false premise is gone. The prompt now says what is true — verification settles the
+   propositions you write and never asks whether the claim was worth making, so an
+   unsupportable claim reaches the user — and states the 105/65 number. The bar is no
+   longer confidence but whether the defect can be stated as facts about text. Consequence
+   language is named and refused. The recall guard stays explicit: claim everything
+   statable that way, however small, because nothing above Medium is currently missed and
+   that must not regress.
+2. **One proposition must name what the code should have carried instead.** This is the
+   corrective form the measurement found, required in the prompt rather than added as a
+   schema field, which is the smaller change and testable first.
+3. **Pattern distinctiveness is now stated**, because two of the three failures when
+   writing the twelve claims by hand were this: the search caps at 50 matches so a common
+   word settles nothing, and a stylesheet built on `@include flexbox()` does not contain
+   the text `display: flex`.
+
+**Measure before believing any of it.** The known failure mode is the one that killed the
+previous emitter change: told to name a replacement, the model may fabricate one. 5 cases
+x 2 repeats is about $1.52 at the measured mean of $0.152 a run, which fits what is left of
+the OpenRouter credit; compare against repeats r1 and r2 of the baseline only, never
+against all three, or the "found at least once" counts are not comparable.
