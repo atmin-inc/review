@@ -2,6 +2,7 @@ import { Ajv } from 'ajv';
 import { assignClaimIds, claimRejection, parseLocation, CLAIM_TYPES, type Claim, type ClaimDraft } from './claim.js';
 import { PRIORITIES, ReviewInputError, text as str } from './contracts.js';
 import type { Model, TurnInput } from './investigation.js';
+import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import type { Revisions } from './symbolic.js';
 
 // The emission half of the lifecycle. This investigator is wide and cheap on purpose:
@@ -96,6 +97,23 @@ export interface ClaimLimits {
   maxTurns: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number;
   maxUsd: number; costOf(inputTokens: number, outputTokens: number): number;
 }
+// Everything here is controller-owned: counts, an allowlisted finish reason, and the
+// structured `ProviderFailure`, which exists precisely because it is safe to persist.
+// No provider or repository text reaches this record. It is written because a run that
+// stops with nothing recorded is otherwise unexplainable after the fact: on 2026-09-21
+// two full measurement rounds went to guessing at a failure that `ProviderFailure`
+// already knew the shape of, and on 2026-09-22 a run burned its whole turn limit and
+// $0.34 emitting no claim, with nothing on disk to say what it had been doing.
+export interface ClaimTelemetry {
+  turns: number;
+  toolCalls: number;
+  toolCallsByName: Record<string, number>;
+  droppedTurns: number;
+  inputTokens: number;
+  outputTokens: number;
+  finishReason: string | null;
+  failure: ProviderFailure | null;
+}
 export interface ClaimInvestigation {
   claims: Claim[];
   complete: boolean;
@@ -103,13 +121,16 @@ export interface ClaimInvestigation {
   toolErrors: { tool: string; reason: string }[];
   stopReason: string | null;
   spentUsd: number;
+  telemetry: ClaimTelemetry;
 }
 
 export async function investigateClaims(revisions: Revisions, sourceOf: (path: string) => string | null,
   context: unknown, model: Model, limits: ClaimLimits, signal: AbortSignal = new AbortController().signal): Promise<ClaimInvestigation> {
   const drafts: ClaimDraft[] = [];
   const seen = new Set<string>();
-  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0 };
+  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0,
+    telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
+      finishReason: null, failure: null } };
   const transcript: unknown[] = [];
   // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
   // time rather than mid-exchange. Kept in step with `transcript` by the splice below.
@@ -121,6 +142,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   let reservation = 0;
   try {
     for (let turn = 0; turn < limits.maxTurns && !done; turn++) {
+      outcome.telemetry.turns = turn + 1;
       signal.throwIfAborted();
       // The last turn and an exhausted tool budget both mean the same thing: stop
       // looking and close out honestly, rather than being cut off mid-investigation.
@@ -158,6 +180,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
         signal.throwIfAborted();
       }
       droppedTurns += dropped;
+      outcome.telemetry.droppedTurns = droppedTurns;
       if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > limits.maxInputTokens) {
         throw new Error('Input token count unavailable or exceeds the configured limit');
       }
@@ -170,9 +193,19 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       const reply = await model.respond(input, limits.maxOutputTokens, signal);
       signal.throwIfAborted();
       settled += limits.costOf(reply.inputTokens, reply.outputTokens);
+      outcome.telemetry.inputTokens += reply.inputTokens;
+      outcome.telemetry.outputTokens += reply.outputTokens;
+      outcome.telemetry.finishReason = reply.status;
       reservation = 0;
       outcome.spentUsd = settled;
-      if (reply.status !== 'completed') throw new Error('Provider response incomplete; recorded claims preserved');
+      // 'interrupted' is a stream that died or a provider-side error; 'incomplete' is the
+      // model running into `maxOutputTokens` or a content filter. They have different
+      // fixes -- one is worth retrying, the other needs a larger output budget or a
+      // shorter answer -- and reporting them as one message cost a diagnosis on
+      // 2026-09-22, when 3 of 6 runs stopped here and nothing on disk said which.
+      if (reply.status !== 'completed') {
+        throw new Error(`Provider response ${reply.status === 'interrupted' ? 'interrupted' : 'incomplete'}; recorded claims preserved`);
+      }
       roundStart.push(transcript.length);
       transcript.push(...reply.continuation);
       if (!reply.calls.length) {
@@ -183,6 +216,9 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       for (const tool of reply.calls) {
         signal.throwIfAborted();
         if (++toolCalls > limits.maxToolCalls) throw new Error('Tool call limit reached');
+        outcome.telemetry.toolCalls = toolCalls;
+        const named = validators.has(tool.name) ? tool.name : 'unknown';
+        outcome.telemetry.toolCallsByName[named] = (outcome.telemetry.toolCallsByName[named] ?? 0) + 1;
         let output: unknown;
         try {
           const data: unknown = JSON.parse(tool.arguments);
@@ -241,7 +277,15 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   } catch (error) {
     // Controlled messages only: provider and SDK text can carry repository content.
     const allowed = /^(Provider response|Duplicate tool|Tool call limit|Model turn limit|Budget cannot|Input token)/;
+    // A `ProviderRequestError` is not provider text. Its message is written here in this
+    // repository and its `failure` is an allowlisted shape, which is the whole reason
+    // that class exists -- so letting it through leaks nothing and says which of funding,
+    // authentication, rate limit, request or availability actually stopped the run.
+    // Reading it off the generic message cost two measurement rounds on 2026-09-21, when
+    // "Investigation failed" turned out to be an exhausted account.
+    if (error instanceof ProviderRequestError) outcome.telemetry.failure = error.failure;
     const reason = signal.aborted ? 'Investigation cancelled'
+      : error instanceof ProviderRequestError ? error.message
       : error instanceof Error && allowed.test(error.message) ? error.message
       : 'Investigation failed; provider or source operation unavailable';
     outcome.stopReason = reason;

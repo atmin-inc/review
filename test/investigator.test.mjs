@@ -6,6 +6,7 @@ import { revisionFrom } from '../dist/symbolic.js';
 import { verifyClaims } from '../dist/lifecycle.js';
 import { BALANCED } from '../dist/policy.js';
 import { sourceText } from '../dist/snapshot.js';
+import { ProviderRequestError } from '../dist/provider-error.js';
 
 const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxInputTokens: 50000, maxOutputTokens: 4096,
   maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000 };
@@ -173,6 +174,48 @@ test('claims emitted before a failure survive it, and the truncated turn does no
   assert.match(emitted.stopReason, /Provider response incomplete/);
 });
 
+// The two cut-reply cases have different fixes -- an interrupted stream is worth
+// retrying, an output-cap truncation needs a larger budget or a shorter answer -- so
+// reporting them as one message leaves the operator guessing. On 2026-09-22 three runs
+// in six stopped here and nothing on disk said which it had been.
+test('a cut reply says whether it was interrupted or truncated', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const cut = status => ({
+    async count() { return 1000; },
+    async respond() {
+      return { model: 'stub', inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0,
+        status, continuation: [], calls: [] };
+    },
+    toolOutput: (id, value) => ({ id, value }),
+  });
+  const interrupted = await investigateClaims(revisions, sourceOf, {}, cut('interrupted'), LIMITS);
+  assert.match(interrupted.stopReason, /Provider response interrupted/);
+  assert.equal(interrupted.telemetry.finishReason, 'interrupted');
+  const truncated = await investigateClaims(revisions, sourceOf, {}, cut('incomplete'), LIMITS);
+  assert.match(truncated.stopReason, /Provider response incomplete/);
+  assert.equal(truncated.telemetry.finishReason, 'incomplete');
+});
+
+// A run that records nothing is the one most in need of an explanation and the one that
+// leaves the least behind. These counts are what say whether it was reading and finding
+// nothing, or failing every tool call, or never getting a turn at all.
+test('a run that emits no claim still reports what it spent its turns on', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const busy = model([
+    action('read_file', { side: 'head', path: 'update.ts', startLine: 1, count: 5 }),
+    action('read_file', { side: 'head', path: 'update.ts', startLine: 1, count: 5 }),
+    action('search_repository', { side: 'head', query: 'owner' }),
+    end(false, ['nothing found']),
+  ]);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, busy, LIMITS);
+  assert.equal(emitted.claims.length, 0);
+  assert.equal(emitted.telemetry.toolCalls, 4);
+  assert.equal(emitted.telemetry.toolCallsByName.read_file, 2);
+  assert.equal(emitted.telemetry.toolCallsByName.search_repository, 1);
+  assert.equal(emitted.telemetry.turns, 4);
+  assert.ok(emitted.telemetry.outputTokens > 0, 'tokens spent are recorded even with nothing to show for them');
+});
+
 // Provider and SDK failures can carry repository text, so only controlled messages
 // cross back out of the loop.
 test('an unexpected failure is reported without its message', async t => {
@@ -181,6 +224,23 @@ test('an unexpected failure is reported without its message', async t => {
   const emitted = await investigateClaims(revisions, sourceOf, {}, exploding, LIMITS);
   assert.equal(emitted.stopReason, 'Investigation failed; provider or source operation unavailable');
   assert.doesNotMatch(JSON.stringify(emitted), /abc123/);
+  assert.equal(emitted.telemetry.failure, null);
+});
+
+// The one exception to the rule above, and the reason ProviderRequestError exists: its
+// message is written in this repository and its `failure` is an allowlisted shape, so
+// nothing provider-authored crosses out. Collapsing it into the generic message cost two
+// measurement rounds on 2026-09-21, where "Investigation failed" was an empty account.
+test('a provider failure keeps its kind instead of becoming the generic message', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const broke = {
+    async count() { return 1000; },
+    async respond() { throw new ProviderRequestError('inference', 402, 'insufficient_quota'); },
+    toolOutput: () => ({}),
+  };
+  const emitted = await investigateClaims(revisions, sourceOf, {}, broke, LIMITS);
+  assert.match(emitted.stopReason, /funding/i);
+  assert.deepEqual(emitted.telemetry.failure, { kind: 'funding', stage: 'inference', status: 402, code: 'insufficient_quota' });
 });
 
 test('a claim carrying a check outside the catalogue is rejected by the schema', async t => {
