@@ -6,9 +6,13 @@ import { composeChain } from '../dist/evidence.js';
 // A revision backed by literal source, searched the way git grep searches frozen
 // blobs: whole revision, literal query, capped result set.
 const revisionOf = (files, cap = 50) => ({
-  search(query) {
+  // `within` mirrors the git pathspec: the cap applies to what the search actually
+  // looked at, so narrowing the search is what lets a file-scoped check reach its own
+  // answer in a repository where the pattern is common elsewhere.
+  search(query, within) {
     const matches = [];
     for (const [path, text] of Object.entries(files)) {
+      if (within !== undefined && path !== within) continue;
       text.split('\n').forEach((line, index) => { if (line.includes(query)) matches.push({ path, line: index + 1 }); });
     }
     return { matches: matches.slice(0, cap), truncated: matches.length > cap };
@@ -177,9 +181,23 @@ test('file_contains reports absence only when it established it', () => {
   assert.deepEqual(missing.evidence, []);
   assert.match(missing.limitations[0], /does not exist in this revision/);
 
-  // A capped search proves nothing about what it did not reach.
+  // A file-scoped check narrows the search to its own path, so matches elsewhere cannot
+  // spend the cap before it reaches the file. Without the pathspec this returned
+  // inconclusive with the answer one grep away: measured 2026-09-21 on Martian case-046,
+  // where `isoformat` appears throughout Sentry and the check could not settle that
+  // assignment_source.py lacks it. That cost a correct finding.
+  const common = Object.fromEntries([...Array(60)].map((_, i) => [`other${i}.py`, 'isoformat\n']));
+  const scoped = runCheck(revisionOf({ ...common, 'a.py': 'queued: datetime\n' }, 50),
+    { assertion: 'file_contains', path: 'a.py', pattern: 'isoformat', expect: 'absent' });
+  assert.equal(scoped.evidence[0].result, 'hit');
+  assert.deepEqual(scoped.limitations, []);
+
+  // A capped search still proves nothing about what it did not reach. `within` is
+  // optional on the interface, so a revision that ignores it must keep the old
+  // reservation rather than read "nothing found" as absence established.
   const noisy = Object.fromEntries([...Array(60)].map((_, i) => [`noise${i}.mjs`, 'Forbidden\n']));
-  const truncated = runCheck(revisionOf({ ...noisy, 'test/a.test.mjs': 'nothing here\n' }, 50),
+  const unscoped = revisionOf({ ...noisy, 'test/a.test.mjs': 'nothing here\n' }, 50);
+  const truncated = runCheck({ ...unscoped, search: query => unscoped.search(query) },
     { assertion: 'file_contains', path: 'test/a.test.mjs', pattern: 'Forbidden', expect: 'absent' });
   assert.deepEqual(truncated.evidence, []);
   assert.match(truncated.limitations[0], /truncated/);

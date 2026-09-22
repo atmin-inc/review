@@ -510,3 +510,51 @@ runs on the five cases.
   and stays quiet would remove roughly a quarter of all noise for 2 Low findings. That is
   a coverage decision, not a filter over emitted claims, so it does not repeat the
   mechanism that has now failed five times.
+
+## Could the reviewer express all 12 human comments? Yes, 11 on grep alone (2026-09-22)
+
+Each of the 12 golden comments was written out by hand as a claim in the current schema,
+with real checks, and run against the frozen snapshots. Script in the session scratchpad
+as `twelve.mjs`.
+
+- **24 of 25 propositions settle on rung 1, and 11 of the 12 claims would ship on grep
+  alone.** So neither the claim schema nor the four-check vocabulary is the ceiling. The
+  reviewer can already state and deterministically verify almost every comment a human
+  wrote on these PRs.
+- **The single exception is case-005's `deleteMany`**, whose real assertion is "the
+  `retryCount` branch of this `OR` carries no `method` filter". Literal grep cannot ask a
+  positional question about a position inside an expression, so that proposition needs
+  rung 3. Everything else — a missing vendor prefix, a template still naming a removed
+  class, a wrong alias string, a signature, a `default_factory` that is absent — is a
+  literal search.
+- **Two of the three initial failures were the patterns, not the machinery.** `display:
+  flex` does not appear in discourse's header, which uses `@include flexbox()`; a generic
+  token like `filters` truncates in the Grafana tree. Both settle with a distinctive
+  pattern. The lesson is the emitter's, not the verifier's: **a check is only as good as
+  the distinctiveness of its pattern**, and in a large repository a common word settles
+  nothing.
+
+### The bug this turned up, now fixed
+
+`file_contains` searched the **whole repository** and filtered by path afterwards, so a
+pattern common elsewhere spent the 50-match cap before the search ever reached the file,
+and the check returned inconclusive with the answer one grep away. That is exactly why
+case-046's datetime round-trip comment could not settle: `isoformat` appears throughout
+Sentry. `searchSource` now takes an optional pathspec and `file_contains` passes its own
+path. Tested, and the test fails against the previous code. Suite is 320: 318 pass, 2 skip.
+
+The truncation guard stays, because `within` is optional on the `Revision` interface and a
+revision that ignores it must keep the old reservation. The stale assertion that expected
+inconclusive for "noise elsewhere, file clean" was encoding the bug and now asserts the
+settled answer.
+
+### Where the noise actually comes from
+
+`claimInstructions` in `src/investigator.ts` says, in as many words: *"Emit widely. A claim
+that turns out to be wrong costs almost nothing, because verification kills it before any
+user sees it."*
+
+**That premise is false as measured.** 105 claims emitted, 65 shipped. Verification is not
+the filter the prompt promises, so the instruction to emit speculatively is not a harmless
+invitation — it is the noise generator, and it is deliberate. Any attempt to cut noise that
+leaves that sentence in place is arguing with the prompt.
