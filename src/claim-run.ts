@@ -76,6 +76,12 @@ export async function runClaimReview(directory: string, profile: Profile,
   };
   persist('claims.json', investigation.claims);
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
+  // Written as its own file rather than folded into the verification, because it is about
+  // the run and not about any claim, and because a run that emits nothing still needs to
+  // leave an explanation behind. Counts and allowlisted enums only -- see ClaimTelemetry.
+  persist('telemetry.json', { ...investigation.telemetry, stopReason: investigation.stopReason,
+    complete: investigation.complete, claims: investigation.claims.length, spentUsd: investigation.spentUsd,
+    toolErrors: investigation.toolErrors, limitations: investigation.limitations });
   return { claims: investigation.claims, investigation, verification };
 }
 
