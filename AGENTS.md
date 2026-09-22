@@ -582,3 +582,47 @@ previous emitter change: told to name a replacement, the model may fabricate one
 x 2 repeats is about $1.52 at the measured mean of $0.152 a run, which fits what is left of
 the OpenRouter credit; compare against repeats r1 and r2 of the baseline only, never
 against all three, or the "found at least once" counts are not comparable.
+
+## The emitter prompt rewrite was measured and reverted (2026-09-22)
+
+8 runs of a planned 10 on the same five frozen cases, $1.54, stopped early because the
+result was not in doubt and the OpenRouter credit was nearly gone. Full table in
+`/mnt/project-files/emitter-prompt-rewrite-2026-09-22.md`.
+
+| | baseline r1+r2 | rewritten prompt |
+| --- | --- | --- |
+| runs | 10 | 8 |
+| emitted / shipped | 83 / 47 | 23 / 8 |
+| golden comments found | **7 of 12** | **2 of 12** |
+| shipped naming a replacement | 6 of 47 (13%) | **0 of 8 (0%)** |
+| spend per run | $0.145 | $0.193 |
+
+- **It cost a third more per run to find a fifth as much.** The pass criterion set before
+  the runs was recall holding at 7 of 12 with the shipped count roughly halved. Noise did
+  fall, but nothing separated noise from findings: the reviewer just says less. Lost
+  against the baseline are case-032's Critical recursion bug and case-016's
+  `-ms-align-items` comment.
+- **The instruction at the centre of the change did not take at all.** Every claim was
+  required to name what the code should have carried instead, and the rate went from 13%
+  to 0%. So this does not measure the corrective form and find it worthless; it measures
+  asking for it in a prompt, and finds the model does not produce it when asked — it
+  emits less of everything instead. A required, checkable field rejected at
+  `record_claim` time, the way `PROSE` already is, is a different mechanism and is still
+  untested.
+- **A contradiction was live during these runs and is deliberately still in place.** The
+  `record_claim` tool description says *"Claims are cheap: emit a claim you are unsure of
+  rather than staying silent, because a later verification pass settles it against the
+  code and a wrong claim never reaches a user"* — the same false premise the rewrite
+  removed from `claimInstructions`, in a second place that was not checked. It is a real
+  confound. It is left alone because **the revert's purpose is to restore the exact
+  configuration the 7-of-12 baseline was measured in**, and editing the tool description
+  would produce a third unmeasured emitter, immediately after an unmeasured emitter
+  change cost five golden comments. Fix it in the same run set that measures it.
+- Half the runs were degraded (3 cut replies, 1 turn limit) against 4 of 10 in the
+  baseline, so the two sets are comparable on that axis. The two runs not done are
+  case-032 r2 and case-046 r2, both cases the baseline found golden comments on, so a
+  full set would have flattered the rewrite less rather than more.
+
+**The rule this adds to the five already here: a change to what the emitter is told is
+not a small change, and bundling three of them makes the result unattributable.** Three
+were measured as one and the loss cannot be assigned to any of them.
