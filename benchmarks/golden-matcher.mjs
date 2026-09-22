@@ -14,7 +14,7 @@ export const RULES = {
   '005[0] concurrent retryCount': { file: 'scheduleSMSReminders.ts',
     all: [/retryCount/i, /concurren|race condition|stale|atomic|simultaneous|lost update|lose increments/i] },
   '005[1] deleteMany non-SMS': { file: 'scheduleSMSReminders.ts',
-    all: [/delet/i, /retryCount/i, /non-SMS|not SMS|not just SMS|only SMS|SMS method|to SMS|regardless of method|not.*constrained|any method|email|whatsapp|OR instead of AND|method (filter|constraint)/i] },
+    all: [/delet(e|es|ed|ing)\b|deleteMany/i, /retryCount/i, /non-SMS|not SMS|not just SMS|only SMS|SMS method|to SMS|regardless of method|not.*constrained|any method|email|whatsapp|OR instead of AND|method (filter|constraint)/i] },
   '016[0] float vs flexbox': { file: 'header.scss', all: [/float/i] },
   '016[1] -ms-align-items': { file: 'mixins.scss',
     all: [/ms-align-items|ms-flex-align/i, /duplicat|incorrect|invalid|not a valid|not valid|never existed|typo|wrong|does not exist|non-?existent/i] },

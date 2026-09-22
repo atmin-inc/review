@@ -28,6 +28,10 @@ test('a different defect in the same file does not match', () => {
     description: 'The getForLogin cache key does not include organizationId, causing all organization searches to share the same cache entry' }), []);
   assert.deepEqual(matches({ location: IDP,
     description: 'The getForLogin method may throw NullPointerException if idpDelegate.getForLogin returns null' }), []);
+  // From the pilot set: names WhatsApp and deletion, but says WhatsApp lacks the logic,
+  // not that the delete reaches WhatsApp reminders.
+  assert.deepEqual(matches({ location: SMS,
+    description: 'The retry logic is inconsistent with WhatsApp reminders, which don\'t have retryCount increments or deletion logic.' }), []);
 });
 
 test('the right words in the wrong file do not match', () => {
