@@ -299,6 +299,36 @@ test('a transcript that outgrows the window is trimmed, not fatal', async t => {
   assert.equal(outcome.limitations.filter(note => note.includes('dropped to fit the context window')).length, 1);
 });
 
+// The emission bench records one run's reading and later re-asks only the claim-writing
+// step over it. Both hooks are off in the product, so the record must be complete even
+// when the live transcript was trimmed, and a prior transcript must reach the first request.
+test('a recorded transcript survives trimming, and a prior one is sent first', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  let turns = 0;
+  const counting = {
+    async count(input) { return 100 + input.transcript.length * 1000; },
+    async respond() {
+      const step = ++turns >= 5 ? end() : action('search_repository', { side: 'head', query: 'update' });
+      return { model: 'stub', inputTokens: 100, outputTokens: 50, cachedInputTokens: 0,
+        status: 'completed', continuation: [{ role: 'assistant', content: `turn ${turns}` }], calls: [step] };
+    },
+    toolOutput: (id, value) => ({ id, value }),
+  };
+  const recorded = await investigateClaims(revisions, sourceOf, {}, counting,
+    { ...LIMITS, maxTurns: 12, maxInputTokens: 4000, recordTranscript: true });
+  assert.ok(recorded.limitations.some(note => note.includes('dropped to fit the context window')), 'the live transcript was trimmed');
+  assert.deepEqual(recorded.transcript.filter(entry => entry.role === 'assistant').map(entry => entry.content),
+    ['turn 1', 'turn 2', 'turn 3', 'turn 4', 'turn 5'], 'yet the record keeps every turn');
+
+  const plain = await investigateClaims(revisions, sourceOf, {}, model([end()]), LIMITS);
+  assert.equal(plain.transcript, undefined, 'nothing is recorded unless asked');
+
+  const prior = [{ role: 'assistant', content: 'read before' }];
+  const resumed = model([end()]);
+  await investigateClaims(revisions, sourceOf, {}, resumed, { ...LIMITS, priorTranscript: prior });
+  assert.deepEqual(resumed.inputs[0].transcript, prior);
+});
+
 // The cap still stops a single turn that cannot fit, since there is no older turn to drop
 // and sending it would fail at the provider instead.
 test('a first turn over the window still stops the run', async t => {

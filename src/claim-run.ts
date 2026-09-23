@@ -26,7 +26,8 @@ export type CrossFamilySource = 'none' | 'jev';
 
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
-  crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {}): Promise<ClaimReview> {
+  crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
+  capture: { transcript?: boolean } = {}): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
   if (profile.provider === 'codex-local' && !injectedModel) {
     throw new Error('Local subscription experiments require the benchmark Codex adapter; hosted execution is not supported');
@@ -44,7 +45,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const investigation = await investigateClaims(revisions, sourceOf, context, model, {
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
-    maxUsd: profile.maxUsd,
+    maxUsd: profile.maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}),
     costOf: (input, output) => profile.provider === 'codex-local' ? 0 : price(input, output, 0, profile.model),
   }, signal);
 
@@ -54,6 +55,8 @@ export async function runClaimReview(directory: string, profile: Profile,
     renameSync(temporary, join(directory, name));
   };
   persist('claims.json', investigation.claims);
+  // Opt-in, for the emission bench only: this is provider and repository text.
+  if (investigation.transcript) persist('transcript.json', investigation.transcript);
   // Written as its own file rather than folded into the verification, because it is about
   // the run and not about any claim, and because a run that emits nothing still needs to
   // leave an explanation behind. Counts and allowlisted enums only -- see ClaimTelemetry.
