@@ -750,3 +750,13 @@ the profile.
   comment, against 20 of 140 over DeepSeek's 40 on the same readings; too few samples to
   compare, and unlabelled for harm. Claude through OpenRouter is the way to measure it
   properly, at Anthropic list prices.
+
+## Three $0 ideas on the labelled set (2026-09-23)
+
+Detail in `/mnt/project-files/free-ideas-2026-09-23.md`. Agreement across repeats does
+not separate real from noise (harmful share flat at 57-67% whether a claim recurs in 1 or
+4 runs), and no claim type is noise without also holding golden comments. **Not showing
+P3 does separate:** over the 80 blind runs, harmful per run 1.85 to 0.96, acceptable 0.95
+to 0.79, distinct golden comments unchanged at 8. It is the model's own severity, so it
+is not a post-hoc judgement of the claim; it is still a display rule, and 55% of what
+ships would remain harmful.
