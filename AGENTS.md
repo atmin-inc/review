@@ -768,3 +768,23 @@ under "Withheld" without its text. `claim-review --show-minor` restores it. The 
 bench passes `withhold: []` so it still measures verification alone and still reproduces
 260 of 260. `score-runs.mjs` counts `confirmed` only, so run sets scored from here on
 count P3 as not shipped; the sets recorded before this date counted it as shipped.
+
+## The checked "should be" field was measured and stays off (2026-09-23)
+
+Pre-registered, 40 emission samples per arm on the same 10 frozen readings, blind labels
+(kappa 0.53 on a 25% second pass). Full result in
+`/mnt/project-files/checkable-fix-result-2026-09-23/`. The field (`shouldBe` on a claim,
+`requireCorrection` in `ClaimLimits`, `--require-correction` on the emission bench) stays
+in the code, off.
+
+- **Harmful per sample 1.20 to 1.15 (p = 0.43). Nothing moved.** Acceptable 0.82 to 0.72,
+  golden 0.28 to 0.42, neither significant; distinct golden found 3 to 6, same caveat.
+- Volume held (225 claims against 236), unlike the prompt rewrite, and **the model filled
+  the field with code 59 times out of 64**, not prose. Those claims are harmful at the same
+  rate as claims with no field (73% against 67%).
+- So the corrective form, the one property that separated golden from noise in the 60-run
+  analysis, was a correlate and not a cause: a model names a replacement line for a
+  speculative claim as easily as it names the claim, and no check on that line tells an
+  invented departure from a real one. That closes the line of work that began in
+  `what-separates-real-findings-2026-09-21.md`. Seven emission-side and verification-side
+  mechanisms have now been measured; the only one that moved harm is withholding P3.
