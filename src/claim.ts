@@ -58,6 +58,14 @@ export interface Proposition { proposition: string; revision?: Side; check?: Sym
 export const propositionSide = (item: Proposition): Side =>
   item.check?.revision ?? item.revision ?? 'head';
 
+// What the code at the location should have carried instead: one literal line or
+// fragment, and optionally a path where that text already appears, when the location
+// departs from a convention its siblings or its contract follow. Measured 2026-09-21
+// over 60 runs, this corrective form is the one property that separates the findings
+// matching a human comment from the noise, and it is rare because nothing asked for it.
+// Asked for in the prompt alone (2026-09-22) it appeared 0 times; here it is a field the
+// code checks, so a claim with no departure to name cannot be recorded.
+export interface Correction { text: string; seenAt?: string }
 export interface ClaimDraft {
   type: ClaimType;
   location: string;
@@ -65,8 +73,13 @@ export interface ClaimDraft {
   suspectedCondition: string;
   severity: Priority;
   evidenceToCheck: Proposition[];
+  shouldBe?: Correction;
   investigatorConfidence?: number;
 }
+// The slice of a revision the correction check needs, so this module stays free of the
+// symbolic layer that imports it.
+export interface CorrectionLookup { search(query: string, within?: string): { matches: unknown[] } }
+export interface RejectionOptions { requireCorrection?: boolean; head?: CorrectionLookup }
 export interface Claim extends ClaimDraft { claimId: string }
 
 // Ordered innermost-first by convention of the scan, not by pattern precedence.
@@ -146,8 +159,11 @@ const PROSE = /\.(md|markdown|mdx|rst|adoc|asciidoc|txt|text)$/i;
 // Rules 1 to 4 of spec/claim-schema.md. Rule 5 is an investigator instruction, and
 // rule 2 is only partly decidable here: code can reject a restatement of the
 // description, but whether a condition truly names a trigger is a judgment call.
-export function claimRejection(draft: ClaimDraft, source: string | null): string | null {
+export function claimRejection(draft: ClaimDraft, source: string | null, options: RejectionOptions = {}): string | null {
   if (!CLAIM_TYPES.includes(draft.type)) return `type ${JSON.stringify(draft.type)} is outside the claim vocabulary`;
+  if (options.requireCorrection && !draft.shouldBe) {
+    return 'shouldBe is required: name the text the code at this location should have carried instead. A consequence is not a defect until you can name the departure';
+  }
   if (!PRIORITIES.includes(draft.severity)) return `severity ${JSON.stringify(draft.severity)} is not a priority`;
   if (!draft.evidenceToCheck.length) return 'evidenceToCheck must name at least one proposition to verify';
   if (!draft.suspectedCondition.trim()) return 'suspectedCondition is empty, so the claim is not falsifiable';
@@ -160,6 +176,19 @@ export function claimRejection(draft: ClaimDraft, source: string | null): string
   }
   if (source !== null && (line < 1 || line > source.split('\n').length)) {
     return `location line ${line} does not resolve in the reviewed revision`;
+  }
+  if (draft.shouldBe) {
+    const { text, seenAt } = draft.shouldBe;
+    if (!searchable(text)) return 'shouldBe.text must be one literal line of at most 200 characters, as it would appear in the file';
+    if (source !== null && (source.split('\n')[line - 1] ?? '').includes(text.trim())) {
+      return 'shouldBe.text already appears on the location line, so it names nothing to change';
+    }
+    if (seenAt !== undefined && options.head) {
+      const there = parseLocation(seenAt.includes(':') ? seenAt : `${seenAt}:1`).path;
+      if (!options.head.search(text, there).matches.length) {
+        return `shouldBe.seenAt names ${there}, and that file does not contain shouldBe.text at head; a convention the code departs from has to exist somewhere you can name`;
+      }
+    }
   }
   // Rung 1 searches for a single literal line of at most 200 characters, so a longer or
   // multi-line pattern names a check that cannot be run. Measured 2026-09-21 on Martian

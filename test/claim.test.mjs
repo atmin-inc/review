@@ -141,3 +141,21 @@ test('a check pattern the search cannot run is refused at emit time', () => {
     check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account' } }] };
   assert.equal(claimRejection(fine, null), null);
 });
+
+// Every human comment on the benchmark says what the code should have been; the noise
+// says what might happen. The corrective form is checked, not requested: asked for in the
+// prompt alone it appeared 0 times (2026-09-22). So when it is required, a claim with no
+// departure to name cannot be recorded, a fix that is already there names nothing, and a
+// convention the claim cites has to exist where it says it does.
+test('a required correction is checked against the code, not taken on trust', () => {
+  const head = { search: (text, within) => ({ matches: within === 'other.py' && text === 'db.run(sanitize(query))' ? [{}] : [] }) };
+  const strict = { requireCorrection: true, head };
+  assert.match(claimRejection(draft(), BEFORE, strict), /shouldBe is required/);
+  assert.equal(claimRejection(draft(), BEFORE), null, 'optional unless asked for');
+  const good = draft({ shouldBe: { text: 'db.run(sanitize(query))' } });
+  assert.equal(claimRejection(good, BEFORE, strict), null);
+  assert.match(claimRejection(draft({ shouldBe: { text: 'a\nb' } }), BEFORE, strict), /one literal line/);
+  assert.match(claimRejection(draft({ shouldBe: { text: 'db.run(query)' } }), BEFORE, strict), /already appears on the location line/);
+  assert.equal(claimRejection(draft({ shouldBe: { text: 'db.run(sanitize(query))', seenAt: 'other.py' } }), BEFORE, strict), null);
+  assert.match(claimRejection(draft({ shouldBe: { text: 'db.run(sanitize(query))', seenAt: 'missing.py:3' } }), BEFORE, strict), /does not contain shouldBe.text/);
+});

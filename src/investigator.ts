@@ -38,6 +38,9 @@ export const claimSchema = {
       type: 'object', additionalProperties: false,
       properties: { proposition: str, revision: { type: 'string', enum: ['head', 'base'], default: 'head' }, check: symbolicCheck },
       required: ['proposition'] } },
+    shouldBe: { type: 'object', additionalProperties: false, required: ['text'],
+      description: 'What the code at location should have carried instead: one literal line or fragment as it would appear in the file, and optionally seenAt, a path where that text already appears.',
+      properties: { text: str, seenAt: str } },
     investigatorConfidence: { type: 'number', minimum: 0, maximum: 1 },
   },
   required: ['type', 'location', 'description', 'suspectedCondition', 'severity', 'evidenceToCheck'],
@@ -89,6 +92,11 @@ Read before you claim: read the changed ranges on both sides, and search for cal
 
 End with end_investigation and honest limitations. Use tools, not prose.`;
 
+// Appended to the instructions only when `requireCorrection` is on, so the baseline
+// prompt stays byte-identical to what every earlier number was measured on.
+export const correctionInstruction = `
+Every claim also needs shouldBe: the text the code at location should have carried instead, as one literal line or fragment exactly as it would appear in the file — the corrected expression, the missing call, the right name or value. When the location departs from a convention its siblings or its contract already follow, add seenAt: the path where that text already appears; it is checked. A claim that cannot say what the code should have been is rejected: a consequence is not a defect until you can name the departure.`;
+
 // The investigator spends money, so its bound is a reservation rather than a turn
 // count alone: each request is priced before it is made and settled after, and a
 // request that cannot be reserved is not made. costOf keeps the rate card with the
@@ -102,6 +110,9 @@ export interface ClaimLimits {
   // paying for, and varying with, the reading every time.
   recordTranscript?: boolean;
   priorTranscript?: unknown[];
+  // Under measurement (pre-registration 2026-09-23): a claim must name what the code
+  // should have carried, and the code checks it. Off until the run set says otherwise.
+  requireCorrection?: boolean;
 }
 // Everything here is controller-owned: counts, an allowlisted finish reason, and the
 // structured `ProviderFailure`, which exists precisely because it is safe to persist.
@@ -167,7 +178,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
           ? 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.'
           : 'Read the change and its dependencies, then emit every claim you can support with propositions.',
       } });
-      const input: TurnInput = { instructions: claimInstructions, context: contextFor(0), transcript, tools };
+      const input: TurnInput = { instructions: claimInstructions + (limits.requireCorrection ? correctionInstruction : ''), context: contextFor(0), transcript, tools };
       let inputTokens = await model.count(input, signal);
       signal.throwIfAborted();
       // A long investigation on a real PR outgrows the window: measured 2026-09-21 over
@@ -251,7 +262,8 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
             // Rule 5 of spec/claim-schema.md, enforced rather than requested. Wide
             // emission is cheap; unfalsifiable emission is not, and a claim the
             // verifier cannot test is noise it would have to carry to the end.
-            const rejection = claimRejection(draft, sourceOf(parseLocation(draft.location).path));
+            const rejection = claimRejection(draft, sourceOf(parseLocation(draft.location).path),
+              { requireCorrection: limits.requireCorrection === true, head: revisions.head });
             if (rejection) throw new ReviewInputError(`Claim rejected: ${rejection}`);
             // A claim is identified by the assertion it makes, not by the checks
             // proposed for it. Fingerprinting the whole draft let the same claim be
