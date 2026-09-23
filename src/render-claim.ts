@@ -20,6 +20,7 @@ function renderSurvivor(claim: Claim, chain: Chain): string {
   return ['', `### ${claim.severity} · ${e(claim.type)} · ${e(claim.location)}`, '',
     e(claim.description), '',
     `**Trigger:** ${e(claim.suspectedCondition)}`, '',
+    ...(claim.shouldBe ? [`**Should be:** ${code(claim.shouldBe.text)}${claim.shouldBe.seenAt ? ` (as in ${e(claim.shouldBe.seenAt)})` : ''}`, ''] : []),
     `Confidence: ${chain.verifierConfidence}.`, '',
     '<details><summary>How this was established</summary>', '',
     'Propositions:', '',

@@ -8,7 +8,7 @@
 // each variant's build, over the same recordings.
 //
 // Usage: node benchmarks/emission-bench.mjs <recorded-run-dir> <out-dir> [--samples N]
-//          [--dist path/to/dist] [--profile profiles/martian-deepseek.json | profiles/martian-claude-sonnet.json] [--turns 16] [--temperature T] [--no-jev]
+//          [--dist path/to/dist] [--profile profiles/martian-deepseek.json | profiles/martian-claude-sonnet.json] [--turns 16] [--temperature T] [--no-jev] [--require-correction]
 // Each sample is written as <out-dir>/<case>-r<n>/{claims,verification,telemetry}.json, the
 // layout score-runs.mjs and the blind labelling already read.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -82,6 +82,7 @@ for (let n = 1; n <= samples; n++) {
       maxTurns: Number(flag('--turns', 16)), maxToolCalls: profile.maxToolCalls, maxInputTokens: profile.maxInputTokens,
       maxOutputTokens: profile.maxOutputTokens, maxUsd: profile.maxUsd,
       costOf: (input, output) => profile.maxUsd === 0 ? 0 : price(input, output, 0, profile.model), priorTranscript: prior,
+      ...(args.includes('--require-correction') ? { requireCorrection: true } : {}),
     });
   } while (++attempts < 3 && !investigation.claims.length && /^Provider response interrupted/.test(investigation.stopReason ?? ''));
   let rung;
