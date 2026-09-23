@@ -693,4 +693,5 @@ reproducing script in `/mnt/project-files/prompt-rewrite-result-2026-09-23/`.
 - **The 0.13 harmful per run above did not replicate.** It came from 8 runs labelled
   unblinded, and it is what the re-apply rested on. Size and blind before believing an
   effect, including a favourable one.
-- Per the pre-registered rule, a harm cut that also costs real findings is Lors's call.
+- Per the pre-registered rule this trade was Lors's call. **Lors chose to revert (2026-09-23):**
+  `claimInstructions` is the old prompt again, byte-identical to `94aff15`.
