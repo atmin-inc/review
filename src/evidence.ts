@@ -4,7 +4,9 @@ import type { Priority } from './contracts.js';
 // policy evaluated in code, never by a model: the whole point of the ladder is that
 // what a finding claims about itself is derived from what was actually run.
 export type Rung = 'symbolic' | 'ci_output' | 'cross_family_llm';
-export type Verdict = 'confirmed' | 'refuted' | 'inconclusive';
+// `withheld` is a confirmed chain the review chooses not to show: the propositions
+// held, but the claim's own severity puts it below what is worth a reader's time.
+export type Verdict = 'confirmed' | 'refuted' | 'inconclusive' | 'withheld';
 export type Confidence = 'low' | 'moderate' | 'high';
 
 export interface Evidence { rung: Rung; check: string; result: 'hit' | 'miss' | number }

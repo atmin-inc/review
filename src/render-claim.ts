@@ -44,9 +44,18 @@ export function renderClaimReview(claims: Claim[], verification: Verification,
     lines.push('## Findings', ...survivors.map(chain => renderSurvivor(byId.get(chain.claimId)!, chain)));
   }
 
+  // A withheld claim held up but was rated too minor to show. Its location is listed so
+  // the withholding is visible; the text is not, because that text is the noise.
+  const withheld = chains.filter(chain => chain.verdict === 'withheld');
+  if (withheld.length) {
+    lines.push('', `## Withheld: ${withheld.length} minor finding(s)`, '',
+      'Rated P3 (nonblocking follow-up) by the reviewer itself; three in four such findings were noise on the labelled runs. Pass --show-minor to see them.', '',
+      ...withheld.map(chain => { const claim = byId.get(chain.claimId)!; return `- ${e(claim.location)} · ${e(claim.type)}`; }), '');
+  }
+
   // The claims that died are shown, not hidden. A reviewer that emits widely and
   // verifies hard is only trustworthy if the discarding is visible.
-  const discarded = chains.filter(chain => chain.verdict !== 'confirmed');
+  const discarded = chains.filter(chain => chain.verdict !== 'confirmed' && chain.verdict !== 'withheld');
   if (discarded.length) {
     lines.push('', '## Claims that did not survive', '', '| Location | Type | Outcome |', '| --- | --- | --- |',
       ...discarded.map(chain => {

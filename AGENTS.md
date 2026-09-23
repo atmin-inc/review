@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 333 tests: 331 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 335 tests: 333 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -760,3 +760,11 @@ P3 does separate:** over the 80 blind runs, harmful per run 1.85 to 0.96, accept
 to 0.79, distinct golden comments unchanged at 8. It is the model's own severity, so it
 is not a post-hoc judgement of the claim; it is still a display rule, and 55% of what
 ships would remain harmful.
+
+**Shipped on Lors's "sure" (2026-09-23).** A confirmed claim at a withheld severity gets
+verdict `withheld` in `verifyClaims` (`DEFAULT_WITHHOLD = ['P3']` in `src/lifecycle.ts`);
+it keeps its chain, does not reach the policy verdict, and the report lists it by location
+under "Withheld" without its text. `claim-review --show-minor` restores it. The verifier
+bench passes `withhold: []` so it still measures verification alone and still reproduces
+260 of 260. `score-runs.mjs` counts `confirmed` only, so run sets scored from here on
+count P3 as not shipped; the sets recorded before this date counted it as shipped.
