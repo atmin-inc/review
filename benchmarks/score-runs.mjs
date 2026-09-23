@@ -16,7 +16,9 @@ const runs = readdirSync(root).filter(name => /^case-\d+-r\d+$/.test(name))
 const perRun = [], found = new Set(), shippedFound = new Set();
 let emitted = 0, shipped = 0, matchingShipped = 0;
 for (const run of runs) {
-  if (!existsSync(join(root, run, 'claims.json'))) continue;
+  // claims.json is written before verification, so a run whose verification threw has
+  // claims and no verdicts. It is not a verified run and is not scored.
+  if (!existsSync(join(root, run, 'verification.json'))) continue;
   const claims = JSON.parse(readFileSync(join(root, run, 'claims.json'), 'utf8'));
   const chains = JSON.parse(readFileSync(join(root, run, 'verification.json'), 'utf8')).chains ?? [];
   const here = new Set();

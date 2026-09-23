@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist } from './helpers.mjs';
 import { ablate, runClaimReview } from '../dist/claim-run.js';
@@ -102,6 +102,23 @@ test('the report drops the missing-rung note once the cross-family rung has answ
   const report = renderClaimReview(claims, verification, investigation);
   assert.match(report, /jev noul:/);
   assert.doesNotMatch(report, /cross-family rung did not run/);
+});
+
+// The claims and the spend are what a failed run costs, so a verification that throws must
+// not take them with it. Seen 2026-09-23: a grep overflow threw out of verification on a
+// live run and left no record of the claims it had paid for.
+test('a verification that throws still leaves the claims and the telemetry behind', async t => {
+  const fixture = repository(t);
+  const directory = persist(fixture);
+  const fake = model([[action('record_claim', TRUE_CLAIM)],
+    action('end_investigation', { complete: true, limitations: [] })]);
+  const rung = { settle() { throw new Error('rung exploded'); } };
+  await assert.rejects(runClaimReview(directory, profile, fake, undefined, rung), /rung exploded/);
+
+  assert.equal(JSON.parse(readFileSync(join(directory, 'claims.json'), 'utf8')).length, 1);
+  const telemetry = JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8'));
+  assert.equal(telemetry.claims, 1); assert.equal(telemetry.stopReason, 'finished');
+  assert.equal(existsSync(join(directory, 'verification.json')), false);
 });
 
 // A model that emits nothing is a merge, not a crash, and the report says so plainly
