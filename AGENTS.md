@@ -743,3 +743,10 @@ the profile.
   `listPriceUsd`.
 - Production use of Claude would go through an API-keyed adapter or an OpenRouter route,
   neither of which exists yet; this path is for benchmarking.
+- **Not used, on Lors's call (2026-09-23): it draws down the same Claude usage the working
+  sessions need.** Model comparisons stay on OpenRouter. The one set run is not a result:
+  27 of 40 Sonnet samples failed as "Provider unavailable", most likely the usage limit,
+  so only 13 finished. On those 13, Sonnet shipped 25 findings and 18 matched a human
+  comment, against 20 of 140 over DeepSeek's 40 on the same readings; too few samples to
+  compare, and unlabelled for harm. Claude through OpenRouter is the way to measure it
+  properly, at Anthropic list prices.
