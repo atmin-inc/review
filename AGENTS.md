@@ -680,3 +680,17 @@ have — acting on either changes code nothing shows is broken.
   again, exactly as measured. The `record_claim` tool description still carries "Claims are
   cheap", as it did during those runs, so what ships is the configuration the 0.13 figure
   was measured on. Changing it is a separate, one-change experiment.
+
+## The rewrite, measured properly: quieter, not more precise (2026-09-23)
+
+Pre-registered, 40 runs per arm differing only in `claimInstructions`, shipped findings
+labelled blind to arm (second labeller on 25%: kappa 0.71). Full result, labels and a
+reproducing script in `/mnt/project-files/prompt-rewrite-result-2026-09-23/`.
+
+- **Harmful per run 2.30 to 1.40 (p = 0.034 one-sided); acceptable 1.25 to 0.65
+  (p = 0.021).** Harmful is 57% of what ships in both arms. The rewrite shrinks everything
+  by about the same fraction, and loses the Critical 032[0] and the High 005[0].
+- **The 0.13 harmful per run above did not replicate.** It came from 8 runs labelled
+  unblinded, and it is what the re-apply rested on. Size and blind before believing an
+  effect, including a favourable one.
+- Per the pre-registered rule, a harm cut that also costs real findings is Lors's call.
