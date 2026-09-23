@@ -1,0 +1,10 @@
+{
+  "provider": "openrouter",
+  "model": "anthropic/claude-sonnet-5",
+  "maxUsd": 4,
+  "maxTurns": 60,
+  "maxToolCalls": 200,
+  "maxInputTokens": 150000,
+  "maxOutputTokens": 8192,
+  "deadlineMs": 1800000
+}
