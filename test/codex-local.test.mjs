@@ -53,7 +53,7 @@ test('local subscription adapter recovers a completed turn and continues with co
   assert.equal(new Set(workspaces).size, 1);
   assert.equal(prompts[1].includes('You are the model inside'), false);
   for (const path of workspaces) assert.equal(existsSync(path), false);
-  await assert.rejects(runReview(directory, profile), /benchmark Codex adapter/);
+  await assert.rejects(runReview(directory, profile), /benchmark adapter/);
 });
 
 test('local adapter rejects API auth, native tools and incomplete CLI turns', async () => {

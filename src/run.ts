@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { investigate, parseProfile, type Model, type Profile } from './investigation.js';
+import { investigate, parseProfile, subscription, type Model, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import { loadReview } from './snapshot.js';
@@ -15,7 +15,7 @@ export async function runReview(directory: string, profile: Profile, injectedMod
   // No rerun/resume that can accidentally reset the same run's budget after an uncertain request.
   const { packet, result } = loadReview(directory);
   if (result.status !== 'not-started') throw new Error('Investigation already started; prepare a new snapshot for another run');
-  if (profile.provider === 'codex-local' && !injectedModel) throw new Error('Local subscription experiments require the benchmark Codex adapter; hosted execution is not supported');
+  if (subscription(profile) && !injectedModel) throw new Error('Local subscription experiments require a benchmark adapter (Codex or Claude); hosted execution is not supported');
   const model = injectedModel ?? (profile.provider === 'openrouter' ? openRouterModel(profile) : openAIModel(profile));
   const lock = join(directory, 'investigation.lock');
   const fd = openSync(lock, 'wx', 0o600);

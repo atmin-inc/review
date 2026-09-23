@@ -7,7 +7,7 @@ import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptio
 import { contributionOf, recordedRung, type RungContribution } from './ablation.js';
 import { askJev } from './jev.js';
 import { BALANCED } from './policy.js';
-import { price, type Model, type Profile } from './investigation.js';
+import { price, subscription, type Model, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import type { Claim } from './claim.js';
@@ -29,8 +29,8 @@ export async function runClaimReview(directory: string, profile: Profile,
   crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
   capture: { transcript?: boolean } = {}): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
-  if (profile.provider === 'codex-local' && !injectedModel) {
-    throw new Error('Local subscription experiments require the benchmark Codex adapter; hosted execution is not supported');
+  if (subscription(profile) && !injectedModel) {
+    throw new Error('Local subscription experiments require a benchmark adapter (Codex or Claude); hosted execution is not supported');
   }
   const model = injectedModel ?? (profile.provider === 'openrouter' ? openRouterModel(profile) : openAIModel(profile));
   const repository = join(directory, 'source.git');
@@ -46,7 +46,7 @@ export async function runClaimReview(directory: string, profile: Profile,
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
     maxUsd: profile.maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}),
-    costOf: (input, output) => profile.provider === 'codex-local' ? 0 : price(input, output, 0, profile.model),
+    costOf: (input, output) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
   }, signal);
 
   const persist = (name: string, value: unknown) => {
