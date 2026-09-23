@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 327 tests: 325 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 333 tests: 331 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -711,3 +711,35 @@ bench before it earns one sized, blind end-to-end run.
   It is not selecting at all; everything the emitter says mostly ships.
 - `unanswered` counts rung-3 questions with no recorded answer (60 now). A change that
   raises it reaches new questions and must be measured live.
+- **Emission bench:** `node benchmarks/emission-bench.mjs <recorded-run> <out> --samples N`.
+  Freezes one run's reading (recorded with `capture: { transcript: true }` in
+  `runClaimReview`) and re-asks only the claim writing, about $0.05 a sample against about
+  $0.17 a run. Over 40 samples its level matches full runs (5.9 claims emitted against
+  6.9). **It removes less variance than expected:** golden found per sample has SD 0.55
+  against 0.58 for full runs, so most of the spread is in the writing, not the reading.
+  An earlier note that the reading was the main source was wrong.
+- **Temperature 0 does not steady it.** On DeepSeek through OpenRouter, two samples of the
+  same frozen reading at temperature 0 emitted 2 claims and 6. Paired screens are not
+  available this way; size bench comparisons from the SD like any other.
+
+## Any model, benchmarked (2026-09-23)
+
+Lors: the reviewer should be able to run any model, and the benchmark decides which is
+best. Claude joins as `claude-local`, a subscription path like `codex-local`: the
+profile allows the ids in `claudeModels` (`src/investigation.ts`), `maxUsd` must be 0, and
+it runs only with `benchmarks/claude-model.mjs` injected. Profiles:
+`profiles/martian-claude-{sonnet,haiku}.json`; the emission bench picks the adapter from
+the profile.
+
+- The adapter drives `claude -p` statelessly: the whole conversation goes in each prompt,
+  so a reading recorded on DeepSeek replays into Claude unchanged.
+- **The child CLI must see nothing but the prompt.** Started from the repository with the
+  session's environment it received about 8.6k tokens of hidden context, and this
+  project's memory and AGENTS.md hold the benchmark's answers. The adapter runs it in an
+  empty directory with `--setting-sources ''` and drops the memory, extra-directory and
+  effort variables; a probe then reported no extra text and 1.7k input tokens. Tested.
+- It bills the subscription the CLI is signed in with, the same one running the session.
+  `total_cost_usd` in its output is a list-price figure, not a charge, and is traced as
+  `listPriceUsd`.
+- Production use of Claude would go through an API-keyed adapter or an OpenRouter route,
+  neither of which exists yet; this path is for benchmarking.

@@ -1,0 +1,10 @@
+{
+  "provider": "claude-local",
+  "model": "claude-sonnet-5",
+  "maxUsd": 0,
+  "maxTurns": 60,
+  "maxToolCalls": 200,
+  "maxInputTokens": 150000,
+  "maxOutputTokens": 8192,
+  "deadlineMs": 1800000
+}

@@ -14,7 +14,13 @@ interface Limits {
 }
 export type Profile = Limits & ({ provider: 'openai'; model: 'gpt-5.4-2026-03-05' }
   | { provider: 'codex-local'; model: 'gpt-5.6-sol' }
+  | { provider: 'claude-local'; model: ClaudeModel }
   | { provider: 'openrouter'; model: 'cohere/north-mini-code:free' | 'deepseek/deepseek-v3.2' });
+// Claude through the local Claude Code CLI, for benchmarking on a subscription. Like
+// codex-local, it runs only with the benchmark adapter injected, never hosted.
+export const claudeModels = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1'] as const;
+type ClaudeModel = typeof claudeModels[number];
+export const subscription = (profile: Profile): boolean => profile.provider === 'codex-local' || profile.provider === 'claude-local';
 const integer = (maximum: number) => ({ type: 'integer', minimum: 1, maximum });
 const obj = (properties: Record<string, object>) => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const side = { type: 'string', enum: ['head', 'base'] };
@@ -28,7 +34,8 @@ const profileValidator = ajv.compile<Profile>({ oneOf: [obj({ ...limitsSchema,
 }), obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'cohere/north-mini-code:free' }, maxUsd: { const: 0 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'deepseek/deepseek-v3.2' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
 obj({ ...limitsSchema, provider: { const: 'codex-local' }, model: { const: 'gpt-5.6-sol' }, maxUsd: { const: 0 },
-  maxOutputTokens: { type: 'integer', minimum: 1024, maximum: 65536 } })] });
+  maxOutputTokens: { type: 'integer', minimum: 1024, maximum: 65536 } }),
+obj({ ...limitsSchema, provider: { const: 'claude-local' }, model: { enum: [...claudeModels] }, maxUsd: { const: 0 } })] });
 export function parseProfile(value: unknown): Profile {
   if (!profileValidator(value)) throw new Error(`Invalid profile: ${ajv.errorsText(profileValidator.errors)}`);
   return value;
@@ -125,6 +132,8 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
     inputCountKind: model.inputCountKind ?? 'exact',
     rateCard: profile.provider === 'codex-local' ? { billing: 'subscription', inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-11', source: 'https://developers.openai.com/codex/auth/' }
+      : profile.provider === 'claude-local' ? { billing: 'subscription', inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
+        checkedAt: '2026-09-23', source: 'https://code.claude.com/docs/en/cli-reference' }
       : profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
       : { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 0.25, outputPerMillionUsd: 15,
@@ -231,7 +240,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
       const inputTokens = await traceOperation('provider.count', { request }, () => model.count(input, signal), 2);
       guard();
       if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > profile.maxInputTokens) throw new Error('Input token count unavailable or exceeds profile limit');
-      const reservedUsd = profile.provider === 'codex-local' ? 0 : price(inputTokens, profile.maxOutputTokens, 0, profile.model);
+      const reservedUsd = subscription(profile) ? 0 : price(inputTokens, profile.maxOutputTokens, 0, profile.model);
       if (accountedUsd(receipt) + reservedUsd > profile.maxUsd) throw new Error('Budget cannot reserve the next request');
       const call: Receipt['calls'][number] = { inputTokens, outputTokens: null, cachedInputTokens: null, reservedUsd, meteredUsd: null, model: null };
       receipt.calls.push(call); save(); // Every request, including a retry, needs its own reservation.
@@ -242,7 +251,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
         || reply.cachedInputTokens > reply.inputTokens) throw new Error('Provider usage is missing or malformed; reservation retained');
       Object.assign(call, { inputTokens: reply.inputTokens, outputTokens: reply.outputTokens, cachedInputTokens: reply.cachedInputTokens,
         status: reply.status === 'completed' || reply.status === 'interrupted' ? reply.status : 'incomplete',
-        meteredUsd: profile.provider === 'codex-local' ? 0 : profile.provider === 'openrouter'
+        meteredUsd: subscription(profile) ? 0 : profile.provider === 'openrouter'
           ? typeof reply.reportedCostUsd === 'number' && Number.isFinite(reply.reportedCostUsd) && reply.reportedCostUsd >= 0 ? reply.reportedCostUsd : null
           : price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model), model: reply.model,
         ...(reply.reportedCostUsd !== undefined ? { reportedCostUsd: reply.reportedCostUsd } : {}),
