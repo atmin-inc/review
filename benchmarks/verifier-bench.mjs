@@ -1,8 +1,8 @@
 // The verifier bench: re-verifies every labelled claim on disk with the current build and
 // reports what ships, by label. Verification is deterministic and rung 3 is replayed from
 // its recorded answers, so a verifier change is scored in about 90 seconds for $0 with no
-// variance,
-// instead of by a set of 8-minute end-to-end runs whose spread is mostly the emitter's.
+// variance, instead of by a set of 8-minute end-to-end runs whose spread is mostly the
+// emitter's.
 //
 // Usage: node benchmarks/verifier-bench.mjs <bench-dir> [--save out.json] [--against old.json]
 //   <bench-dir> holds claims.json and snapshots/case-<id>/{packet.json,source.git.tar};

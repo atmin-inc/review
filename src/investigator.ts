@@ -96,6 +96,12 @@ End with end_investigation and honest limitations. Use tools, not prose.`;
 export interface ClaimLimits {
   maxTurns: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number;
   maxUsd: number; costOf(inputTokens: number, outputTokens: number): number;
+  // Benchmark hooks, off in the product. A recorded transcript is provider and repository
+  // text, which nothing else here keeps; the emission bench needs it once per run so that
+  // later samples re-ask only the claim-writing step over the same reading, instead of
+  // paying for, and varying with, the reading every time.
+  recordTranscript?: boolean;
+  priorTranscript?: unknown[];
 }
 // Everything here is controller-owned: counts, an allowlisted finish reason, and the
 // structured `ProviderFailure`, which exists precisely because it is safe to persist.
@@ -122,6 +128,8 @@ export interface ClaimInvestigation {
   stopReason: string | null;
   spentUsd: number;
   telemetry: ClaimTelemetry;
+  // Only when `recordTranscript` is set: every message in order, before any trimming.
+  transcript?: unknown[];
 }
 
 export async function investigateClaims(revisions: Revisions, sourceOf: (path: string) => string | null,
@@ -131,10 +139,13 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0,
     telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
       finishReason: null, failure: null } };
-  const transcript: unknown[] = [];
+  const transcript: unknown[] = [...(limits.priorTranscript ?? [])];
   // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
   // time rather than mid-exchange. Kept in step with `transcript` by the splice below.
-  const roundStart: number[] = [];
+  // A prior transcript counts as one turn, so it can be trimmed like any other.
+  const roundStart: number[] = transcript.length ? [0] : [];
+  const recorded: unknown[] | undefined = limits.recordTranscript ? [...transcript] : undefined;
+  const append = (...entries: unknown[]) => { transcript.push(...entries); recorded?.push(...entries); };
   let droppedTurns = 0;
   let toolCalls = 0;
   let done = false;
@@ -207,9 +218,9 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
         throw new Error(`Provider response ${reply.status === 'interrupted' ? 'interrupted' : 'incomplete'}; recorded claims preserved`);
       }
       roundStart.push(transcript.length);
-      transcript.push(...reply.continuation);
+      append(...reply.continuation);
       if (!reply.calls.length) {
-        transcript.push({ role: 'user', content: 'Use the supplied tools. Prose alone emits no claim.' });
+        append({ role: 'user', content: 'Use the supplied tools. Prose alone emits no claim.' });
         continue;
       }
       if (new Set(reply.calls.map(call => call.id)).size !== reply.calls.length) throw new Error('Duplicate tool call IDs');
@@ -270,7 +281,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
           output = { error: reason };
           outcome.toolErrors.push({ tool: validators.has(tool.name) ? tool.name : 'unknown', reason });
         }
-        transcript.push(model.toolOutput(tool.id, output));
+        append(model.toolOutput(tool.id, output));
       }
     }
     if (!done) throw new Error('Model turn limit reached');
@@ -301,5 +312,6 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   // Claims emitted before a failure are kept: they are cheap to verify and the
   // verifier, not this pass, decides what they are worth.
   outcome.claims = assignClaimIds(drafts, sourceOf);
+  if (recorded) outcome.transcript = recorded;
   return outcome;
 }
