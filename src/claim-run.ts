@@ -48,6 +48,22 @@ export async function runClaimReview(directory: string, profile: Profile,
     costOf: (input, output) => profile.provider === 'codex-local' ? 0 : price(input, output, 0, profile.model),
   }, signal);
 
+  const persist = (name: string, value: unknown) => {
+    const temporary = join(directory, `${name}.pending`);
+    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
+    renameSync(temporary, join(directory, name));
+  };
+  persist('claims.json', investigation.claims);
+  // Written as its own file rather than folded into the verification, because it is about
+  // the run and not about any claim, and because a run that emits nothing still needs to
+  // leave an explanation behind. Counts and allowlisted enums only -- see ClaimTelemetry.
+  // Both are written before verification, because a verification that throws must not
+  // take the claims and the spend down with it: seen 2026-09-23, when a grep overflow did
+  // exactly that on a live run.
+  persist('telemetry.json', { ...investigation.telemetry, stopReason: investigation.stopReason,
+    complete: investigation.complete, claims: investigation.claims.length, spentUsd: investigation.spentUsd,
+    toolErrors: investigation.toolErrors, limitations: investigation.limitations });
+
   // The verifier is handed the claims and the revision, and nothing else. Whatever the
   // investigator believed does not travel with them.
   let rung = crossFamily;
@@ -69,19 +85,7 @@ export async function runClaimReview(directory: string, profile: Profile,
       ? `The cross-family rung answered nothing: all ${unreached.length} claim(s) failed to reach it, so any proposition only it could settle is unsettled.`
       : `The cross-family rung did not reach ${unreached.length} of ${investigation.claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
   }
-  const persist = (name: string, value: unknown) => {
-    const temporary = join(directory, `${name}.pending`);
-    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
-    renameSync(temporary, join(directory, name));
-  };
-  persist('claims.json', investigation.claims);
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
-  // Written as its own file rather than folded into the verification, because it is about
-  // the run and not about any claim, and because a run that emits nothing still needs to
-  // leave an explanation behind. Counts and allowlisted enums only -- see ClaimTelemetry.
-  persist('telemetry.json', { ...investigation.telemetry, stopReason: investigation.stopReason,
-    complete: investigation.complete, claims: investigation.claims.length, spentUsd: investigation.spentUsd,
-    toolErrors: investigation.toolErrors, limitations: investigation.limitations });
   return { claims: investigation.claims, investigation, verification };
 }
 
