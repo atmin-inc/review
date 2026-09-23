@@ -695,3 +695,19 @@ reproducing script in `/mnt/project-files/prompt-rewrite-result-2026-09-23/`.
   effect, including a favourable one.
 - Per the pre-registered rule this trade was Lors's call. **Lors chose to revert (2026-09-23):**
   `claimInstructions` is the old prompt again, byte-identical to `94aff15`.
+
+## Test small first: the verifier bench (2026-09-23)
+
+Lors, on the circles: test micro first, not the whole pipeline. Every idea goes through a
+bench before it earns one sized, blind end-to-end run.
+
+- **Verifier bench:** `node benchmarks/verifier-bench.mjs /mnt/project-files/verifier-bench`.
+  657 labelled claims (all 397 from 2026-09-22 plus the 260 shipped in the blind test) with
+  the five case snapshots, frozen in project files so it survives the container. It
+  re-verifies every claim with the current build, replaying rung 3, in about 90 seconds
+  for $0. It reproduces all 260 recorded verdicts from 2026-09-23. `--save` and
+  `--against` list exactly which labelled claims a change flips.
+- **What it says about today's verifier:** it ships G 78%, R 74%, S 85%, X 75%, O 73%.
+  It is not selecting at all; everything the emitter says mostly ships.
+- `unanswered` counts rung-3 questions with no recorded answer (60 now). A change that
+  raises it reaches new questions and must be measured live.
