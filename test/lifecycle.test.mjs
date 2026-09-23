@@ -455,3 +455,22 @@ test('a silent rung does not withhold the conclusion', t => {
   const { chains } = withOptions(t, [TRUE_CLAIM], silent, { questionConclusion: true });
   assert.equal(chains[0].verdict, 'confirmed');
 });
+
+// A finding the emitter itself rated P3 held up, and is still not shown: measured
+// 2026-09-23 over 80 blind-labelled runs, three in four such findings were noise, and
+// withholding them halved harmful findings per run while every golden comment was still
+// found. The chain keeps its evidence, the verdict does not count it, and asking for it
+// (--show-minor) restores it unchanged.
+test('a confirmed P3 finding is withheld by default, and shown only when asked', t => {
+  const minor = { ...TRUE_CLAIM, type: 'contract_break', severity: 'P3' };
+  const { chains, decision } = run(t, [minor]);
+  assert.equal(chains[0].verdict, 'withheld');
+  assert.equal(chains[0].evidence.length, 2, 'the chain is kept whole');
+  assert.equal(decision.verdict, 'merge', 'a withheld finding does not reach the verdict');
+
+  const fixture = repository(t);
+  const withIds = assignClaimIds([minor], path => sourceText(fixture.source, fixture.packet.headSha, path));
+  const shown = verifyClaims(withIds, revisionsOf(fixture), BALANCED, undefined, undefined, { withhold: [] });
+  assert.equal(shown.chains[0].verdict, 'confirmed');
+  assert.equal(shown.decision.verdict, 'nits');
+});

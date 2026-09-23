@@ -40,7 +40,7 @@ const zero = <K extends string>(keys: readonly K[]): Record<K, number> =>
 export function tally(verification: Verification): Tally {
   const counts: Tally = {
     claims: verification.chains.length,
-    verdicts: zero(['confirmed', 'refuted', 'inconclusive'] as const),
+    verdicts: zero(['confirmed', 'refuted', 'inconclusive', 'withheld'] as const),
     confidence: zero(['low', 'moderate', 'high'] as const),
     propositions: zero(['symbolic', 'ci_output', 'cross_family_llm', 'unsettled'] as const),
     suspectChecks: 0,

@@ -1,4 +1,5 @@
 import { propositionSide, type Claim, type Proposition } from './claim.js';
+import type { Priority } from './contracts.js';
 import type { PropositionStatus } from './evidence.js';
 import { composeChain, llmSignal, DEFAULT_THRESHOLDS, type Chain, type Evidence, type PropositionRecord, type Thresholds } from './evidence.js';
 import { runCheck, type Revisions, type Side, type SymbolicCheck } from './symbolic.js';
@@ -22,7 +23,14 @@ export interface Verification { chains: Chain[]; decision: Decision; limitations
 // deterministic refutation, and every claim it saves costs a model call on a claim that
 // was meant to die on rung 1 for nothing. A flag rather than a change so the two can be
 // compared over the same claims, which is the only way to say what it is worth.
-export interface VerifyOptions { questionRefutations?: boolean; questionConclusion?: boolean }
+// `withhold` names the severities a confirmed claim is not shown at. P3 by default:
+// measured 2026-09-23 over the 80 blind-labelled runs, findings the emitter itself rated
+// P3 were 74% harmful, and withholding them cut harmful findings per run from 1.85 to
+// 0.96 while acceptable ones went 0.95 to 0.79 and no golden comment was lost. It is the
+// model's own rating at emission, not a later judgement of the claim, which is why it
+// separates where every after-the-fact scorer failed. See AGENTS.md.
+export interface VerifyOptions { questionRefutations?: boolean; questionConclusion?: boolean; withhold?: Priority[] }
+export const DEFAULT_WITHHOLD: Priority[] = ['P3'];
 // Every question the cross-family rung was asked and what it answered. Recording them
 // is what makes the rung's contribution measurable: the same claims can be verified
 // again with the rung replayed or switched off, exactly and for free, instead of a
@@ -219,7 +227,9 @@ export function verifyClaims(claims: Claim[], revisions: Revisions, policy: Poli
   const rejection = policyRejection(policy);
   if (rejection) throw new Error(`Policy ${JSON.stringify(policy.name)} is unusable: ${rejection}`);
   const verified = claims.map(claim => verifyClaim(claim, revisions, crossFamily, thresholds, options));
-  const chains = verified.map(item => item.chain);
+  const withhold = options.withhold ?? DEFAULT_WITHHOLD;
+  const chains = verified.map(item => item.chain.verdict === 'confirmed' && withhold.includes(item.chain.finalSeverity!)
+    ? { ...item.chain, verdict: 'withheld' as const } : item.chain);
   const types = new Map(claims.map(claim => [claim.claimId, claim.type]));
   return {
     chains,

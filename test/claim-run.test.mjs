@@ -185,3 +185,19 @@ test('a finished run can be measured for what the cross-family rung contributed'
   assert.equal(contribution.with.verdicts.confirmed, contribution.without.verdicts.confirmed);
   assert.equal(contribution.with.propositions.symbolic, 1);
 });
+
+// A withheld finding is listed by location so the withholding is visible, and its text
+// is not, because the text is what three in four of those findings got wrong.
+test('the report lists a withheld P3 finding by location and keeps its text out', async t => {
+  const fixture = repository(t);
+  const directory = persist(fixture);
+  const minor = { ...TRUE_CLAIM, type: 'contract_break', severity: 'P3', description: 'A minor-only sentence.' };
+  const fake = model([[action('record_claim', minor)], action('end_investigation', { complete: true, limitations: [] })]);
+  const { claims, investigation, verification } = await runClaimReview(directory, profile, fake);
+  const report = renderClaimReview(claims, verification, investigation);
+  assert.match(report, /\*\*No changes requested\*\*/);
+  assert.match(report, /## Withheld: 1 minor finding\(s\)/);
+  assert.match(report, /- update\.ts:2 · contract\\_break/);
+  assert.doesNotMatch(report, /minor-only sentence/);
+  assert.doesNotMatch(report, /## Claims that did not survive/);
+});
