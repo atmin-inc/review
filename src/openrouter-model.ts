@@ -14,6 +14,7 @@ export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTE
   const paidRoutes: Record<string, { canonicalSlug: string; route: string; prompt: number; completion: number }> = {
     'deepseek/deepseek-v3.2': { canonicalSlug: 'deepseek/deepseek-v3.2-20251201', route: 'novita/fp8', prompt: 0.269, completion: 0.4 },
     'anthropic/claude-sonnet-5': { canonicalSlug: 'anthropic/claude-sonnet-5-20260630', route: 'anthropic', prompt: 2, completion: 10 },
+    'openai/gpt-6-luna': { canonicalSlug: 'openai/gpt-6-luna-20260922', route: 'openai', prompt: 0.1, completion: 0.5 },
   };
   const pinned = paidRoutes[profile.model];
   const paid = pinned !== undefined;
