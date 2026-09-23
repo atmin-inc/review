@@ -15,7 +15,7 @@ interface Limits {
 export type Profile = Limits & ({ provider: 'openai'; model: 'gpt-5.4-2026-03-05' }
   | { provider: 'codex-local'; model: 'gpt-5.6-sol' }
   | { provider: 'claude-local'; model: ClaudeModel }
-  | { provider: 'openrouter'; model: 'cohere/north-mini-code:free' | 'deepseek/deepseek-v3.2' });
+  | { provider: 'openrouter'; model: 'cohere/north-mini-code:free' | 'deepseek/deepseek-v3.2' | 'anthropic/claude-sonnet-5' });
 // Claude through the local Claude Code CLI, for benchmarking on a subscription. Like
 // codex-local, it runs only with the benchmark adapter injected, never hosted.
 export const claudeModels = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1'] as const;
@@ -33,6 +33,7 @@ const profileValidator = ajv.compile<Profile>({ oneOf: [obj({ ...limitsSchema,
   provider: { const: 'openai' }, model: { const: 'gpt-5.4-2026-03-05' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 },
 }), obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'cohere/north-mini-code:free' }, maxUsd: { const: 0 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'deepseek/deepseek-v3.2' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
+obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'anthropic/claude-sonnet-5' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 5 } }),
 obj({ ...limitsSchema, provider: { const: 'codex-local' }, model: { const: 'gpt-5.6-sol' }, maxUsd: { const: 0 },
   maxOutputTokens: { type: 'integer', minimum: 1024, maximum: 65536 } }),
 obj({ ...limitsSchema, provider: { const: 'claude-local' }, model: { enum: [...claudeModels] }, maxUsd: { const: 0 } })] });
@@ -109,7 +110,8 @@ export interface Receipt {
   toolErrors: { tool: string; reason: string }[];
 }
 export const price = (input: number, output: number, cached = 0, model: Profile['model'] = 'gpt-5.4-2026-03-05'): number =>
-  model === 'cohere/north-mini-code:free' ? 0 : model === 'deepseek/deepseek-v3.2' ? ((input - cached) * 0.269 + cached * 0.1345 + output * 0.4) / 1_000_000 : ((input - cached) * 2.5 + cached * 0.25 + output * 15) / 1_000_000;
+  model === 'cohere/north-mini-code:free' ? 0 : model === 'deepseek/deepseek-v3.2' ? ((input - cached) * 0.269 + cached * 0.1345 + output * 0.4) / 1_000_000
+  : model === 'anthropic/claude-sonnet-5' ? ((input - cached) * 2 + cached * 0.2 + output * 10) / 1_000_000 : ((input - cached) * 2.5 + cached * 0.25 + output * 15) / 1_000_000;
 export const accountedUsd = (receipt: Receipt): number => receipt.calls.reduce((sum, call) => sum + (call.meteredUsd ?? call.reservedUsd), 0);
 
 export function investigate(directory: string, packet: Packet, profileInput: Profile, model: Model,
@@ -134,7 +136,8 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
       checkedAt: '2026-09-11', source: 'https://developers.openai.com/codex/auth/' }
       : profile.provider === 'claude-local' ? { billing: 'subscription', inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
         checkedAt: '2026-09-23', source: 'https://code.claude.com/docs/en/cli-reference' }
-      : profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
+      : profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' }
+      : profile.model === 'anthropic/claude-sonnet-5' ? { providerRoute: 'anthropic', inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 10, checkedAt: '2026-09-23', source: 'https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
       : { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 0.25, outputPerMillionUsd: 15,
         checkedAt: '2026-09-09', source: 'https://developers.openai.com/api/docs/models/gpt-5.4' },

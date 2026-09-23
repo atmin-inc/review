@@ -9,15 +9,23 @@ let nextRequestAt = 0; // Shared across serial reviews in this CLI process.
 export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTER_API_KEY, transport = globalThis.fetch): Model {
   parseProfile(profile);
   if (profile.provider !== 'openrouter') throw new Error('Unsupported OpenRouter profile');
-  const paid = profile.model === 'deepseek/deepseek-v3.2';
-  const canonicalSlug = paid ? 'deepseek/deepseek-v3.2-20251201' : 'cohere/north-mini-code-20260617';
-  const route = paid ? 'novita/fp8' : 'cohere';
+  // Each paid model is pinned to one route and one price ceiling, read from
+  // https://openrouter.ai/api/v1/models/<model>/endpoints on the date in investigation.ts.
+  const paidRoutes: Record<string, { canonicalSlug: string; route: string; prompt: number; completion: number }> = {
+    'deepseek/deepseek-v3.2': { canonicalSlug: 'deepseek/deepseek-v3.2-20251201', route: 'novita/fp8', prompt: 0.269, completion: 0.4 },
+    'anthropic/claude-sonnet-5': { canonicalSlug: 'anthropic/claude-sonnet-5-20260630', route: 'anthropic', prompt: 2, completion: 10 },
+  };
+  const pinned = paidRoutes[profile.model];
+  const paid = pinned !== undefined;
+  const canonicalSlug = pinned?.canonicalSlug ?? 'cohere/north-mini-code-20260617';
+  const route = pinned?.route ?? 'cohere';
+  const ceiling = { prompt: pinned?.prompt ?? 0, completion: pinned?.completion ?? 0 };
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is missing. Configure it locally.');
   let verified = false;
   const payload = (input: TurnInput) => ({
     model: profile.model, messages: [{ role: 'system', content: input.instructions }, { role: 'user', content: input.context }, ...input.transcript],
     tools: input.tools.map(tool => ({ type: 'function', function: tool })), tool_choice: 'required',
-    provider: { only: [route], allow_fallbacks: false, require_parameters: true, max_price: { prompt: paid ? 0.269 : 0, completion: paid ? 0.4 : 0, request: 0 } },
+    provider: { only: [route], allow_fallbacks: false, require_parameters: true, max_price: { prompt: ceiling.prompt, completion: ceiling.completion, request: 0 } },
     stream: false,
   });
   const getJson = async (url: string, options: RequestInit, stage: 'count' | 'inference') => {
@@ -60,7 +68,7 @@ export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTE
             parallelToolCalls: endpoint?.supported_parameters?.includes('parallel_tool_calls') === true }, 2);
           const priced = (key: string, cap: number) => typeof endpoint?.pricing?.[key] === 'string' && endpoint.pricing[key].trim() !== '' && Number.isFinite(Number(endpoint.pricing[key])) && Number(endpoint.pricing[key]) >= 0 && Number(endpoint.pricing[key]) <= cap / 1_000_000;
           if (!endpoint || endpoint.status !== 0 || endpoint.supports_tool_choice?.required !== true
-            || !endpoint.supported_parameters?.includes('tools') || !priced('prompt', 0.269) || !priced('completion', 0.4)
+            || !endpoint.supported_parameters?.includes('tools') || !priced('prompt', ceiling.prompt) || !priced('completion', ceiling.completion)
             || (endpoint.pricing?.request !== undefined && !priced('request', 0))) throw new ProviderRequestError('count', 400);
         }
         verified = true;
