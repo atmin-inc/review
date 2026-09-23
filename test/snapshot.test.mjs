@@ -75,6 +75,19 @@ test('repository search is literal, immutable, bounded and handles unusual paths
   assert.throws(() => searchSource(f.source, '--all', 'update'), /immutable revision/);
 });
 
+// A common word in a large repository prints more than the 16 MiB output cap. That threw,
+// and one check naming `self` in Sentry ended verification and lost every claim in its run.
+// Overflow must read as truncated, and never as "no match", which would settle an absent check.
+test('a search whose output overflows the cap is truncated, not failed and not empty', t => {
+  const f = repository(t);
+  f.write('long.ts', ('needle ' + 'x'.repeat(1000) + '\n').repeat(20000));
+  const many = searchSource(f.source, f.commit('twenty megabytes of matches'), 'needle');
+  assert.equal(many.matches.length, 50); assert.equal(many.truncated, true);
+  f.write('long.ts', 'x'.repeat(17 * 1024 * 1024) + ' needle\n');
+  const one = searchSource(f.source, f.commit('one line past the cap'), 'needle');
+  assert.deepEqual(one, { matches: [], truncated: true });
+});
+
 test('the target policy wins over a PR that relaxes it', t => {
   const f = repository(t);
   f.run('checkout', '-q', f.state.baseSha);

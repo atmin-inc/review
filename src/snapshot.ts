@@ -13,6 +13,10 @@ const commandDeadline = new AsyncLocalStorage<number>();
 export const withGitDeadline = <T>(deadlineMs: number, operation: () => T): T => commandDeadline.run(Date.now() + deadlineMs, operation);
 const shaPattern = /^[a-f0-9]{40}$/;
 const decode = (bytes: Uint8Array) => new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+// Thrown only where a caller asked to keep what a command printed before hitting the output
+// cap. A search wants 50 matches, and a common word in a large repository prints far more
+// than 16 MiB of them, so for a search the cap means "truncated", not "failed".
+class OutputOverflow extends Error { constructor(readonly partial: Buffer) { super('Command output exceeded its limit'); } }
 export const hash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
 export interface PullState {
   repository: string;
@@ -37,7 +41,7 @@ function commandEnv(): NodeJS.ProcessEnv {
     GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_ATTR_NOSYSTEM: '1',
     GIT_LITERAL_PATHSPECS: '1', GH_PROMPT_DISABLED: '1', GH_HOST: 'github.com' };
 }
-function command(program: string, args: string[], cwd?: string, operation = args[0] ?? '', allowNoMatch = false): Buffer {
+function command(program: string, args: string[], cwd?: string, operation = args[0] ?? '', allowNoMatch = false, allowOverflow = false): Buffer {
   const timeout = Math.min(120000, (commandDeadline.getStore() ?? (Date.now() + 120000)) - Date.now());
   requireValue(timeout > 0, 'Review deadline reached');
   try {
@@ -45,16 +49,18 @@ function command(program: string, args: string[], cwd?: string, operation = args
   } catch (error) {
     if (allowNoMatch && error && typeof error === 'object' && 'status' in error && error.status === 1
       && 'stdout' in error && Buffer.isBuffer(error.stdout) && error.stdout.length === 0) return Buffer.alloc(0);
+    if (allowOverflow && error && typeof error === 'object' && 'code' in error && error.code === 'ENOBUFS'
+      && 'stdout' in error && Buffer.isBuffer(error.stdout)) throw new OutputOverflow(error.stdout);
     // Child-process exceptions include arguments/output. Do not echo private data.
     throw new Error(`${program} ${operation} failed or exceeded its time/output limit. Check access and the requested revision.`);
   }
 }
-export function git(repository: string, args: string[], allowNoMatch = false): Buffer {
+export function git(repository: string, args: string[], allowNoMatch = false, allowOverflow = false): Buffer {
   return command('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
     '-c', 'core.attributesFile=/dev/null', '-c', 'credential.helper=',
     '-c', 'credential.https://github.com.helper=!gh auth git-credential',
     '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
-    '-c', 'protocol.ssh.allow=never', '-C', repository, ...args], undefined, args[0], allowNoMatch);
+    '-c', 'protocol.ssh.allow=never', '-C', repository, ...args], undefined, args[0], allowNoMatch, allowOverflow);
 }
 function gitText(repository: string, args: string[]): string { return decode(git(repository, args)); }
 
@@ -248,15 +254,24 @@ export function searchSource(repository: string, revision: string, query: string
   requireValue(within === undefined || (within.length > 0 && !/[\0\r\n]/.test(within)), 'A search path must be a single line');
   // Native Git searches frozen blobs without a checkout, text conversion or repository scripts.
   // The shared command deadline and 16 MiB output cap also bound broad searches.
-  const output = decode(git(repository, ['grep', '-I', '-n', '-z', '-F', '--no-textconv', '-e', query, revision, '--',
-    ...(within === undefined ? [] : [within])], true));
+  const args = ['grep', '-I', '-n', '-z', '-F', '--no-textconv', '-e', query, revision, '--', ...(within === undefined ? [] : [within])];
+  // Before 2026-09-23 an overflow threw, and a check naming `self` or `import` in Sentry
+  // ended verification and lost every claim in the run. Keep the whole records printed
+  // before the cap and report the search as truncated, which every caller already handles.
+  let raw: Buffer, overflowed = false;
+  try { raw = git(repository, args, true, true); } catch (error) {
+    if (!(error instanceof OutputOverflow)) throw error;
+    raw = error.partial.subarray(0, error.partial.lastIndexOf(0x0a) + 1);
+    overflowed = true;
+  }
+  const output = decode(raw);
   const matches: { path: string; line: number }[] = [];
   for (const match of output.matchAll(/([^\0]+)\0(\d+)\0[^\n]*(?:\n|$)/g)) {
     if (matches.length === 50) return { matches, truncated: true };
     requireValue(match[1]!.startsWith(`${revision}:`), 'Search returned an unexpected revision');
     matches.push({ path: match[1]!.slice(revision.length + 1), line: Number(match[2]) });
   }
-  return { matches, truncated: false };
+  return { matches, truncated: overflowed };
 }
 export function sourceSlice(repository: string, revision: string, path: string, startLine: number, count: number) {
   requireValue(Number.isSafeInteger(startLine) && startLine >= 1 && Number.isSafeInteger(count) && count >= 1 && count <= 200,
