@@ -10,7 +10,7 @@ import type { GitHub, LivePull } from './api.js';
 import type { Runner } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
-import { Store, type Job } from './store.js';
+import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
 import type { ReviewSettings } from './settings.js';
 import { InlineReviews } from './inline.js';
 
@@ -61,6 +61,20 @@ export class Worker {
       if (this.store.current(job, this.owner)) this.store.update(job.id, { state: 'skipped', error: initial.draft ? 'draft' : 'closed' });
       return;
     }
+    if (job.state !== 'publishing' && job.trigger === 'event') {
+      // Automatic reviews pause after AUTO_PAUSE_AFTER reviewed heads. The last summary stays,
+      // under a banner saying which head it describes, because it is the most recent review.
+      const heads = this.store.reviewedHeads(job.pr);
+      if (heads.length >= AUTO_PAUSE_AFTER && !heads.includes(initial.headSha)) {
+        const existing = await this.github.summary(job.pr, marker);
+        if (existing && this.store.current(job, this.owner)) {
+          const previous = existing.body.slice(marker.length + 1).replace(/^<!-- atmin-paused -->[\s\S]*?<!-- \/atmin-paused -->\n/, '');
+          await this.github.update(existing.id, `${marker}\n<!-- atmin-paused -->\n> **Automatic reviews paused** after ${heads.length} reviews of this PR. The review below describes an earlier head, not \`${initial.headSha}\`. Comment \`/atmin review\` for a full review of the current head.\n<!-- /atmin-paused -->\n${previous}`);
+        }
+        if (this.store.current(job, this.owner)) this.store.update(job.id, { state: 'skipped', error: 'auto-paused' });
+        return;
+      }
+    }
     if (job.state !== 'publishing') {
       // Retire an earlier verdict as soon as replacement work starts. Create only the final summary.
       const existing = await this.github.summary(job.pr, marker);
@@ -85,7 +99,7 @@ export class Worker {
           body: `# atmin review — interrupted\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\``,
         }) });
         try {
-          artifact = await this.run(job, signal);
+          artifact = await this.run(job, signal, this.store.previous(job));
           if (!this.store.current(job, this.owner) || signal.aborted) return;
           const packet = parsePacket(JSON.parse(readFileSync(join(artifact, 'packet.json'), 'utf8')));
           const result = parseResult(JSON.parse(readFileSync(join(artifact, 'result.json'), 'utf8')));

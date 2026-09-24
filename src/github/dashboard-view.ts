@@ -79,6 +79,7 @@ function artifact(job: Job, file: string): any {
 }
 
 function failureReason(job: Job): string {
+  if (job.state === 'skipped' && job.error === 'auto-paused') return 'Automatic reviews paused after five reviews of this PR. Comment /atmin review for a full review.';
   if (job.state === 'skipped') return 'No review was started for this event. Draft and closed PRs do not trigger automatic reviews.';
   if (job.state === 'cancelled') return 'This run was cancelled. A newer commit or a pause can cancel a review.';
   if (job.state === 'uncertain') return 'GitHub publication could not be confirmed. Check the PR before requesting another review.';

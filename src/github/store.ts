@@ -4,7 +4,13 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type JobState = 'queued' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled' | 'skipped' | 'uncertain';
-export interface Job { id: string; pr: number; state: JobState; created: number; started: number | null; artifact: string | null; report: string | null; error: string | null; createStarted: number; }
+// `trigger` is what asked for the review: a PR or branch event, or a maintainer's
+// `/atmin review` comment. A command always gets a full review and resets auto-pause.
+export type Trigger = 'event' | 'command';
+export interface Job { id: string; pr: number; state: JobState; created: number; started: number | null; artifact: string | null; report: string | null; error: string | null; createStarted: number; trigger: Trigger; }
+// Automatic reviews stop after this many distinct reviewed heads of one PR, as CodeRabbit
+// does after five reviewed commits; a `/atmin review` comment starts the count again.
+export const AUTO_PAUSE_AFTER = 5;
 // One service owns the worker lease. Local CLI controls share the WAL database.
 export class Store {
   readonly db: DatabaseSync;
@@ -22,6 +28,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS pulls (pr INTEGER PRIMARY KEY, desired TEXT NOT NULL, comment INTEGER, baseRef TEXT, active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS ci_refreshes (job TEXT PRIMARY KEY);
       CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, created);`);
+    // Databases created before incremental review lack the column; old jobs read as events.
+    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'trigger')) {
+      this.db.exec("ALTER TABLE jobs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'event'");
+    }
   }
   close(): void { this.db.close(); }
   transaction<T>(fn: () => T): T {
@@ -37,14 +47,14 @@ export class Store {
     });
   }
   seen(delivery: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM deliveries WHERE id=?').get(delivery)); }
-  enqueue(delivery: string, pr: number): string | null {
+  enqueue(delivery: string, pr: number, trigger: Trigger = 'event'): string | null {
     return this.transaction(() => {
       if (this.seen(delivery)) return null;
       this.db.prepare('INSERT INTO deliveries VALUES(?,?)').run(delivery, Date.now());
       if (!this.enabled()) return null;
       const id = randomUUID();
       this.db.prepare("UPDATE jobs SET state='cancelled', error='superseded' WHERE pr=? AND state IN ('queued','running','publishing')").run(pr);
-      this.db.prepare("INSERT INTO jobs(id,pr,state,created) VALUES(?,?,'queued',?)").run(id, pr, Date.now());
+      this.db.prepare("INSERT INTO jobs(id,pr,state,created,trigger) VALUES(?,?,'queued',?,?)").run(id, pr, Date.now(), trigger);
       this.db.prepare('INSERT INTO pulls(pr,desired) VALUES(?,?) ON CONFLICT(pr) DO UPDATE SET desired=excluded.desired').run(pr, id);
       return id;
     });
@@ -103,6 +113,21 @@ export class Store {
     const allowed = ['state', 'artifact', 'report', 'error', 'createStarted'];
     if (entries.some(([key]) => !allowed.includes(key))) throw new Error('Invalid job field');
     this.db.prepare(`UPDATE jobs SET ${entries.map(([key]) => `${key}=?`).join(',')} WHERE id=?`).run(...entries.map(([, v]) => v!), id);
+  }
+  // The latest completed review of this PR before this job, whose claims an incremental
+  // review carries forward. A command asks for a full review, so it has none.
+  previous(job: Job): string | null {
+    if (job.trigger === 'command') return null;
+    const row = this.db.prepare("SELECT artifact FROM jobs WHERE pr=? AND id<>? AND state='completed' AND artifact IS NOT NULL AND created<=? ORDER BY created DESC, rowid DESC LIMIT 1")
+      .get(job.pr, job.id, job.created);
+    return (row?.artifact as string | undefined) ?? null;
+  }
+  // Distinct heads that automatic reviews have completed since the last command on this PR.
+  reviewedHeads(pr: number): string[] {
+    const since = Number(this.db.prepare("SELECT coalesce(max(created), 0) AS t FROM jobs WHERE pr=? AND trigger='command'").get(pr)!.t);
+    return this.db.prepare(`SELECT DISTINCT json_extract(report,'$.initial.headSha') AS head FROM jobs
+      WHERE pr=? AND trigger='event' AND state='completed' AND started IS NOT NULL AND created>=?`).all(pr, since)
+      .map(row => row.head).filter((head): head is string => typeof head === 'string');
   }
   comment(pr: number): number | null { return this.db.prepare('SELECT comment FROM pulls WHERE pr=?').get(pr)?.comment as number | null ?? null; }
   track(pr: number, baseRef: string, active: boolean): void { this.db.prepare('UPDATE pulls SET baseRef=?,active=? WHERE pr=?').run(baseRef, Number(active), pr); }

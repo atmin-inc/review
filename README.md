@@ -111,8 +111,13 @@ to operate this worker until the next packaged release.
 The worker receives signed webhooks, stores jobs in SQLite, updates one bot
 summary per PR, and publishes an `atmin review` check. Each review is a claim-pipeline run
 (see `review` above); point `profile` at `profiles/review-luna-openrouter.json` and set
-`OPENROUTER_API_KEY` and, for the Jev rung, `TYPESAFE_API_KEY`. Every push to an open PR
-starts a new review, bounded by `maxReviewsPerDay`. Diffs over 512 KB are not reviewed. Maintainers can comment
+`OPENROUTER_API_KEY` and, for the Jev rung, `TYPESAFE_API_KEY`. The first review of a PR
+reads the whole change. Each later push is reviewed incrementally: only the commits since
+the last completed review are read for new findings, and that review's findings are
+re-checked against the new head. A force-push or a merge from the target branch gets a full
+review. Automatic reviews pause after five reviewed heads of one PR; comment
+`/atmin review` for a full review, which also restarts the count. Reviews are bounded by
+`maxReviewsPerDay`. Diffs over 512 KB are not reviewed. Maintainers can comment
 `/atmin review` to rerun. Use a dedicated host user. Source review does not execute repository code.
 Optional [isolated checks](docs/isolated-checks.md) run selected commands and
 verify proposed patches on a configured Linux worker. This private pilot is not

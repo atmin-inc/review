@@ -16,6 +16,8 @@ import type { Rung } from './evidence.js';
 // The whole lifecycle over one prepared snapshot: a wide pass emits claims, a separate
 // pass settles them against the same frozen revision, and code composes the verdict.
 // The two passes share no state but the claims, which is the point.
+// `claims` is everything verified: carried claims first on an incremental run, then the
+// ones this run emitted, which are also `investigation.claims`.
 export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification }
 
 // How rung 3 is answered for this run. 'none' leaves it silent, which is what every
@@ -32,10 +34,21 @@ export type CrossFamilySource = 'none' | 'jev';
 // production profile allows 1,000,000, under Luna's 1.05M-token window (`profiles/review-luna-openrouter.json`).
 export const MAX_DIFF_BYTES = 512 * 1024;
 
+// An incremental review reads only the commits pushed since an earlier review of the same
+// PR, and re-verifies that review's surviving claims against the new revision instead of
+// asking a model to find them again. `diff` is the diff from `since` to the new head;
+// verification still runs against the merge base, so every claim remains a claim about
+// the whole change.
+export interface IncrementalScope { since: string; diff: Buffer; carried: Claim[] }
+
+const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
+  spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
+    finishReason: null, failure: null } });
+
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
   crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
-  capture: { transcript?: boolean } = {}): Promise<ClaimReview> {
+  capture: { transcript?: boolean } = {}, incremental?: IncrementalScope): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
   if (subscription(profile) && !injectedModel) {
     throw new Error('Local subscription experiments require a benchmark adapter (Codex or Claude); hosted execution is not supported');
@@ -46,16 +59,26 @@ export async function runClaimReview(directory: string, profile: Profile,
   const revisions = { head: revisionFrom(repository, packet.headSha), base: revisionFrom(repository, packet.mergeBaseSha) };
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
-  const diff = readFileSync(join(directory, 'change.diff'));
+  const full = readFileSync(join(directory, 'change.diff'));
+  const diff = incremental ? incremental.diff : full;
   if (diff.length > MAX_DIFF_BYTES) throw new Error('Diff exceeds 512 KB investigation limit');
-  const context = { packet, diff: diff.toString('utf8') };
+  const context = incremental
+    ? { packet, diff: diff.toString('utf8'), incrementalSince: incremental.since,
+      scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.` }
+    : { packet, diff: diff.toString('utf8') };
 
-  const investigation = await investigateClaims(revisions, sourceOf, context, model, {
+  // Nothing new to read, as when only the target branch moved: no model is asked.
+  const investigation = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, {
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
     maxUsd: profile.maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}),
     costOf: (input, output) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
   }, signal);
+  // Earlier claims first, so a claim the model records again keeps the earlier wording
+  // and checks; the verifier is then handed one list and cannot tell them apart.
+  const emitted = new Set(investigation.claims.map(claim => claim.claimId));
+  const carried = (incremental?.carried ?? []).filter(claim => !emitted.has(claim.claimId));
+  const claims = [...carried, ...investigation.claims];
 
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
@@ -63,6 +86,7 @@ export async function runClaimReview(directory: string, profile: Profile,
     renameSync(temporary, join(directory, name));
   };
   persist('claims.json', investigation.claims);
+  if (incremental) persist('carried-claims.json', carried);
   // Opt-in, for the emission bench only: this is provider and repository text.
   if (investigation.transcript) persist('transcript.json', investigation.transcript);
   // Written as its own file rather than folded into the verification, because it is about
@@ -85,19 +109,19 @@ export async function runClaimReview(directory: string, profile: Profile,
   // The count is reported and the reason is not, because provider text can carry
   // repository content.
   let unreached: string[] = [];
-  if (!rung && crossFamilySource === 'jev' && investigation.claims.length) {
-    const asked = await askJev(investigation.claims, revisions, context.diff, { signal, verify });
+  if (!rung && crossFamilySource === 'jev' && claims.length) {
+    const asked = await askJev(claims, revisions, full.toString('utf8'), { signal, verify });
     rung = recordedRung(asked.log);
     unreached = [...new Set(asked.skippedClaims)];
   }
-  const verification = verifyClaims(investigation.claims, revisions, BALANCED, rung, undefined, verify);
+  const verification = verifyClaims(claims, revisions, BALANCED, rung, undefined, verify);
   if (unreached.length) {
-    verification.limitations.push(unreached.length === investigation.claims.length
+    verification.limitations.push(unreached.length === claims.length
       ? `The cross-family rung answered nothing: all ${unreached.length} claim(s) failed to reach it, so any proposition only it could settle is unsettled.`
-      : `The cross-family rung did not reach ${unreached.length} of ${investigation.claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
+      : `The cross-family rung did not reach ${unreached.length} of ${claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
   }
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
-  return { claims: investigation.claims, investigation, verification };
+  return { claims, investigation, verification };
 }
 
 // The same claims, verified again with the cross-family rung switched off. Emission is
