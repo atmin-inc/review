@@ -972,3 +972,14 @@ across 3 PRs, each checked against the code: 1 real and worth fixing, 2 real but
 too high (P2 on an operator script), 1 overstated. The run also exposed that body checks
 could not read TypeScript with wrapped signatures, fixed in `7ef74ce`. No private code or
 finding text belongs in this public file.
+
+## Repository guidance restored to the claim pass (2026-09-24)
+
+The claim pipeline sent the model only the packet and the diff; the older engine had also
+sent the target's AGENTS.md files. `b37db97` restores that: files are read from the target
+branch (never the change), capped at 32 KB shallowest first, a file left out is named in
+the limitations, and the instruction is appended only when guidance exists. Measured on one
+private PR, same snapshot, three runs each way: guidance produced no house-rule claim, the
+best defect a competing reviewer found was reached by none of the six runs, 3 of 3 guided
+runs shipped a finding against 1 of 3 unguided, and cost rose about 30%. That is n=3 on one
+PR, not a result. No private code or finding text belongs in this public file.
