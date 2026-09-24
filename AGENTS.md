@@ -949,6 +949,19 @@ and noise lever. The worker used to re-review the whole PR on every push.
   push 2 fixed. **It was not cheaper here.** On a 20 KB diff most spend is reading files, not
   re-sending the diff, and carried claims add Jev calls. The saving should show on large
   diffs, which the diff is re-sent with on every turn; that is unmeasured. One run each.
+- **Measured on a private repository (2026-09-24, 5 PRs, one run each):** a push review cost
+  $0.011 on average against $0.108 for a full review of the same head (6-8% on four PRs of
+  31-247 KB, 40% on one). Harness and numbers: `/mnt/project-files/push-review-cost-2026-09-24/`.
+  The worker's claim pipeline is `dist/github/task.js investigate <dir> <profile.json>`;
+  `dist/cli.js investigate` runs the OLDER engine.
+- **Carried claims no longer survive a fix outside their checks.** On a real fix push the fix
+  put a read-then-delete under a lock; every recorded proposition stayed true, so re-verifying
+  them confirmed the fixed race again. Now a carried claim whose file (or a file one of its
+  checks names) the push changed is not carried: it goes to the model as `earlierFindings`, and
+  survives only if recorded again (`touchedBy` in `src/claim-run.ts`). Replayed on that push:
+  the stale claim was gone; the model instead recorded a narrower race the lock leaves open and
+  a checkpoint defect still present at the new head, which the old push review had refuted.
+  A fix in a file the claim never names still escapes this.
 
 ## First private-repo pilot (2026-09-24)
 

@@ -10,7 +10,7 @@ import { BALANCED } from './policy.js';
 import { price, subscription, type Model, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
-import type { Claim } from './claim.js';
+import { parseLocation, type Claim } from './claim.js';
 import type { Rung } from './evidence.js';
 
 // The whole lifecycle over one prepared snapshot: a wide pass emits claims, a separate
@@ -38,8 +38,20 @@ export const MAX_DIFF_BYTES = 512 * 1024;
 // PR, and re-verifies that review's surviving claims against the new revision instead of
 // asking a model to find them again. `diff` is the diff from `since` to the new head;
 // verification still runs against the merge base, so every claim remains a claim about
-// the whole change.
-export interface IncrementalScope { since: string; diff: Buffer; carried: Claim[] }
+// the whole change. `changed` is the paths the pushed commits touch.
+export interface IncrementalScope { since: string; diff: Buffer; carried: Claim[]; changed: string[] }
+
+// A carried claim is re-verified on the propositions it was recorded with, and a fix can
+// remove a premise none of them states. Measured 2026-09-24 on a real push (mason-v1):
+// the fix wrapped a read-then-delete in an advisory lock, every recorded proposition (the
+// read, the comparison, the delete by name) stayed true, and the fixed race was confirmed
+// again. So a claim whose file the push changed, or a file one of its checks names, is not
+// carried on its own: the model is shown it and records it again only if it still holds.
+// A fix made in a file the claim never names still escapes this.
+export function touchedBy(claim: Claim, changed: ReadonlySet<string>): boolean {
+  const checked = claim.evidenceToCheck.flatMap(item => item.check && 'path' in item.check ? [item.check.path] : []);
+  return [parseLocation(claim.location).path, ...checked].some(path => changed.has(path));
+}
 
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
@@ -67,9 +79,13 @@ export async function runClaimReview(directory: string, profile: Profile,
   const full = readFileSync(join(directory, 'change.diff'));
   const diff = incremental ? incremental.diff : full;
   if (diff.length > MAX_DIFF_BYTES) throw new Error('Diff exceeds 512 KB investigation limit');
+  const changed = new Set(incremental?.changed ?? []);
+  const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
   const context = incremental
     ? { packet, diff: diff.toString('utf8'), incrementalSince: incremental.since,
-      scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.` }
+      scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.`
+        + (recheck.length ? ' earlierFindings are findings from that review in files these commits changed. They are not carried forward on their own: read the new code, and record again, with the same type, location symbol and suspectedCondition, each one that still holds at the new head. Leave out any the new commits fixed.' : ''),
+      ...(recheck.length ? { earlierFindings: recheck.map(({ type, location, description, suspectedCondition }) => ({ type, location, description, suspectedCondition })) } : {}) }
     : { packet, diff: diff.toString('utf8') };
 
   // Nothing new to read, as when only the target branch moved: no model is asked.
@@ -82,7 +98,8 @@ export async function runClaimReview(directory: string, profile: Profile,
   // Earlier claims first, so a claim the model records again keeps the earlier wording
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
-  const carried = (incremental?.carried ?? []).filter(claim => !emitted.has(claim.claimId));
+  const carried = (incremental?.carried ?? []).filter(claim => !emitted.has(claim.claimId) && !touchedBy(claim, changed));
+  if (recheck.length) investigation.limitations.push(`${recheck.length} earlier finding(s) were in files this push changed, so they were re-asked rather than carried; ${recheck.filter(claim => emitted.has(claim.claimId)).length} were recorded again.`);
   const claims = [...carried, ...investigation.claims];
 
   const persist = (name: string, value: unknown) => {

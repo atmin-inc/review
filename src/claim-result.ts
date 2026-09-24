@@ -111,8 +111,10 @@ export function incrementalScope(directory: string, packet: Packet): { scope?: I
   try { git(repository, ['merge-base', '--is-ancestor', previous.headSha, packet.headSha]); }
   catch { return { note: 'Full review: the earlier reviewed head is not an ancestor of this one, as after a force-push.' }; }
   const diff = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', previous.headSha, packet.headSha, '--']);
+  const changed = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', previous.headSha, packet.headSha, '--'])
+    .toString('utf8').split('\0').filter(Boolean);
   const titles = Object.fromEntries(Object.entries(previous.titles ?? {}).filter(([, title]) => typeof title === 'string'));
-  return { scope: { since: previous.headSha, diff, carried: previous.claims }, titles,
+  return { scope: { since: previous.headSha, diff, carried: previous.claims, changed }, titles,
     note: `Incremental review: new claims were sought only in the commits since ${previous.headSha.slice(0, 12)}; ${previous.claims.length} earlier finding(s) were re-checked against this head.` };
 }
 

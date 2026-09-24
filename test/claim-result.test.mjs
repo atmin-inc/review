@@ -168,6 +168,49 @@ test('a push is reviewed incrementally and earlier findings are re-checked, not 
   assert.equal(previousReview(second).claims.length, 1);
 });
 
+// Measured 2026-09-24 on a real push: the fix added a guard that none of the claim's recorded
+// propositions mention, so re-verifying them confirmed the fixed defect again. Here the fix
+// calls a helper instead of writing `owner !== account`, so the recorded check (that text is
+// absent) still holds at the new head. A claim in a file the push changed is shown to the
+// model and survives only if the model records it again.
+function snapshotAt(fixture, headSha) {
+  return persist({ ...fixture, root: mkdtempSync(join(fixture.root, 'push-')), ...capture(fixture.source, { ...fixture.state, headSha }) });
+}
+function fixCommit(fixture) {
+  fixture.write('update.ts', 'export function update(owner, account) {\n  assertOwner(owner, account);\n  return "updated";\n}\n');
+  return fixture.commit('fix ownership');
+}
+
+test('a finding in a file the push changed is re-asked, not carried, so a fix outside its checks drops it', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const first = persist(fixture);
+  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  const earlier = previousReview(first);
+
+  const fixHead = fixCommit(fixture);
+  const fixed = snapshotAt(fixture, fixHead);
+  writeFileSync(join(fixed, 'previous.json'), JSON.stringify(earlier));
+  const run = watching([done()]);
+  await runClaimReviewAsResult(fixed, profile, undefined, run.model);
+  assert.deepEqual(run.seen[0].earlierFindings.map(f => f.location), ['update.ts:2']);
+  assert.match(run.seen[0].scope, /record again/);
+  const { result } = loadReview(fixed);
+  assert.deepEqual(result.findings, [], 'the fixed finding is not carried on its own');
+  assert.deepEqual(JSON.parse(readFileSync(join(fixed, 'carried-claims.json'), 'utf8')), []);
+  assert.match(result.limitations.join(' '), /1 earlier finding\(s\) were in files this push changed, so they were re-asked rather than carried; 0 were recorded again/);
+  // The fixed finding does not come back on the push after this one.
+  assert.equal(previousReview(fixed).claims.length, 0);
+
+  // When the model finds it still holds and records it again, it is verified and kept.
+  const still = snapshotAt(fixture, fixHead);
+  writeFileSync(join(still, 'previous.json'), JSON.stringify(earlier));
+  await runClaimReviewAsResult(still, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  const kept = loadReview(still).result;
+  assert.deepEqual(kept.findings.map(f => [f.priority, f.anchor.path]), [['P1', 'update.ts']]);
+  assert.match(kept.limitations.join(' '), /1 were recorded again/);
+});
+
 test('nothing new to read asks no model; a moved merge base or a rewritten head gets a full review', async t => {
   withoutJev(t);
   const fixture = repository(t);
