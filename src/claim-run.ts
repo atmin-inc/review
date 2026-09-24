@@ -12,6 +12,7 @@ import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import { parseLocation, type Claim } from './claim.js';
 import type { Rung } from './evidence.js';
+import type { Packet } from './contracts.js';
 
 // The whole lifecycle over one prepared snapshot: a wide pass emits claims, a separate
 // pass settles them against the same frozen revision, and code composes the verdict.
@@ -53,6 +54,33 @@ export function touchedBy(claim: Claim, changed: ReadonlySet<string>): boolean {
   return [parseLocation(claim.location).path, ...checked].some(path => changed.has(path));
 }
 
+// The target's own AGENTS.md files: the root one and one in each directory above a changed
+// path, read from the target branch so a change cannot rewrite the rules it is reviewed
+// against. The older engine loaded these (investigation.ts); the claim pipeline had not,
+// and on mason-v1 #4590 (2026-09-24) 5 of CodeRabbit's 12 items came from house rules the
+// claim pass was never shown. Shallowest first, so the root rules are the last to be cut;
+// a file that does not fit is named, never silently dropped.
+export const MAX_GUIDANCE_BYTES = 32 * 1024;
+export function targetGuidance(repository: string, packet: Packet): { guidance: { path: string; text: string }[]; omitted: string[] } {
+  const paths = new Set(['AGENTS.md']);
+  for (const { path } of packet.changedFiles) {
+    const parts = path.split('/'); parts.pop();
+    for (; parts.length; parts.pop()) paths.add(`${parts.join('/')}/AGENTS.md`);
+  }
+  const guidance: { path: string; text: string }[] = [];
+  const omitted: string[] = [];
+  let bytes = 0;
+  for (const path of [...paths].sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
+    const text = sourceText(repository, packet.baseSha, path);
+    if (text === null) continue;
+    const size = Buffer.byteLength(text);
+    if (bytes + size > MAX_GUIDANCE_BYTES) { omitted.push(path); continue; }
+    bytes += size;
+    guidance.push({ path, text });
+  }
+  return { guidance, omitted };
+}
+
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null } });
@@ -81,12 +109,14 @@ export async function runClaimReview(directory: string, profile: Profile,
   if (diff.length > MAX_DIFF_BYTES) throw new Error('Diff exceeds 512 KB investigation limit');
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
+  const { guidance, omitted } = targetGuidance(repository, packet);
+  const guided = guidance.length ? { targetGuidance: guidance } : {};
   const context = incremental
-    ? { packet, diff: diff.toString('utf8'), incrementalSince: incremental.since,
+    ? { packet, ...guided, diff: diff.toString('utf8'), incrementalSince: incremental.since,
       scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.`
         + (recheck.length ? ' earlierFindings are findings from that review in files these commits changed. They are not carried forward on their own: read the new code, and record again, with the same type, location symbol and suspectedCondition, each one that still holds at the new head. Leave out any the new commits fixed.' : ''),
       ...(recheck.length ? { earlierFindings: recheck.map(({ type, location, description, suspectedCondition }) => ({ type, location, description, suspectedCondition })) } : {}) }
-    : { packet, diff: diff.toString('utf8') };
+    : { packet, ...guided, diff: diff.toString('utf8') };
 
   // Nothing new to read, as when only the target branch moved: no model is asked.
   const investigation = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, {
@@ -99,6 +129,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
   const carried = (incremental?.carried ?? []).filter(claim => !emitted.has(claim.claimId) && !touchedBy(claim, changed));
+  if (omitted.length) investigation.limitations.push(`Repository guidance over ${MAX_GUIDANCE_BYTES / 1024} KB was left out, so these rules were not shown: ${omitted.join(', ')}.`);
   if (recheck.length) investigation.limitations.push(`${recheck.length} earlier finding(s) were in files this push changed, so they were re-asked rather than carried; ${recheck.filter(claim => emitted.has(claim.claimId)).length} were recorded again.`);
   const claims = [...carried, ...investigation.claims];
 

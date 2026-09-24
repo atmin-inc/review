@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist } from './helpers.mjs';
-import { ablate, runClaimReview } from '../dist/claim-run.js';
+import { ablate, runClaimReview, MAX_GUIDANCE_BYTES } from '../dist/claim-run.js';
+import { claimInstructions } from '../dist/investigator.js';
+import { capture } from '../dist/snapshot.js';
 import { renderClaimReview } from '../dist/render-claim.js';
 
 const profile = { provider: 'openai', model: 'gpt-5.4-2026-03-05', maxUsd: 2, maxTurns: 6,
@@ -200,4 +202,48 @@ test('the report lists a withheld P3 finding by location and keeps its text out'
   assert.match(report, /- update\.ts:2 · contract\\_break/);
   assert.doesNotMatch(report, /minor-only sentence/);
   assert.doesNotMatch(report, /## Claims that did not survive/);
+});
+
+// A fake that keeps what each turn was asked, so a test can see what the model was shown.
+function recording(steps) {
+  const inputs = [];
+  const inner = model(steps);
+  return { inputs, ...inner, async respond(input, ...rest) { inputs.push(input); return inner.respond(input, ...rest); } };
+}
+
+// The repository's own rules are what a reviewer that knows the codebase holds a change
+// to: on mason-v1 #4590, 5 of CodeRabbit's 12 items came from its AGENTS.md. They are read
+// from the target branch, because a PR that edits AGENTS.md must not get to rewrite the
+// rules it is judged by, and a file that does not fit is named rather than lost quietly.
+test('the claim pass is shown the target branch AGENTS.md files, not the change\'s own', async t => {
+  const fixture = repository(t);
+  fixture.run('checkout', '-q', '--detach', fixture.state.baseSha);
+  fixture.write('AGENTS.md', 'Target rule: never swallow an error.\n');
+  fixture.write('lib/AGENTS.md', 'x'.repeat(MAX_GUIDANCE_BYTES) + '\n');
+  fixture.write('lib/util.ts', 'export const one = 1;\n');
+  const baseSha = fixture.commit('target rules');
+  fixture.write('AGENTS.md', 'Change rule: anything goes.\n');
+  fixture.write('lib/util.ts', 'export const one = 2;\n');
+  const headSha = fixture.commit('change edits the rules');
+  const guided = { ...fixture, ...capture(fixture.source, { ...fixture.state, baseSha, headSha }) };
+  const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
+
+  const { investigation } = await runClaimReview(persist(guided), profile, fake);
+
+  const context = JSON.parse(fake.inputs[0].context);
+  assert.deepEqual(context.targetGuidance, [{ path: 'AGENTS.md', text: 'Target rule: never swallow an error.\n' }]);
+  assert.match(fake.inputs[0].instructions, /targetGuidance holds the reviewed repository's own AGENTS\.md files/);
+  assert.ok(investigation.limitations.some(line => /over 32 KB was left out.*lib\/AGENTS\.md/.test(line)));
+});
+
+// Every earlier number was measured on the bare instructions, so a repository with no
+// AGENTS.md must be asked exactly that, or old and new runs stop being comparable.
+test('without AGENTS.md files the claim pass is asked exactly the measured instructions', async t => {
+  const fixture = repository(t);
+  const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
+
+  await runClaimReview(persist(fixture), profile, fake);
+
+  assert.equal(fake.inputs[0].instructions, claimInstructions);
+  assert.equal('targetGuidance' in JSON.parse(fake.inputs[0].context), false);
 });
