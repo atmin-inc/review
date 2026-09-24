@@ -117,7 +117,8 @@ const settle = (established: boolean, expect: Expectation = 'present'): 'hit' | 
 // The lines belonging to a definition: everything indented past it, up to the cap.
 // Works for braces and for significant indentation alike, because the closing brace
 // sits back at the definition's own indent.
-function bodyOf(revision: Revision, path: string, line: number, span = 1): { text: string; capped: boolean } | null {
+function bodyOf(revision: Revision, path: string, line: number, declared = 1): { text: string; capped: boolean } | null {
+  const span = bodyOpens(revision, path, line, declared);
   // The signature and what follows it are read separately. Read as one range, a wrapped
   // signature pushed the request past the 200-line read limit, the read threw, and every
   // body check on it came back "could not be read": seen 2026-09-24 on every multi-line
@@ -143,6 +144,24 @@ function bodyOf(revision: Revision, path: string, line: number, span = 1): { tex
   // Cut off when the body runs to the last line read and the file goes on past it. The
   // read can stop short of the cap on long lines, so the count alone does not say.
   return { text: body.join('\n'), capped: end === lines.length && revision.lineAt(path, line + span + rest.length) !== null };
+}
+// Where the body starts. The declaration ends with its parameter list, but a return type
+// wrapped after it (`}): Promise<` ... `> {`, or `-> Dict[` ... `]:`) comes back to the
+// declaration's own indent before the body opens, and read as the body's end it left the
+// body as the return type alone: seen 2026-09-24 on mason-v1 #4572, where five true
+// propositions about a function were refuted by its return type. Only a line ending
+// mid-type is followed, and only to a line at the declaration's indent that opens a body.
+function bodyOpens(revision: Revision, path: string, line: number, span: number): number {
+  const last = revision.lineAt(path, line + span - 1);
+  if (last === null || !/[<|&[,]\s*$/.test(last)) return span;
+  const opening = indentOf(revision.lineAt(path, line) ?? '');
+  for (let extra = 1; extra <= DECLARATION_LINES; extra++) {
+    const text = revision.lineAt(path, line + span - 1 + extra);
+    if (text === null) return span;
+    if (!text.trim() || indentOf(text) > opening) continue;
+    return /[{:]\s*$/.test(text) ? span + extra : span;
+  }
+  return span;
 }
 // Up to BODY_LINES - 1 lines from `start`, fewer when the range would pass the read's
 // 24 KB limit, and none at the end of the file, where a definition has no body below it.
