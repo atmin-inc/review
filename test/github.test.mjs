@@ -459,7 +459,7 @@ test('CI reconciliation refreshes the same report and check without inference or
   };
   h.store.enqueue('ci-first', 1); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'failure');
-  assert.match(h.comment.body, /Not rated — Waiting for required checks/);
+  assert.match(h.comment.body, /5\/5 — Waiting for required checks/);
   status = 'pass'; h.store.retryPublication(1); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'success');
   status = 'fail'; h.store.retryPublication(1); await h.worker.tick();

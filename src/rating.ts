@@ -28,10 +28,14 @@ export function rate(packet: Packet, result: Result, assessment: Pick<Assessment
   const unrated = (reason: string): Rating => ({ score: null, policy, reasons: [...reasons, reason] });
   if (assessment.scope !== 'complete') return unrated('The review must finish across all changed files before it can be rated.');
   if (assessment.freshness.status !== 'current') return unrated('The reviewed commits must match the current PR before it can be rated.');
-  const holistic = policy.preset !== 'correctness-first';
-  if (holistic && !result.quality) return unrated('A supported quality assessment is missing; no findings alone does not earn 5/5.');
+  // A review always gets a score (Lors, 2026-09-24). The claim pipeline makes no quality
+  // assessment, so without one a completed, current review is rated by its findings alone:
+  // a clean review earns 5/5 and the defect caps below still apply.
+  const holistic = policy.preset !== 'correctness-first' && Boolean(result.quality);
   let score = holistic ? result.quality!.score : 5;
-  reasons.push(holistic ? result.quality!.rationale : 'Correctness first rates completed reviews by established defects.');
+  reasons.push(holistic ? result.quality!.rationale : policy.preset === 'correctness-first'
+    ? 'Correctness first rates completed reviews by established defects.'
+    : 'No quality assessment was made, so this review is rated by its findings alone.');
   const cap = (maximum: number, reason: string) => {
     if (maximum <= score) { score = maximum; reasons.push(reason); }
   };
@@ -41,12 +45,14 @@ export function rate(packet: Packet, result: Result, assessment: Pick<Assessment
   if (policy.perfectRequires.noP3 && priorities.has('P3')) cap(4, 'An unresolved P3 finding caps the rating at 4/5 under this policy.');
   for (const key of QUALITY_CRITERIA) {
     if (!policy.perfectRequires[key]) continue;
-    const criterion = result.quality?.criteria[key];
+    if (!result.quality) continue;
+    const criterion = result.quality.criteria[key];
     if (!criterion || criterion.status === 'unknown') return unrated(`${criterionLabels[key]}: ${criterion?.reason ?? 'not assessed'}`);
     if (criterion.status === 'concern') cap(4, `${criterionLabels[key]}: ${criterion.reason} (maximum 4/5).`);
   }
   if (policy.perfectRequires.passingChecks) {
-    if (assessment.validation === 'missing') return unrated('Required check results are missing.');
+    // Kept ahead of any cap, so the headline's reason stays the one that set the score.
+    if (assessment.validation === 'missing') reasons.splice(1, 0, 'Required check results are missing, so they do not affect this score.');
     if (assessment.validation === 'failed') cap(4, 'A required check failed (maximum 4/5).');
   }
   return { score, policy, reasons };

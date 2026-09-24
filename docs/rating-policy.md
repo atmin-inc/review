@@ -29,7 +29,7 @@ output trusted. A check may be not applicable when supported by review evidence.
 
 | Preset | What earns 5/5 |
 | --- | --- |
-| `balanced` (default) | Positive quality assessment, no P0–P2 defects, appropriate fit, justified complexity, appropriate verification, and required checks passed or not applicable |
+| `balanced` (default) | No P0–P2 defects; where a quality assessment was made, a positive one with appropriate fit, justified complexity and appropriate verification; no failed required check |
 | `correctness-first` | Completed, current review with no P0–P2 defects; P3/P4 and the subjective quality score do not lower it |
 | `strict-conventions` | Balanced requirements plus no unresolved violations of documented conventions |
 
@@ -63,8 +63,9 @@ Add only the overrides you want. Unspecified values come from the preset.
 
 These are **perfect-score requirements**, not weights or exclusions from review.
 A supported concern in an enabled criterion caps the rating at **4/5**. An
-unknown enabled criterion or missing required check result makes it **Not rated**.
-A known failed required check caps it at 4/5. The GitHub check's existing
+unknown enabled criterion in a quality assessment makes it **Not rated**. A missing
+required check result is noted and does not withhold the score (2026-09-24: a review
+always gets a score). A known failed required check caps it at 4/5. The GitHub check's existing
 severity and validation rules remain independent: disabling `passingChecks`
 can allow a rating even while the GitHub check fails for missing validation.
 The report always shows both states.
@@ -93,8 +94,9 @@ averaged away by positive attributes. P0 and P1 remain individually labeled.
 `record_quality` records a rationale, a proposed score, and separate judgments
 for fit, simplicity, verification and documented conventions. Each assessed
 criterion must cite controller-captured source reads; missing evidence is
-`unknown`. No quality assessment means Balanced/Strict conventions are unrated,
-even if no findings were reported.
+`unknown`. With no quality assessment at all, as in every claim-pipeline review,
+Balanced and Strict conventions score by findings alone: 5/5 when there are none,
+with the P0/P1 and P2 caps otherwise.
 
 A documented-convention concern must quote an explicit rule whose exact text
 exists in the captured target branch, and cite source showing the violation.
