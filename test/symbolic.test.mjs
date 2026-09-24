@@ -406,3 +406,31 @@ test('a body cut off by the read limit settles nothing when the pattern is not f
   assert.equal(runCheck(revision, check).evidence.length, 0);
   assert.equal(runCheck(revision, { ...check, pattern: 'const filler0 =' }).evidence[0]?.result, 'hit');
 });
+
+test('a return type wrapped back to the declaration indent is not read as the end of the body', async t => {
+  const { repository } = await import('./helpers.mjs');
+  const { revisionFrom } = await import('../dist/symbolic.js');
+  const f = repository(t);
+  // Prettier's shape for a long union return type. The `> {` line sits at the
+  // declaration's indent; read as the body's end, it left the return type as the body.
+  f.write('save.ts', [
+    'export async function saveTemplate(params: {',
+    '  name: string;',
+    '}): Promise<',
+    '  | { ok: true; slug: string }',
+    '  | Refusal',
+    '> {',
+    '  if (taken.size >= MAX_TEMPLATES) {',
+    '    return { ok: false };',
+    '  }',
+    '}',
+    'export const after = 1;',
+    '',
+  ].join('\n'));
+  const revision = revisionFrom(f.source, f.commit('wrapped return type'));
+  const check = { assertion: 'body_contains', symbol: 'saveTemplate' };
+  assert.equal(runCheck(revision, { ...check, pattern: 'taken.size >= MAX_TEMPLATES' }).evidence[0]?.result, 'hit');
+  // The body still ends at the closing brace, and the return type is not in it.
+  assert.equal(runCheck(revision, { ...check, pattern: 'export const after', expect: 'absent' }).evidence[0]?.result, 'hit');
+  assert.equal(runCheck(revision, { ...check, pattern: '| Refusal', expect: 'absent' }).evidence[0]?.result, 'hit');
+});
