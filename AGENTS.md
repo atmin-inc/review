@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 345 tests: 343 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 346 tests: 344 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -881,9 +881,12 @@ command now call `runClaimReviewAsResult` (`src/claim-result.ts`), which runs
 already reads, so freshness, checks, inline comments and the dashboard are unchanged.
 `investigate <directory>` is still the older engine; `claim-review` is unchanged.
 
-- A confirmed claim on an existing line of a changed file becomes a `Finding`. A
-  confirmed claim anywhere else is a limitation with its text, never dropped. Withheld P3
-  claims are a limitation listing their locations.
+- A confirmed claim becomes a `Finding` wherever its line exists at head, including an
+  unchanged caller the change broke; only a location that does not resolve becomes a
+  limitation. `validateEvidence` used to require findings on changed paths, and the live
+  incremental check below confirmed 7 P1 broken callers that it could only list as
+  limitations under a clean verdict. It now requires only a head-side anchor off the
+  changed paths. Withheld P3 claims are a limitation listing their locations.
 - Coverage is `reviewed` for every changed text file only when the run finished, because
   the whole diff is in the claim pass's first turn. A run that stopped claims none.
 - The claim record is renamed to `claim-verification.json`: the worker's local fix
@@ -926,3 +929,16 @@ and noise lever. The worker used to re-review the whole PR on every push.
   (`event` or `command`); a command is always a full review. Old databases gain the column.
 - **Unmeasured.** The `scope` note is new text the emitter reads, and no benchmark has
   multi-push PRs. Treat incremental quality as unknown until checked on real PRs.
+- **Live check, case-009 split into two pushes** (6 files, then the other 6; Luna, Jev on):
+
+  | | spend | emitted | verified | shipped | golden |
+  | --- | --- | --- | --- | --- | --- |
+  | push 1, full | $0.027 | 7 | 7 | 7 | none |
+  | push 2, incremental | $0.036 | 4 | 11 | 5 | 009[1] |
+  | push 2, full, for comparison | $0.030 | 4 | 4 | 4 | 009[1] |
+
+  The incremental run found the same golden bug as a full review of the same head. It
+  refuted 5 of push 1's 7 carried claims, correctly: they were callers push 1 broke and
+  push 2 fixed. **It was not cheaper here.** On a 20 KB diff most spend is reading files, not
+  re-sending the diff, and carried claims add Jev calls. The saving should show on large
+  diffs, which the diff is re-sent with on every turn; that is unmeasured. One run each.
