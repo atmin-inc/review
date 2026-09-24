@@ -25,7 +25,7 @@ for (const run of runs) {
   for (const claim of claims.claims ?? claims) {
     emitted++;
     const ship = chains.find(chain => chain.claimId === claim.claimId)?.verdict === 'confirmed';
-    const ids = matches(claim);
+    const ids = matches(claim, run.split('-r')[0]);
     if (ship) { shipped++; if (ids.length) matchingShipped++; }
     for (const id of ids) { found.add(id); if (ship) { shippedFound.add(id); here.add(id); } }
   }
