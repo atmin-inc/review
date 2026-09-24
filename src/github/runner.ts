@@ -51,7 +51,10 @@ export function engineRunner(config: PilotConfig, github: GitHub, settings?: Rev
       const keyName = profile.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
       const key = process.env[keyName];
       if (!key) throw new Error('Configured model credential unavailable');
-      await child(['investigate', directory, profilePath], childEnvironment(home, { [keyName]: key }), signal, profile.deadlineMs + 30_000);
+      // Rung 3 (Jev) is part of the configuration that was measured; without its key the
+      // claim run still completes and records that the rung was off.
+      const jev = process.env.TYPESAFE_API_KEY ? { TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY } : {};
+      await child(['investigate', directory, profilePath], childEnvironment(home, { [keyName]: key, ...jev }), signal, profile.deadlineMs + 30_000);
       const packet = parsePacket(JSON.parse(readFileSync(join(directory, 'packet.json'), 'utf8')));
       const checks = config.localChecks?.filter(check => check.repositoryId === config.repositoryId && packet.policy.requiredChecks.includes(check.name)) ?? [];
       if (checks.length) {

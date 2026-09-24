@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 336 tests: 334 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 338 tests: 336 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -872,3 +872,27 @@ written before any output was read, then corrected against every match and near-
   `investigate` (`src/github/runner.ts`), the older single-pass reviewer. Every number in
   this file from 2026-09-20 on is `claim-review`. Putting Luna in the worker's profile would
   ship an unmeasured combination; switching the worker is Lors's decision.
+
+## The worker and `review` run the claim pipeline (2026-09-24)
+
+Lors: "yes lets switch". The GitHub worker's `investigate` child phase and the `review`
+command now call `runClaimReviewAsResult` (`src/claim-result.ts`), which runs
+`runClaimReview` and writes `result.json` and `receipt.json` in the shapes publication
+already reads, so freshness, checks, inline comments and the dashboard are unchanged.
+`investigate <directory>` is still the older engine; `claim-review` is unchanged.
+
+- A confirmed claim on an existing line of a changed file becomes a `Finding`. A
+  confirmed claim anywhere else is a limitation with its text, never dropped. Withheld P3
+  claims are a limitation listing their locations.
+- Coverage is `reviewed` for every changed text file only when the run finished, because
+  the whole diff is in the claim pass's first turn. A run that stopped claims none.
+- The claim record is renamed to `claim-verification.json`: the worker's local fix
+  checks write `verification.json` and would overwrite it.
+- Rung 3 is Jev when `TYPESAFE_API_KEY` is set (the runner passes it to the child);
+  otherwise the result carries a limitation saying the rung was off.
+- The profile's `deadlineMs` now bounds the claim run too, so a slow run stops with its
+  claims rather than being killed by the child deadline with nothing written.
+- Receipt spend is metered only on a finished run; otherwise it may hold a reservation
+  and is recorded as unknown.
+- Known limit, unchanged by the switch: diffs over 128 KB are refused, which is 29% of
+  mason-v1's merged PRs (`/mnt/project-files/mason-cost-estimate-2026-09-24.md`).
