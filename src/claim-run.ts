@@ -45,15 +45,20 @@ const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitation
   spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null } });
 
+// The model a profile names, unless a test or benchmark injects one.
+export function modelFor(profile: Profile, injectedModel?: Model): Model {
+  if (subscription(profile) && !injectedModel) {
+    throw new Error('Local subscription experiments require a benchmark adapter (Codex or Claude); hosted execution is not supported');
+  }
+  return injectedModel ?? (profile.provider === 'openrouter' ? openRouterModel(profile) : openAIModel(profile));
+}
+
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
   crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
   capture: { transcript?: boolean } = {}, incremental?: IncrementalScope): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
-  if (subscription(profile) && !injectedModel) {
-    throw new Error('Local subscription experiments require a benchmark adapter (Codex or Claude); hosted execution is not supported');
-  }
-  const model = injectedModel ?? (profile.provider === 'openrouter' ? openRouterModel(profile) : openAIModel(profile));
+  const model = modelFor(profile, injectedModel);
   const repository = join(directory, 'source.git');
   // Both sides, because a claim about a regression is a claim about the difference.
   const revisions = { head: revisionFrom(repository, packet.headSha), base: revisionFrom(repository, packet.mergeBaseSha) };

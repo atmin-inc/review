@@ -74,7 +74,9 @@ export interface Finding {
   consequence: string;
   priorityReason: string;
   counterEvidence: string;
-  suggestion: string;
+  // Absent when the reviewer proposed no change, as with most claim-pipeline findings;
+  // the report then leads with the consequence rather than a placeholder fix.
+  suggestion?: string;
   anchor: Anchor;
   evidenceIds: string[];
   fix?: { startLine: number; endLine: number; original: string; replacement: string };
@@ -159,7 +161,8 @@ const resultFields = object({
     capture: object({ revision: sha, startLine: { type: 'integer', minimum: 1 },
       endLine: { type: 'integer', minimum: 0 }, totalLines: { type: 'integer', minimum: 0 }, contentHash: digest }),
   })] }),
-  findings: array({ ...findingSchema, properties: { ...findingSchema.properties, fix: fixSchema } }),
+  findings: array({ ...findingSchema, properties: { ...findingSchema.properties, fix: fixSchema },
+    required: findingSchema.required.filter(key => key !== 'suggestion') }),
   limitations: array(text),
 });
 export const resultSchema = { ...resultFields, properties: { ...resultFields.properties, quality: qualitySchema } };

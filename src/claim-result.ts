@@ -1,11 +1,12 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
 import { git, loadReview, validateAnchor } from './snapshot.js';
 import type { Chain } from './evidence.js';
-import type { Model, Profile } from './investigation.js';
+import { price, subscription, type Model, type Profile } from './investigation.js';
 
 // The claim pipeline, written into the Result and receipt shapes the GitHub worker and
 // the `review` command already publish from. This is the bridge that makes what ships
@@ -21,7 +22,7 @@ const CATEGORY: Record<ClaimType, Finding['category']> = {
 const clip = (value: string, limit = 16000): string => value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 
 export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: string; rule: string; limitations: string[];
-  complete: boolean; stopReason: string | null; model: string; scope?: string }
+  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string> }
 
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
@@ -59,12 +60,12 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
       summary: clip(`Verified at ${chain.verifierConfidence} confidence. ${established.length} of ${chain.propositions.length} proposition(s) established: `
         + established.map(item => `${item.proposition} [${item.settledBy ?? 'unsettled'}]`).join('; ')) });
     findings.push({ id, priority: claim.severity, kind: claim.severity === 'P4' ? 'improvement' : 'defect',
-      category: CATEGORY[claim.type], title: clip(claim.description, 400), trigger: clip(claim.suspectedCondition),
+      category: CATEGORY[claim.type], title: clip(run.titles?.[claim.claimId] ?? claim.description, 400), trigger: clip(claim.suspectedCondition),
       consequence: clip(claim.description),
       priorityReason: `Rated ${claim.severity} by the reviewer when it made the claim; type ${claim.type}.`,
       counterEvidence: clip(`Each proposition was checked against the frozen revision: ${chain.propositions
         .map(item => `${item.proposition} (${item.status})`).join('; ')}`),
-      suggestion: clip(claim.shouldBe?.text ?? 'The reviewer did not propose a specific change; the trigger and checked propositions are under Review details.'),
+      ...(claim.shouldBe ? { suggestion: clip(claim.shouldBe.text) } : {}),
       anchor, evidenceIds: [id] });
   });
   for (const item of outside) limitations.push(clip(`Confirmed, but its location does not resolve at this revision: ${item}`));
@@ -94,8 +95,10 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
 // the diff between the two heads is exactly the commits pushed since. Anything else, a
 // force-push or a merge from the target branch, gets a full review, and the reason is
 // said rather than guessed at later.
-export interface PreviousReview { headSha: string; mergeBaseSha: string; claims: Claim[] }
-export function incrementalScope(directory: string, packet: Packet): { scope?: IncrementalScope; note: string | null } {
+// `titles` keeps a carried finding's heading stable across pushes, and means a push with
+// nothing new to read still calls no model.
+export interface PreviousReview { headSha: string; mergeBaseSha: string; claims: Claim[]; titles?: Record<string, string> }
+export function incrementalScope(directory: string, packet: Packet): { scope?: IncrementalScope; note: string | null; titles?: Record<string, string> } {
   const path = join(directory, 'previous.json');
   if (!existsSync(path)) return { note: null };
   const previous = JSON.parse(readFileSync(path, 'utf8')) as PreviousReview;
@@ -108,7 +111,8 @@ export function incrementalScope(directory: string, packet: Packet): { scope?: I
   try { git(repository, ['merge-base', '--is-ancestor', previous.headSha, packet.headSha]); }
   catch { return { note: 'Full review: the earlier reviewed head is not an ancestor of this one, as after a force-push.' }; }
   const diff = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', previous.headSha, packet.headSha, '--']);
-  return { scope: { since: previous.headSha, diff, carried: previous.claims },
+  const titles = Object.fromEntries(Object.entries(previous.titles ?? {}).filter(([, title]) => typeof title === 'string'));
+  return { scope: { since: previous.headSha, diff, carried: previous.claims }, titles,
     note: `Incremental review: new claims were sought only in the commits since ${previous.headSha.slice(0, 12)}; ${previous.claims.length} earlier finding(s) were re-checked against this head.` };
 }
 
@@ -122,20 +126,25 @@ export function previousReview(artifact: string): PreviousReview | null {
     const chains = (read('claim-verification.json').chains ?? []) as Chain[];
     const kept = new Set(chains.filter(chain => chain.verdict === 'confirmed' || chain.verdict === 'withheld').map(chain => chain.claimId));
     const claims = [...(existsSync(join(artifact, 'carried-claims.json')) ? read('carried-claims.json') : []), ...read('claims.json')] as Claim[];
-    return { headSha: packet.headSha, mergeBaseSha: packet.mergeBaseSha, claims: claims.filter(claim => kept.has(claim.claimId)) };
+    const titles = existsSync(join(artifact, 'titles.json')) ? (read('titles.json').titles ?? {}) as Record<string, string> : {};
+    return { headSha: packet.headSha, mergeBaseSha: packet.mergeBaseSha, claims: claims.filter(claim => kept.has(claim.claimId)),
+      titles: Object.fromEntries(Object.entries(titles).filter(([id]) => kept.has(id))) };
   } catch { return null; }
 }
 
 // The fields the dashboard reads from a receipt, and nothing it would misread. Spend is
 // metered only when the run finished; otherwise it may include an unsettled reservation,
 // and an unknown spend must not be shown as a known one.
-export function claimReceipt(profile: Profile, review: ClaimReview, startedAt: string, finishedAt: string) {
+export function claimReceipt(profile: Profile, review: ClaimReview, startedAt: string, finishedAt: string, titling?: Titling) {
   const { investigation } = review;
   const finished = investigation.stopReason === 'finished';
   return { schemaVersion: 1, pipeline: 'claims', profile, startedAt, finishedAt, stopReason: investigation.stopReason,
     providerFailure: investigation.telemetry.failure, toolCalls: investigation.telemetry.toolCalls, toolErrors: investigation.toolErrors,
     calls: [{ inputTokens: investigation.telemetry.inputTokens, outputTokens: investigation.telemetry.outputTokens, cachedInputTokens: null,
-      reservedUsd: investigation.spentUsd, meteredUsd: finished ? investigation.spentUsd : null, model: profile.model }] };
+      reservedUsd: investigation.spentUsd, meteredUsd: finished ? investigation.spentUsd : null, model: profile.model },
+    // The titling call, when one was made: metered only when it answered.
+    ...(titling && (titling.spentUsd || titling.failure) ? [{ purpose: 'titles', inputTokens: titling.inputTokens, outputTokens: titling.outputTokens,
+      cachedInputTokens: null, reservedUsd: titling.spentUsd, meteredUsd: titling.inputTokens ? titling.spentUsd : null, model: profile.model }] : [])] };
 }
 
 // One claim review over a prepared snapshot, leaving result.json and receipt.json where
@@ -150,25 +159,33 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   const jev = Boolean(process.env.TYPESAFE_API_KEY);
   const deadline = AbortSignal.timeout(profile.deadlineMs);
   const startedAt = new Date().toISOString();
-  const { scope, note } = incrementalScope(directory, packet);
+  const { scope, note, titles: earlierTitles = {} } = incrementalScope(directory, packet);
   const review = await runClaimReview(directory, profile, injectedModel, signal ? AbortSignal.any([signal, deadline]) : deadline,
     undefined, jev ? 'jev' : 'none', {}, {}, scope);
   // The claim record keeps its own name, because verification.json belongs to the local
   // fix checks the worker may run next, which would overwrite it.
   renameSync(join(directory, 'verification.json'), join(directory, 'claim-verification.json'));
+  // Titles for the confirmed findings only, from what the claim pass left of the budget.
+  const confirmed = new Set(review.verification.chains.filter(chain => chain.verdict === 'confirmed').map(chain => chain.claimId));
+  const titling = await titleClaims(review.claims.filter(claim => confirmed.has(claim.claimId) && !earlierTitles[claim.claimId]), modelFor(profile, injectedModel),
+    (input, output) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
+    profile.maxUsd - review.investigation.spentUsd, signal ? AbortSignal.any([signal, deadline]) : deadline);
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
     renameSync(temporary, join(directory, name));
   };
-  persist('receipt.json', claimReceipt(profile, review, startedAt, new Date().toISOString()));
+  titling.titles = { ...Object.fromEntries(Object.entries(earlierTitles).filter(([id]) => confirmed.has(id))), ...titling.titles };
+  persist('titles.json', titling);
+  persist('receipt.json', claimReceipt(profile, review, startedAt, new Date().toISOString(), titling));
   const limitations = [...review.investigation.limitations, ...review.verification.limitations];
   if (!jev) limitations.push('The cross-family rung was off (no TYPESAFE_API_KEY), so no finding reached high confidence through agreement.');
   if (note) limitations.push(note);
+  if (titling.failure) limitations.push(`Finding titles were not written (${titling.failure}), so each finding is titled by its full description.`);
   persist('result.json', claimResult(packet, join(directory, 'source.git'), {
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,
     rule: review.verification.decision.rule, limitations, complete: review.investigation.complete,
-    stopReason: review.investigation.stopReason, model: profile.model,
+    stopReason: review.investigation.stopReason, model: profile.model, titles: titling.titles,
     ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}) }));
   return review;
 }
