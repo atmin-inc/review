@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
-import { runClaimReviewAsResult } from '../dist/claim-result.js';
+import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
 import { capture, loadReview } from '../dist/snapshot.js';
 import { MAX_DIFF_BYTES } from '../dist/claim-run.js';
 import { assess } from '../dist/assessment.js';
@@ -126,4 +126,74 @@ test('a 300 KB diff is reviewed and a diff over 512 KB is refused before spendin
   await assert.rejects(runClaimReviewAsResult(huge, { ...profile, maxInputTokens: 1000000 }, undefined,
     { ...model([]), async respond() { asked = true; } }), /Diff exceeds 512 KB/);
   assert.equal(asked, false);
+});
+
+// A push after a completed review: the model reads only the commits since, and the earlier
+// review's surviving claims are re-verified at the new head instead of being found again.
+function secondPush(t, fixture, write = true) {
+  if (write) fixture.write('notes.ts', 'export const note = "added later";\n');
+  const headSha = write ? fixture.commit('second push') : fixture.state.headSha;
+  return persist({ ...fixture, root: mkdtempSync(join(fixture.root, 'push-')), ...capture(fixture.source, { ...fixture.state, headSha }) });
+}
+function watching(steps) {
+  const inner = model(steps); const seen = [];
+  return { seen, model: { ...inner, async respond(input, ...rest) { seen.push(JSON.parse(input.context)); return inner.respond(input, ...rest); } } };
+}
+const done = () => action('end_investigation', { complete: true, limitations: [] });
+
+test('a push is reviewed incrementally and earlier findings are re-checked, not re-found', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const first = persist(fixture);
+  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  const second = secondPush(t, fixture);
+  writeFileSync(join(second, 'previous.json'), JSON.stringify(previousReview(first)));
+  const run = watching([done()]);
+  await runClaimReviewAsResult(second, profile, undefined, run.model);
+
+  const context = run.seen[0];
+  assert.equal(context.incrementalSince, fixture.state.headSha);
+  assert.match(context.diff, /notes\.ts/);
+  assert.doesNotMatch(context.diff, /owner !== account/);
+  const { result } = loadReview(second);
+  assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
+  assert.match(result.summary, /^Incremental review since/);
+  assert.match(result.limitations.join(' '), /Incremental review: new claims were sought only in the commits since/);
+  assert.equal(JSON.parse(readFileSync(join(second, 'carried-claims.json'), 'utf8')).length, 1);
+  // A third push carries the finding again, from the carried record this time.
+  assert.equal(previousReview(second).claims.length, 1);
+});
+
+test('nothing new to read asks no model; a moved merge base or a rewritten head gets a full review', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const first = persist(fixture);
+  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  const earlier = previousReview(first);
+
+  const same = secondPush(t, fixture, false);
+  writeFileSync(join(same, 'previous.json'), JSON.stringify(earlier));
+  let asked = false;
+  await runClaimReviewAsResult(same, profile, undefined, { ...model([]), async respond() { asked = true; } });
+  assert.equal(asked, false);
+  assert.equal(loadReview(same).result.findings.length, 1);
+  assert.equal(loadReview(same).result.status, 'completed');
+
+  for (const [previous, reason] of [[{ ...earlier, mergeBaseSha: 'e'.repeat(40) }, /merge base moved/],
+    [{ ...earlier, headSha: 'f'.repeat(40) }, /not an ancestor/]]) {
+    const full = secondPush(t, fixture, false);
+    writeFileSync(join(full, 'previous.json'), JSON.stringify(previous));
+    const run = watching([done()]);
+    await runClaimReviewAsResult(full, profile, undefined, run.model);
+    assert.equal(run.seen[0].incrementalSince, undefined);
+    assert.match(run.seen[0].diff, /owner !== account/);
+    assert.match(loadReview(full).result.limitations.join(' '), reason);
+  }
+});
+
+test('a partial earlier review is not built on', async t => {
+  withoutJev(t);
+  const stopped = persist(repository(t));
+  await runClaimReviewAsResult(stopped, { ...profile, maxTurns: 2 }, undefined, model([action('record_claim', claim('P1')), action('record_claim', REFUTED)]));
+  assert.equal(previousReview(stopped), null);
 });

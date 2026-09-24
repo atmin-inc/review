@@ -687,3 +687,55 @@ test('a failed isolated fix check withholds the apply button while retaining the
     if (status === 'fail') assert.match(comment.body, /Proposed fix withheld/);
   }
 });
+
+// A push builds on the last completed review; a maintainer's command asks for a full one.
+test('a push hands the runner the last completed review and a /atmin review command does not', async t => {
+  const h = await harness(t);
+  const seen = [];
+  const worker = new Worker(h.config, h.store, h.github, async (job, signal, previous) => { seen.push(previous ?? null); return h.runner(job, signal); }, 'owner');
+  const first = h.store.enqueue('opened', 1); await worker.tick();
+  h.store.enqueue('push', 1); await worker.tick();
+  h.store.enqueue('comment', 1, 'command'); await worker.tick();
+  assert.deepEqual(seen, [null, h.store.get(first).artifact, null]);
+});
+
+// Cost and noise both grow with every push. After five reviewed heads the worker stops
+// reviewing automatically, keeps the last summary under a banner naming the head it
+// describes, spends nothing, and a command starts the count again.
+test('automatic reviews pause after five reviewed heads and a command resumes them', async t => {
+  const h = await harness(t); h.config.maxReviewsPerDay = 20;
+  for (let i = 0; i < 5; i++) {
+    h.setLive({ headSha: String(i + 1).repeat(40) });
+    h.store.enqueue(`push-${i}`, 1); await h.worker.tick();
+  }
+  assert.equal(h.counts.runs, 5);
+  // The same head again, as after a target-branch push, is not a new review toward the cap.
+  h.store.enqueue('base-moved', 1); await h.worker.tick();
+  assert.equal(h.counts.runs, 6);
+  h.setLive({ headSha: '6'.repeat(40) });
+  const paused = h.store.enqueue('push-6', 1); await h.worker.tick();
+  assert.equal(h.counts.runs, 6);
+  assert.equal(h.store.get(paused).state, 'skipped');
+  assert.equal(h.store.get(paused).error, 'auto-paused');
+  assert.match(h.comment.body, /Automatic reviews paused/);
+  assert.match(h.comment.body, /atmin review/);
+  // A second paused push does not stack banners.
+  h.setLive({ headSha: '7'.repeat(40) });
+  h.store.enqueue('push-7', 1); await h.worker.tick();
+  assert.equal(h.comment.body.match(/Automatic reviews paused/g).length, 1);
+  h.store.enqueue('rerun', 1, 'command'); await h.worker.tick();
+  assert.equal(h.counts.runs, 7);
+  assert.doesNotMatch(h.comment.body, /Automatic reviews paused/);
+});
+
+test('a database from before incremental review gains the trigger column; old jobs read as events', t => {
+  const root = mkdtempSync(join(tmpdir(), 'atmin-github-test-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const legacy = new Store(root);
+  legacy.db.exec('DROP TABLE jobs; CREATE TABLE jobs (id TEXT PRIMARY KEY, pr INTEGER NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL, started INTEGER, artifact TEXT, report TEXT, error TEXT, createStarted INTEGER NOT NULL DEFAULT 0)');
+  legacy.db.exec("INSERT INTO jobs(id,pr,state,created) VALUES('old',1,'completed',1)");
+  legacy.close();
+  const store = new Store(root);
+  t.after(() => store.close());
+  assert.equal(store.get('old').trigger, 'event');
+});

@@ -80,7 +80,7 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     pr = payload.issue.number;
   }
   if (!Number.isSafeInteger(pr) || pr! < 1) { return [202, 'ignored event']; }
-  const id = store.enqueue(delivery, pr!);
+  const id = store.enqueue(delivery, pr!, event === 'issue_comment' ? 'command' : 'event');
   return [202, id ? 'queued' : 'paused or duplicate'];
 }
 

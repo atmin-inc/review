@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 339 tests: 337 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 345 tests: 343 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -903,3 +903,26 @@ already reads, so freshness, checks, inline comments and the dashboard are uncha
   identical except `maxInputTokens: 1000000`, under Luna's 1.05M-token window. The
   benchmark profile is unchanged. **Unmeasured:** review quality and cost on diffs above
   62 KB, the largest Martian case. The older `investigate` engine keeps 128 KB.
+
+## Incremental review on pushes, and auto-pause (2026-09-24)
+
+Lors: "yeah do it", after `docs/coderabbit-lessons-2026-09-24.md` named it the biggest cost
+and noise lever. The worker used to re-review the whole PR on every push.
+
+- **What a push gets.** The runner passes the last completed review's artifact
+  (`Store.previous`); `previousReview` in `src/claim-result.ts` keeps its confirmed and
+  withheld claims and writes `previous.json`. `incrementalScope` uses it only when the
+  merge base is unchanged and the earlier head is an ancestor of the new one; otherwise it
+  is a full review and the reason is a limitation. The model is sent the diff between the
+  two heads plus a `scope` note in the context; verification still runs head against merge
+  base, so every claim is still about the whole change. Carried claims are re-verified with
+  the new ones and written to `carried-claims.json`; a claim the model records again keeps
+  the earlier wording (same `claimId`).
+- **No new commits, no model call.** A target-branch push with the merge base unchanged
+  re-verifies the carried claims and spends nothing on emission.
+- **Auto-pause.** After `AUTO_PAUSE_AFTER` (5) distinct reviewed heads since the last
+  `/atmin review`, an event job is `skipped` with error `auto-paused` and the summary keeps
+  the last review under a banner naming the head it describes. Jobs now record `trigger`
+  (`event` or `command`); a command is always a full review. Old databases gain the column.
+- **Unmeasured.** The `scope` note is new text the emitter reads, and no benchmark has
+  multi-push PRs. Treat incremental quality as unknown until checked on real PRs.

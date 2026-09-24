@@ -1,9 +1,9 @@
-import { existsSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runClaimReview, type ClaimReview } from './claim-run.js';
+import { runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
-import { loadReview, validateAnchor } from './snapshot.js';
+import { git, loadReview, validateAnchor } from './snapshot.js';
 import type { Chain } from './evidence.js';
 import type { Model, Profile } from './investigation.js';
 
@@ -21,7 +21,7 @@ const CATEGORY: Record<ClaimType, Finding['category']> = {
 const clip = (value: string, limit = 16000): string => value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 
 export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: string; rule: string; limitations: string[];
-  complete: boolean; stopReason: string | null; model: string }
+  complete: boolean; stopReason: string | null; model: string; scope?: string }
 
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
@@ -79,7 +79,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     schemaVersion: 1, headSha: packet.headSha, baseSha: packet.baseSha, policyHash: packet.policyHash,
     status: completed ? 'completed' : 'partial',
     reviewer: { name: 'atmin claim review', model: run.model, context: 'independent' },
-    summary: `Claim review: ${run.claims.length} claim(s) made, ${findings.length + outside.length} confirmed and shown, ${withheld.length} withheld as minor, `
+    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${withheld.length} withheld as minor, `
       + `${counts.refuted} refuted, ${counts.inconclusive} inconclusive. Policy verdict ${run.verdict} (rule ${run.rule}).`,
     coverage: packet.changedFiles.map(file => ({ path: file.path,
       status: completed && file.kind === 'text' ? 'reviewed' : 'unreviewed', evidenceIds: completed && file.kind === 'text' ? ['change-diff'] : [] })),
@@ -88,6 +88,44 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     limitations: limitations.length ? limitations.map(item => clip(item)) : ['No repository code was executed.'],
   };
   return parseResult(result);
+}
+
+// What an earlier review of the same PR left for this one, written by the worker's runner
+// as previous.json: its head, its merge base and the claims that survived it. It is used
+// only when the earlier head is an ancestor of this one against the same merge base, so
+// the diff between the two heads is exactly the commits pushed since. Anything else, a
+// force-push or a merge from the target branch, gets a full review, and the reason is
+// said rather than guessed at later.
+export interface PreviousReview { headSha: string; mergeBaseSha: string; claims: Claim[] }
+export function incrementalScope(directory: string, packet: Packet): { scope?: IncrementalScope; note: string | null } {
+  const path = join(directory, 'previous.json');
+  if (!existsSync(path)) return { note: null };
+  const previous = JSON.parse(readFileSync(path, 'utf8')) as PreviousReview;
+  const sha = /^[a-f0-9]{40}$/;
+  if (!sha.test(previous.headSha) || !sha.test(previous.mergeBaseSha) || !Array.isArray(previous.claims)) {
+    return { note: 'Full review: the earlier review record was unreadable.' };
+  }
+  if (previous.mergeBaseSha !== packet.mergeBaseSha) return { note: 'Full review: the merge base moved since the earlier review.' };
+  const repository = join(directory, 'source.git');
+  try { git(repository, ['merge-base', '--is-ancestor', previous.headSha, packet.headSha]); }
+  catch { return { note: 'Full review: the earlier reviewed head is not an ancestor of this one, as after a force-push.' }; }
+  const diff = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', previous.headSha, packet.headSha, '--']);
+  return { scope: { since: previous.headSha, diff, carried: previous.claims },
+    note: `Incremental review: new claims were sought only in the commits since ${previous.headSha.slice(0, 12)}; ${previous.claims.length} earlier finding(s) were re-checked against this head.` };
+}
+
+// Read from a finished claim run: only a completed review can stand in for the part of the
+// change this one will not re-read, and only its confirmed and withheld claims carry.
+export function previousReview(artifact: string): PreviousReview | null {
+  try {
+    const read = (name: string) => JSON.parse(readFileSync(join(artifact, name), 'utf8'));
+    const packet = read('packet.json'), result = read('result.json');
+    if (result.status !== 'completed' || !existsSync(join(artifact, 'claim-verification.json'))) return null;
+    const chains = (read('claim-verification.json').chains ?? []) as Chain[];
+    const kept = new Set(chains.filter(chain => chain.verdict === 'confirmed' || chain.verdict === 'withheld').map(chain => chain.claimId));
+    const claims = [...(existsSync(join(artifact, 'carried-claims.json')) ? read('carried-claims.json') : []), ...read('claims.json')] as Claim[];
+    return { headSha: packet.headSha, mergeBaseSha: packet.mergeBaseSha, claims: claims.filter(claim => kept.has(claim.claimId)) };
+  } catch { return null; }
 }
 
 // The fields the dashboard reads from a receipt, and nothing it would misread. Spend is
@@ -114,8 +152,9 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   const jev = Boolean(process.env.TYPESAFE_API_KEY);
   const deadline = AbortSignal.timeout(profile.deadlineMs);
   const startedAt = new Date().toISOString();
+  const { scope, note } = incrementalScope(directory, packet);
   const review = await runClaimReview(directory, profile, injectedModel, signal ? AbortSignal.any([signal, deadline]) : deadline,
-    undefined, jev ? 'jev' : 'none');
+    undefined, jev ? 'jev' : 'none', {}, {}, scope);
   // The claim record keeps its own name, because verification.json belongs to the local
   // fix checks the worker may run next, which would overwrite it.
   renameSync(join(directory, 'verification.json'), join(directory, 'claim-verification.json'));
@@ -127,9 +166,11 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   persist('receipt.json', claimReceipt(profile, review, startedAt, new Date().toISOString()));
   const limitations = [...review.investigation.limitations, ...review.verification.limitations];
   if (!jev) limitations.push('The cross-family rung was off (no TYPESAFE_API_KEY), so no finding reached high confidence through agreement.');
+  if (note) limitations.push(note);
   persist('result.json', claimResult(packet, join(directory, 'source.git'), {
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,
     rule: review.verification.decision.rule, limitations, complete: review.investigation.complete,
-    stopReason: review.investigation.stopReason, model: profile.model }));
+    stopReason: review.investigation.stopReason, model: profile.model,
+    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}) }));
   return review;
 }
