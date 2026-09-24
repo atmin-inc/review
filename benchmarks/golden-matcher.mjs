@@ -48,7 +48,7 @@ export const RULES = {
     all: [/nil|NoMethodError|XSS|escap|interpolat/i, /contents|url|import/i] },
   '015[5] end if in ERB': { file: 'best.html.erb', all: [/end if|syntax|invalid (Ruby|ERB)|will raise|parse/i] },
   '015[6] content.scrub nil': { file: 'poll_feed.rb',
-    all: [/content/i, /nil|missing|absent|not (always )?(present|populated)|description|NoMethodError/i] },
+    all: [/content/i, /nil|missing|absent|not (always )?(present|populated)|description|NoMethodError|no fallback|no content|without (a )?content/i] },
   '015[7] referer XSS': { file: 'layouts/embed.html.erb', all: [/referr?er/i, /XSS|escap|inject|script/i] },
   '017[0] include_website_name': { file: 'user_serializer.rb',
     all: [/include_website_name|website_name|website_host|<</i, /suffix|question mark|trailing \?|`\?`|<<|mutat|frozen|concatenat|never called|not (be )?called|conditional/i] },

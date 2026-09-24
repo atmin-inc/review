@@ -843,3 +843,32 @@ labels (kappa 0.71 on a 25% second pass). Full result in
   failing schema paths in `toolErrors[].detail`, and the model still sees the same short
   message, so it is not an emitter change. Read that field on the next set before
   guessing at a schema fix.
+
+## All 15 development cases on Luna (2026-09-24)
+
+Pre-registered. The 10 cases never run before were prepared (`prepare10.mjs` in the result
+directory: the `martian-prepare.mjs` projection with the proxy passed to `git fetch`) and
+run 8 times each on Luna, $3.20. Full result in
+`/mnt/project-files/luna-15-cases-2026-09-24/`. Golden rules for their 29 comments were
+written before any output was read, then corrected against every match and near-miss;
+`benchmarks/golden-rules-check.mjs` checks each comment matches its own rule, and
+`matches(claim, caseId)` now scopes rules to their case.
+
+- **Harmful per run 0.10 on the new cases (pre-registered line 0.3), 0.07 over all 15.**
+  The five cases were not flattering Luna. It ships 2.1 findings a run on the new cases,
+  88% acceptable and 37% golden. All 15: 185 shipped, 89% acceptable, 5% harmful, 39%
+  golden, **14 of 41 golden comments found at least once.**
+- By the benchmark's golden-only view that is 39%, under the 70% floor; the gap is 92 R
+  findings no human wrote down. Missed Criticals: 015[0] SSRF, 038[0], 040[0].
+- **032[0], the keycloak "Critical recursion", is not a recursion.** `getForLogin` calls the
+  class's own cached `getById`, which never re-enters `getForLogin`, and `getByOrganization`
+  already did the same at base. Luna read that line in every run and considered the call in
+  half; declining to report it was correct. Do not chase it.
+- **The schema rejections are Luna omitting `severity`** (20 of 24, named by `15780eb`'s
+  telemetry). 21 of 24 are re-recorded later in the run; 3 claims lost in 88 runs.
+- Kappa on the second pass is 0.0 and uninformative: the second labeller called nothing
+  harmful, agreement 24 of 26.
+- **The GitHub worker and `review` command do not run the claim pipeline.** They call
+  `investigate` (`src/github/runner.ts`), the older single-pass reviewer. Every number in
+  this file from 2026-09-20 on is `claim-review`. Putting Luna in the worker's profile would
+  ship an unmeasured combination; switching the worker is Lors's decision.
