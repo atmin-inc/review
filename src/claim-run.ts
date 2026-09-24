@@ -11,6 +11,7 @@ import { price, subscription, type Model, type Profile } from './investigation.j
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import { parseLocation, type Claim } from './claim.js';
+import { calledCode, MAX_CALLED_CODE_BYTES } from './callees.js';
 import type { Rung } from './evidence.js';
 import type { Packet } from './contracts.js';
 
@@ -83,7 +84,7 @@ export function targetGuidance(repository: string, packet: Packet): { guidance: 
 
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
-    finishReason: null, failure: null } });
+    finishReason: null, failure: null, reads: [] } });
 
 // The model a profile names, unless a test or benchmark injects one.
 export function modelFor(profile: Profile, injectedModel?: Model): Model {
@@ -110,7 +111,8 @@ export async function runClaimReview(directory: string, profile: Profile,
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
   const { guidance, omitted } = targetGuidance(repository, packet);
-  const guided = guidance.length ? { targetGuidance: guidance } : {};
+  const { called, omitted: uncalled } = calledCode(diff.toString('utf8'), revisions.head);
+  const guided = { ...(guidance.length ? { targetGuidance: guidance } : {}), ...(called.length ? { calledCode: called } : {}) };
   const context = incremental
     ? { packet, ...guided, diff: diff.toString('utf8'), incrementalSince: incremental.since,
       scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.`
@@ -129,6 +131,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
   const carried = (incremental?.carried ?? []).filter(claim => !emitted.has(claim.claimId) && !touchedBy(claim, changed));
+  if (uncalled.length) investigation.limitations.push(`Code the change calls over ${MAX_CALLED_CODE_BYTES / 1024} KB was left out, so these definitions were not shown: ${uncalled.join(', ')}.`);
   if (omitted.length) investigation.limitations.push(`Repository guidance over ${MAX_GUIDANCE_BYTES / 1024} KB was left out, so these rules were not shown: ${omitted.join(', ')}.`);
   if (recheck.length) investigation.limitations.push(`${recheck.length} earlier finding(s) were in files this push changed, so they were re-asked rather than carried; ${recheck.filter(claim => emitted.has(claim.claimId)).length} were recorded again.`);
   const claims = [...carried, ...investigation.claims];

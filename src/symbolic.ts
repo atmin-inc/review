@@ -281,6 +281,27 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
   return { evidence: [{ rung: 'symbolic', check: `${label}${where}`, result: settle(outside.length > 0, expect) }], limitations: [] };
 }
 
+// The definition a call resolves to, for the investigator's context rather than for
+// settling anything: the one in the calling file when it has exactly one, otherwise the
+// only one in the repository. An ambiguous name resolves to nothing rather than a guess.
+// `accept` narrows where a definition may live, so prose that happens to show one is not it.
+export function definitionOf(revision: Revision, symbol: string, from: string,
+  accept: (path: string) => boolean = () => true): { path: string; line: number; text: string; capped: boolean } | null {
+  if (!searchable(symbol)) return null;
+  const { found: all, truncated } = declaredAs(revision, symbol);
+  const found = all.filter(declaration => accept(declaration.path));
+  const local = found.filter(declaration => declaration.path === from);
+  // A truncated search cannot show a declaration to be the only one: on mason-v1 the one
+  // `errorMessage` it reached was a local variable in an unrelated file.
+  const chosen = local.length === 1 ? local[0] : !local.length && !truncated && found.length === 1 ? found[0] : undefined;
+  if (!chosen) return null;
+  const body = bodyOf(revision, chosen.path, chosen.line, chosen.span);
+  if (!body) return null;
+  // bodyOf leaves the declaration out unless nothing is indented under it.
+  const text = body.text === chosen.text ? body.text : `${chosen.text}\n${body.text}`;
+  return { path: chosen.path, line: chosen.line, text, capped: body.capped };
+}
+
 export function runChecks(revision: Revision, checks: SymbolicCheck[]): CheckOutcome {
   const outcomes = checks.map(check => runCheck(revision, check));
   return {

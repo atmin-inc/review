@@ -88,6 +88,15 @@ test('a search whose output overflows the cap is truncated, not failed and not e
   assert.deepEqual(one, { matches: [], truncated: true });
 });
 
+// `-I` skips binary files, not Latin-1 ones, and a match's own text is never used. Decoding
+// it threw on mason-v1 (2026-09-24) and ended the search over one accented byte.
+test('a match in a file that is not UTF-8 is found rather than ending the search', t => {
+  const f = repository(t);
+  f.write('legacy.txt', Buffer.concat([Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20]), Buffer.from('needle\n')]));
+  const head = f.commit('latin-1 file');
+  assert.deepEqual(searchSource(f.source, head, 'needle'), { matches: [{ path: 'legacy.txt', line: 1 }], truncated: false });
+});
+
 test('the target policy wins over a PR that relaxes it', t => {
   const f = repository(t);
   f.run('checkout', '-q', f.state.baseSha);

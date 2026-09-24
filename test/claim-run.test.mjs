@@ -236,14 +236,42 @@ test('the claim pass is shown the target branch AGENTS.md files, not the change\
   assert.ok(investigation.limitations.some(line => /over 32 KB was left out.*lib\/AGENTS\.md/.test(line)));
 });
 
-// Every earlier number was measured on the bare instructions, so a repository with no
-// AGENTS.md must be asked exactly that, or old and new runs stop being comparable.
-test('without AGENTS.md files the claim pass is asked exactly the measured instructions', async t => {
+// Every earlier number was measured on the bare instructions, so a change with no
+// AGENTS.md and no call into unchanged code must be asked exactly that, or old and new
+// runs stop being comparable.
+test('without AGENTS.md files or called code the claim pass is asked exactly the measured instructions', async t => {
   const fixture = repository(t);
   const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
 
   await runClaimReview(persist(fixture), profile, fake);
 
   assert.equal(fake.inputs[0].instructions, claimInstructions);
-  assert.equal('targetGuidance' in JSON.parse(fake.inputs[0].context), false);
+  const context = JSON.parse(fake.inputs[0].context);
+  assert.equal('targetGuidance' in context, false);
+  assert.equal('calledCode' in context, false);
+});
+
+// On mason-v1 #4590 the defect was in an unchanged mapper the new code threw into, and
+// the model never opened it; why it missed took a paid rerun, because telemetry held
+// counts and not what was read. The mapper now arrives with the change, and the reads
+// are on disk.
+test('unchanged code the change calls is in the context, and what the model read is in telemetry', async t => {
+  const fixture = repository(t);
+  fixture.run('checkout', '-q', '--detach', fixture.state.baseSha);
+  fixture.write('lib/errors.ts', 'export function mapError(e) {\n  return { kind: "VendorUnavailable", retryAfterMs: 5000 };\n}\n');
+  const baseSha = fixture.commit('mapper');
+  fixture.write('api.ts', 'export function run(e) {\n  throw mapError(e);\n}\n');
+  const headSha = fixture.commit('new caller');
+  const calling = { ...fixture, ...capture(fixture.source, { ...fixture.state, baseSha, headSha }) };
+  const fake = recording([action('read_file', { side: 'head', path: 'lib/errors.ts', startLine: 1, count: 3 }),
+    action('end_investigation', { complete: true, limitations: [] })]);
+  const directory = persist(calling);
+
+  await runClaimReview(directory, profile, fake);
+
+  const context = JSON.parse(fake.inputs[0].context);
+  assert.deepEqual(context.calledCode.map(c => [c.symbol, c.path, c.line]), [['mapError', 'lib/errors.ts', 1]]);
+  assert.match(fake.inputs[0].instructions, /calledCode holds the current definitions/);
+  assert.deepEqual(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).reads,
+    [{ side: 'head', path: 'lib/errors.ts', startLine: 1, count: 3 }]);
 });

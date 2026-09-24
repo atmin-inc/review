@@ -264,12 +264,23 @@ export function searchSource(repository: string, revision: string, query: string
     raw = error.partial.subarray(0, error.partial.lastIndexOf(0x0a) + 1);
     overflowed = true;
   }
-  const output = decode(raw);
+  // Only each match's path and line number are decoded. The matched line's own text is
+  // never used, and `-I` skips binary files, not Latin-1 ones: decoding it with the rest
+  // threw on mason-v1 (2026-09-24) and ended the search over one accented byte.
   const matches: { path: string; line: number }[] = [];
-  for (const match of output.matchAll(/([^\0]+)\0(\d+)\0[^\n]*(?:\n|$)/g)) {
+  // Each record is path NUL line NUL text LF; the path itself may hold a newline.
+  for (let start = 0; start < raw.length;) {
+    const first = raw.indexOf(0, start);
+    const second = first < 0 ? -1 : raw.indexOf(0, first + 1);
+    if (second < 0) break;
+    const newline = raw.indexOf(0x0a, second + 1);
+    const path = decode(raw.subarray(start, first));
+    const line = decode(raw.subarray(first + 1, second));
+    start = newline < 0 ? raw.length : newline + 1;
+    requireValue(/^\d+$/.test(line), 'Search returned an unexpected record');
     if (matches.length === 50) return { matches, truncated: true };
-    requireValue(match[1]!.startsWith(`${revision}:`), 'Search returned an unexpected revision');
-    matches.push({ path: match[1]!.slice(revision.length + 1), line: Number(match[2]) });
+    requireValue(path.startsWith(`${revision}:`), 'Search returned an unexpected revision');
+    matches.push({ path: path.slice(revision.length + 1), line: Number(line) });
   }
   return { matches, truncated: overflowed };
 }
