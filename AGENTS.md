@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 335 tests: 333 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 336 tests: 334 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -788,3 +788,29 @@ in the code, off.
   invented departure from a real one. That closes the line of work that began in
   `what-separates-real-findings-2026-09-21.md`. Seven emission-side and verification-side
   mechanisms have now been measured; the only one that moved harm is withholding P3.
+
+## Swapping the claim writer for GPT-6 Luna: quieter and more precise (2026-09-24)
+
+Pre-registered, 40 emission samples per arm over the same 10 frozen DeepSeek readings,
+`profiles/martian-luna-openrouter.json` against `martian-deepseek.json`, same prompt, tools
+and verifier, blind labels (kappa 0.88 on a 25% second pass). Full result in
+`/mnt/project-files/luna-result-2026-09-23/`; pre-registration beside it. $0.94, $0.023 a
+sample against $0.062.
+
+- **Harmful per sample 1.13 to 0.07 (p < 0.001). Golden 0.28 to 0.38, not significant.
+  Acceptable 0.85 to 0.42 (p = 0.035), and that drop is entirely R, real findings no human
+  commented on: 19 to 2.** Decision rule 3, a trade, so it went to Lors.
+- Totals: DeepSeek G15 R19 S8 X25 O20 of 87 shipped; Luna G15 R2 S0 X0 O3 of 20. Of what
+  Luna ships, 75% matches a human comment and 85% is acceptable: **the first shipped set
+  above the 70% floor**, on the emission bench, on five cases, by rubric labels rather than
+  the benchmark's judge.
+- It is not the prompt rewrite again. That cut volume and lost the Critical and the High;
+  this cut volume (236 emitted to 49, 8 samples emitting nothing) and held golden at 15 to
+  15, and Luna is the arm that found the High 005[0]. Same prompt, same verifier: the
+  difference is in what the model chooses to assert.
+- **Unmeasured: Luna reading its own evidence.** The bench hands it DeepSeek's reading, so
+  a full-run set is the next measurement before the profile becomes a default anywhere.
+- Telemetry worth acting on: DeepSeek had 326 `end_investigation` calls refused for
+  sharing a response with other tool calls, most of its 27 tool calls a sample; Luna had
+  13 of 68 `record_claim` calls rejected on schema and 10 `read_file` calls on paths that
+  do not exist at the revision.
