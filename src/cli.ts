@@ -7,6 +7,7 @@ import { checkCurrent, loadReview, prepare } from './snapshot.js';
 import { renderMarkdown } from './render.js';
 import { readProfile, runReview } from './run.js';
 import { ablate, runClaimReview } from './claim-run.js';
+import { runClaimReviewAsResult } from './claim-result.js';
 import { renderClaimReview } from './render-claim.js';
 import { renderContribution } from './ablation.js';
 import { accountedUsd } from './investigation.js';
@@ -25,7 +26,9 @@ const help = `atmin review — source investigation and evidence tools
 prepare uses read-only GitHub/Git access and writes a private snapshot.
 render validates all evidence references against captured Git objects.
 --check-current checks live head/target; without it freshness is unverified.
-investigate sends frozen source to the configured API, with bounded reads and usage reservations.
+review runs the claim pipeline (below) and renders it as the GitHub worker does; rung 3 is
+Jev when TYPESAFE_API_KEY is set. investigate runs the older single-pass engine on a
+prepared directory, with bounded reads and usage reservations.
 claim-review runs the claim lifecycle: a wide pass emits falsifiable claims, a separate
 pass settles each one against the frozen revision, and the verdict is composed from what
 survived. Claims that die are shown, not hidden.
@@ -91,12 +94,17 @@ async function main(): Promise<void> {
     const cancel = () => controller.abort();
     process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
     try {
-      const { result, receipt } = await runReview(directory, profile, undefined, controller.signal);
       if (operation === 'review') {
-        const { packet } = loadReview(directory);
+        // The claim pipeline, the same run the GitHub worker publishes.
+        const { investigation } = await runClaimReviewAsResult(directory, profile, controller.signal);
+        const { packet, result } = loadReview(directory);
         process.stdout.write(renderMarkdown(packet, result, assess(packet, result, checkCurrent(packet))));
         process.stderr.write(`Private review artifacts: ${directory}\n`);
-      } else process.stdout.write(`${JSON.stringify({ directory, status: result.status, findings: result.findings.length,
+        if (investigation.stopReason !== 'finished' || result.status !== 'completed') process.exitCode = 2;
+        return;
+      }
+      const { result, receipt } = await runReview(directory, profile, undefined, controller.signal);
+      process.stdout.write(`${JSON.stringify({ directory, status: result.status, findings: result.findings.length,
         accountedUsd: accountedUsd(receipt), stopReason: receipt.stopReason }, null, 2)}\n`);
       if (receipt.stopReason !== 'finished' || result.status !== 'completed') process.exitCode = 2;
     } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }

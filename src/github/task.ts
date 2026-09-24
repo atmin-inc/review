@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { verifyReview } from '../verification.js';
 import { prepare, loadReview, withGitDeadline } from '../snapshot.js';
-import { runReview, readProfile } from '../run.js';
+import { readProfile } from '../run.js';
+import { runClaimReviewAsResult } from '../claim-result.js';
 
 const [phase, input, output] = process.argv.slice(2);
 const abort = new AbortController();
@@ -14,7 +15,8 @@ try {
   if (!input || !output) throw new Error('Invalid child arguments');
   if (phase === 'capture') withGitDeadline(120_000, () => prepare(input, output));
   else if (phase === 'investigate') {
-    await runReview(input, readProfile(output), undefined, abort.signal);
+    // The claim pipeline, as measured on the Martian development cases (2026-09-24).
+    await runClaimReviewAsResult(input, readProfile(output), abort.signal);
     withGitDeadline(30_000, () => loadReview(input));
   } else if (phase === 'verify') await verifyReview(input, JSON.parse(readFileSync(output, 'utf8')), abort.signal);
   else throw new Error('Invalid child phase');
