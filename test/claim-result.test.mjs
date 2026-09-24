@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
 import { runClaimReviewAsResult } from '../dist/claim-result.js';
-import { loadReview } from '../dist/snapshot.js';
+import { capture, loadReview } from '../dist/snapshot.js';
+import { MAX_DIFF_BYTES } from '../dist/claim-run.js';
 import { assess } from '../dist/assessment.js';
 import { readVerification } from '../dist/verification.js';
 import { runView } from '../dist/github/dashboard-view.js';
@@ -100,4 +101,29 @@ test('a withheld minor finding is listed, not published, and a run that stops cl
   assert.equal(assess(packet, result, current()).scope, 'partial');
   // Spend on a stopped run may hold a reservation, so it is not shown as metered.
   assert.equal(JSON.parse(readFileSync(join(stopped, 'receipt.json'), 'utf8')).calls[0].meteredUsd, null);
+});
+
+// 128 KB refused 29% of mason-v1's merged PRs. A diff up to 512 KB is reviewed; past that
+// the run refuses before any model is asked, so nothing is spent on a review that cannot fit.
+test('a 300 KB diff is reviewed and a diff over 512 KB is refused before spending', async t => {
+  withoutJev(t);
+  const sized = (bytes) => {
+    const fixture = repository(t);
+    fixture.write('generated.ts', `export const rows = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(Math.ceil(bytes / 40))}];\n`);
+    const headSha = fixture.commit('large change');
+    const captured = capture(fixture.source, { ...fixture.state, headSha });
+    return persist({ ...fixture, ...captured });
+  };
+  const large = sized(300 * 1024);
+  assert.ok(readFileSync(join(large, 'change.diff')).length > 128 * 1024);
+  await runClaimReviewAsResult(large, { ...profile, maxInputTokens: 1000000 }, undefined, model([
+    action('end_investigation', { complete: true, limitations: [] })]));
+  assert.equal(loadReview(large).result.status, 'completed');
+
+  const huge = sized(MAX_DIFF_BYTES + 64 * 1024);
+  assert.ok(readFileSync(join(huge, 'change.diff')).length > MAX_DIFF_BYTES);
+  let asked = false;
+  await assert.rejects(runClaimReviewAsResult(huge, { ...profile, maxInputTokens: 1000000 }, undefined,
+    { ...model([]), async respond() { asked = true; } }), /Diff exceeds 512 KB/);
+  assert.equal(asked, false);
 });

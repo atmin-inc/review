@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 338 tests: 336 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 339 tests: 337 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -894,5 +894,12 @@ already reads, so freshness, checks, inline comments and the dashboard are uncha
   claims rather than being killed by the child deadline with nothing written.
 - Receipt spend is metered only on a finished run; otherwise it may hold a reservation
   and is recorded as unknown.
-- Known limit, unchanged by the switch: diffs over 128 KB are refused, which is 29% of
-  mason-v1's merged PRs (`/mnt/project-files/mason-cost-estimate-2026-09-24.md`).
+- **Diff limit raised from 128 KB to 512 KB** (`MAX_DIFF_BYTES` in `src/claim-run.ts`) on
+  Lors's "we definitely need to raise the limit": 128 KB refused 29% of mason-v1's merged
+  PRs, 512 KB refuses 7% (`/mnt/project-files/mason-cost-estimate-2026-09-24.md`). The
+  OpenRouter adapter counts serialized bytes, not tokens, and a diff counts about 1.2 times
+  its size, so the 150,000 cap in `martian-luna-openrouter.json` could never have held a
+  large diff with room to read. Production uses `profiles/review-luna-openrouter.json`,
+  identical except `maxInputTokens: 1000000`, under Luna's 1.05M-token window. The
+  benchmark profile is unchanged. **Unmeasured:** review quality and cost on diffs above
+  62 KB, the largest Martian case. The older `investigate` engine keeps 128 KB.

@@ -24,6 +24,14 @@ export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigatio
 // why the asking is its own phase.
 export type CrossFamilySource = 'none' | 'jev';
 
+// The whole diff goes into every turn of the claim pass. 128 KB refused 29% of the PRs on
+// the first real repository measured (mason-v1, 2026-09-24); 512 KB refuses 7%. A diff
+// this size needs a profile whose input cap leaves room to read beside it: the OpenRouter
+// adapter counts serialized bytes, not tokens, and the diff is escaped twice on the way,
+// so a diff counts about 1.2 times its size (measured on a 471 KB mason-v1 diff). The
+// production profile allows 1,000,000, under Luna's 1.05M-token window (`profiles/review-luna-openrouter.json`).
+export const MAX_DIFF_BYTES = 512 * 1024;
+
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
   crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
@@ -39,7 +47,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
   const diff = readFileSync(join(directory, 'change.diff'));
-  if (diff.length > 128000) throw new Error('Diff exceeds 128 KB investigation limit');
+  if (diff.length > MAX_DIFF_BYTES) throw new Error('Diff exceeds 512 KB investigation limit');
   const context = { packet, diff: diff.toString('utf8') };
 
   const investigation = await investigateClaims(revisions, sourceOf, context, model, {

@@ -53,9 +53,10 @@ profile caps a run at $2; copying it is an explicit choice to use paid inference
 Direct OpenAI support uses `OPENAI_API_KEY` and an explicit profile.
 
 `review` runs the claim pipeline described under [Current review direction](#current-review-direction)
-below, the same run the GitHub worker publishes. The profile it was measured with is
-`profiles/martian-luna-openrouter.json` (GPT-6 Luna through OpenRouter, capped at $2 a run,
-about $0.035 a run measured on benchmark PRs). Set `TYPESAFE_API_KEY` as well to turn on
+below, the same run the GitHub worker publishes. Use `profiles/review-luna-openrouter.json`
+(GPT-6 Luna through OpenRouter, capped at $2 a run, about $0.035 a run measured on benchmark
+PRs). It is the measured `martian-luna-openrouter.json` with a larger input cap, so diffs up
+to 512 KB fit with room to read; the benchmark profile keeps the cap it was measured with. Set `TYPESAFE_API_KEY` as well to turn on
 the Jev rung, which is how it was measured; without it the report says the rung was off.
 Confirmed findings the reviewer rated P3 are listed by location, not shown.
 
@@ -109,9 +110,9 @@ to operate this worker until the next packaged release.
 
 The worker receives signed webhooks, stores jobs in SQLite, updates one bot
 summary per PR, and publishes an `atmin review` check. Each review is a claim-pipeline run
-(see `review` above); point `profile` at `profiles/martian-luna-openrouter.json` and set
+(see `review` above); point `profile` at `profiles/review-luna-openrouter.json` and set
 `OPENROUTER_API_KEY` and, for the Jev rung, `TYPESAFE_API_KEY`. Every push to an open PR
-starts a new review, bounded by `maxReviewsPerDay`. Diffs over 128 KB are not reviewed. Maintainers can comment
+starts a new review, bounded by `maxReviewsPerDay`. Diffs over 512 KB are not reviewed. Maintainers can comment
 `/atmin review` to rerun. Use a dedicated host user. Source review does not execute repository code.
 Optional [isolated checks](docs/isolated-checks.md) run selected commands and
 verify proposed patches on a configured Linux worker. This private pilot is not
