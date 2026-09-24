@@ -66,7 +66,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
       priorityReason: `Rated ${claim.severity} by the reviewer when it made the claim; type ${claim.type}.`,
       counterEvidence: clip(`Each proposition was checked against the frozen revision: ${chain.propositions
         .map(item => `${item.proposition} (${item.status})`).join('; ')}`),
-      suggestion: clip(claim.shouldBe?.text ?? 'No replacement was proposed; see the trigger and the checked propositions.'),
+      suggestion: clip(claim.shouldBe?.text ?? 'The reviewer did not propose a specific change; the trigger and checked propositions are under Review details.'),
       anchor, evidenceIds: [id] });
   });
   for (const item of outside) limitations.push(clip(`Confirmed outside the changed lines: ${item}`));
