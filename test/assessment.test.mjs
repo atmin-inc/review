@@ -204,3 +204,29 @@ test('free-form readiness claims cannot override partial, failed or stale review
     assert.ok(reviewSummary(assessment).includes(status === 'completed' && freshness === 'current' ? 'Rating: 5/5.' : 'Not rated.'));
   }
 });
+
+test('icons: every finding carries its priority, the headline follows the score, and every icon referenced exists', async t => {
+  const { existsSync } = await import('node:fs');
+  const { packet } = repository(t);
+  const icons = report => [...report.matchAll(/review-icons\/([\w-]+)\.svg/g)].map(m => m[1]);
+  const pass = [{ name: 'change-validation', status: 'pass', reason: 'Synthetic check.' }];
+  const cases = [
+    [[], pass, '5'],                // clean and nothing outstanding: green
+    [[], [{ name: 'change-validation', status: 'not-run', reason: 'Synthetic check.' }], '3'], // 5/5, checks missing: amber
+    [['P2'], pass, '3'],            // capped at 3/5
+    [['P1', 'P2'], pass, '1'],      // capped at 1/5
+  ];
+  for (const [priorities, ci, headline] of cases) {
+    const result = completed(packet);
+    result.findings = priorities.map((p, i) => ({ ...finding(p), id: `f${i}` }));
+    const report = renderMarkdown(packet, result, assess(packet, result, current(), ci));
+    const [top, ...rest] = icons(report);
+    assert.equal(top, headline);
+    assert.deepEqual(rest, priorities.map(p => p.toLowerCase()), 'one icon per finding, matching its priority');
+  }
+  const partial = completed(packet); partial.status = 'partial';
+  assert.equal(icons(renderMarkdown(packet, partial, assess(packet, partial, current())))[0], 'unscored');
+  for (const name of ['1', '3', '5', 'unscored', 'p0', 'p1', 'p2', 'p3', 'p4']) {
+    assert.ok(existsSync(new URL(`../assets/review-icons/${name}.svg`, import.meta.url)), `${name}.svg must be committed`);
+  }
+});
