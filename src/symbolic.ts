@@ -140,7 +140,9 @@ function bodyOf(revision: Revision, path: string, line: number, span = 1): { tex
   // declaration, so there the line stays; dropping it would leave an empty body that
   // refutes every `expect: 'present'` check.
   const body = end > span ? lines.slice(span, end) : lines.slice(0, end);
-  return { text: body.join('\n'), capped: end === lines.length && rest.length === BODY_LINES - 1 };
+  // Cut off when the body runs to the last line read and the file goes on past it. The
+  // read can stop short of the cap on long lines, so the count alone does not say.
+  return { text: body.join('\n'), capped: end === lines.length && revision.lineAt(path, line + span + rest.length) !== null };
 }
 // Up to BODY_LINES - 1 lines from `start`, fewer when the range would pass the read's
 // 24 KB limit, and none at the end of the file, where a definition has no body below it.
@@ -194,11 +196,12 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     if (!containing.length && truncated) {
       return inconclusive(label, `the search truncated before it could reach every declaration of \`${check.symbol}\`, so this says nothing about the ones it did not read`);
     }
-    // Absence has to hold across all of them, so a body that was cut off at the cap,
-    // or one that could not be read at all, leaves it unestablished.
+    // Finding nothing has to hold across all of them, so a body that was cut off at the
+    // cap, or one that could not be read at all, settles nothing in either direction: the
+    // pattern may sit in the part not read, and a miss on rung 1 refutes outright.
     const incomplete = readable.filter(item => item.body.capped).length + (bodies.length - readable.length);
-    if (expect === 'absent' && !containing.length && incomplete) {
-      return inconclusive(label, `${incomplete} of ${bodies.length} declaration bodies could not be inspected in full, so absence could not be established`);
+    if (!containing.length && incomplete) {
+      return inconclusive(label, `${incomplete} of ${bodies.length} declaration bodies could not be inspected in full, so the pattern's absence could not be established`);
     }
     const site = (containing[0] ?? readable[0]!).site;
     const where = bodies.length > 1 ? ` (${site.path}:${site.line}, ${bodies.length} declarations)` : ` (${site.path}:${site.line})`;

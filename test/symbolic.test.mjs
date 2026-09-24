@@ -390,3 +390,19 @@ test('a wrapped TypeScript signature leaves its body readable through the real s
   assert.equal(runCheck(revision, { ...body, pattern: 'failures: number', expect: 'absent' }).evidence.length, 0);
   assert.equal(runCheck(revision, { assertion: 'declaration_contains', symbol: 'replaceIfDead', pattern: 'failures: number' }).evidence[0].result, 'hit');
 });
+
+test('a body cut off by the read limit settles nothing when the pattern is not found', async t => {
+  const { repository } = await import('./helpers.mjs');
+  const { revisionFrom } = await import('../dist/symbolic.js');
+  const f = repository(t);
+  // Long lines make the read stop well short of the line cap, and the pattern sits past
+  // where it stops. Before, the shortened read was not marked as cut off: absence was
+  // established and presence refuted, both on text that was never read.
+  const filler = Array.from({ length: 180 }, (_, i) => `  const filler${i} = '${'x'.repeat(180)}';`);
+  f.write('long.ts', ['function long() {', ...filler, '  const lateCall = run();', '}', ''].join('\n'));
+  const revision = revisionFrom(f.source, f.commit('long body'));
+  const check = { assertion: 'body_contains', symbol: 'long', pattern: 'const lateCall = run();' };
+  assert.equal(runCheck(revision, { ...check, expect: 'absent' }).evidence.length, 0);
+  assert.equal(runCheck(revision, check).evidence.length, 0);
+  assert.equal(runCheck(revision, { ...check, pattern: 'const filler0 =' }).evidence[0]?.result, 'hit');
+});
