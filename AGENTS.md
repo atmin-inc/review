@@ -804,6 +804,9 @@ sample against $0.062.
   Luna ships, 75% matches a human comment and 85% is acceptable: **the first shipped set
   above the 70% floor**, on the emission bench, on five cases, by rubric labels rather than
   the benchmark's judge.
+- **Adopted on Lors's "adopt" (2026-09-24 02:27 UTC).** `martian-luna-openrouter.json` is the
+  emission bench's default profile; DeepSeek stays as `martian-deepseek.json` for
+  comparison. Every run set scored before this date is DeepSeek.
 - It is not the prompt rewrite again. That cut volume and lost the Critical and the High;
   this cut volume (236 emitted to 49, 8 samples emitting nothing) and held golden at 15 to
   15, and Luna is the arm that found the High 005[0]. Same prompt, same verifier: the
