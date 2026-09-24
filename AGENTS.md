@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 348 tests: 346 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 349 tests: 347 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -949,3 +949,13 @@ and noise lever. The worker used to re-review the whole PR on every push.
   push 2 fixed. **It was not cheaper here.** On a 20 KB diff most spend is reading files, not
   re-sending the diff, and carried claims add Jev calls. The saving should show on large
   diffs, which the diff is re-sent with on every turn; that is unmeasured. One run each.
+
+## First private-repo pilot (2026-09-24)
+
+The 10 most recent human-authored merged PRs on a private repository (8 to 444 KB of
+diff), on `profiles/review-luna-openrouter.json`, Jev on. All 10 finished; $0.77
+recorded against $0.93 billed by OpenRouter, a gap not yet explained. 4 findings shipped
+across 3 PRs, each checked against the code: 1 real and worth fixing, 2 real but rated
+too high (P2 on an operator script), 1 overstated. The run also exposed that body checks
+could not read TypeScript with wrapped signatures, fixed in `7ef74ce`. No private code or
+finding text belongs in this public file.
