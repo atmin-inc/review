@@ -8,6 +8,10 @@ export function escapeMarkdown(value: string): string {
     .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     .replaceAll('@', '@\u200b').replace(/([\\`*_{}[\]()#+!|])/g, '\\$1');
 }
+// The icons live in assets/review-icons and are served from this public repository at a
+// fixed commit, so a published comment never changes under a later edit to the files.
+const ICONS = 'https://cdn.jsdelivr.net/gh/atmin-inc/review@34dba7bb15d80703385036ecd258efd0900c1fda/assets/review-icons';
+const icon = (name: string, size: number) => `<img src="${ICONS}/${name}.svg" width="${size}" height="${size}" alt="">`;
 function sourceLink(packet: Packet, anchor: EvidenceAnchor): string {
   const revision = anchor.side === 'head' ? packet.headSha : packet.mergeBaseSha;
   const path = anchor.path.split('/').map(part => encodeURIComponent(part).replace(/[!'()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
@@ -17,7 +21,7 @@ function sourceLink(packet: Packet, anchor: EvidenceAnchor): string {
 }
 export function renderFinding(packet: Packet, f: Finding, showFix = true): string {
   const e = escapeMarkdown;
-  const lines = [`### ${f.priority} · ${e(f.title)}${f.priority === 'P4' ? ' (optional)' : ''}`, '',
+  const lines = [`### ${icon(f.priority.toLowerCase(), 20)} ${f.priority} · ${e(f.title)}${f.priority === 'P4' ? ' (optional)' : ''}`, '',
     `**${f.priority === 'P4' ? 'Optional' : 'Fix'}:** ${e(f.suggestion)}`, '', sourceLink(packet, f.anchor), '',
     '<details><summary>Review details</summary>', '',
     `- Trigger: ${e(f.trigger)}`, `- Consequence: ${e(f.consequence)}`,
@@ -38,12 +42,15 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
     : assessment.validation === 'failed' ? 'Required checks failed'
     : assessment.validation === 'missing' ? 'Waiting for required checks'
     : assessment.rating.score === 5 ? 'No changes requested' : assessment.outcome;
-  const icon = assessment.rating.score === 5 && ['passed', 'not-applicable'].includes(assessment.validation) ? '5'
-    : required && assessment.freshness.status === 'current' && assessment.scope === 'complete' ? '1' : 'unscored';
+  // Green only for a 5/5 with nothing outstanding; a score held back by anything else,
+  // missing checks included, is amber.
+  const score = assessment.rating.score;
+  const status = score === null ? 'unscored' : score <= 2 ? '1'
+    : score === 5 && ['passed', 'not-applicable'].includes(assessment.validation) ? '5' : '3';
   const reviewed = result.coverage.filter(c => c.status === 'reviewed').length;
   const validation = { passed: 'Required checks passed', failed: 'Required checks failed', missing: 'Required checks not verified', 'not-applicable': 'No required checks apply' }[assessment.validation];
   const lines = [
-    `## <img src="https://review.atmin.ai/review-icons/${icon}.svg" width="24" height="24" alt=""> ${assessment.rating.score === null ? 'Not rated' : `${assessment.rating.score}/5`} — ${headline}`, '',
+    `## ${icon(status, 24)} ${assessment.rating.score === null ? 'Not rated' : `${assessment.rating.score}/5`} — ${headline}`, '',
     '| P0 | P1 | P2 | P3 | P4 |', '| :---: | :---: | :---: | :---: | :---: |',
     `| ${PRIORITIES.map(p => { const n = assessment.findings.filter(f => f.priority === p).length; return n ? `**${n}**` : '0'; }).join(' | ')} |`, '',
     `**${reviewed}/${packet.changedFiles.length} files reviewed** · ${validation}.`, '',
