@@ -135,7 +135,7 @@ export interface ClaimInvestigation {
   claims: Claim[];
   complete: boolean;
   limitations: string[];
-  toolErrors: { tool: string; reason: string }[];
+  toolErrors: { tool: string; reason: string; detail?: string }[];
   stopReason: string | null;
   spentUsd: number;
   telemetry: ClaimTelemetry;
@@ -246,7 +246,11 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
           const data: unknown = JSON.parse(tool.arguments);
           const validator = validators.get(tool.name);
           if (!validator || !tools.some(available => available.name === tool.name) || !validator(data)) {
-            throw new ReviewInputError('Invalid or unavailable tool name or arguments');
+            // The model sees the same short message either way; the schema paths that failed
+            // go to telemetry only, so a rejection rate can be root-caused after the run.
+            const error = new ReviewInputError('Invalid or unavailable tool name or arguments');
+            error.detail = (validator?.errors ?? []).map(e => `${e.instancePath || '/'} ${e.message ?? e.keyword}`).join('; ');
+            throw error;
           }
           if (tool.name === 'search_repository') {
             const args = data as { side: 'head' | 'base'; query: string };
@@ -291,7 +295,8 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
           const reason = error instanceof ReviewInputError ? error.message
             : 'Operation failed. Check the tool schema and the source path.';
           output = { error: reason };
-          outcome.toolErrors.push({ tool: validators.has(tool.name) ? tool.name : 'unknown', reason });
+          const detail = error instanceof ReviewInputError ? error.detail : undefined;
+          outcome.toolErrors.push({ tool: validators.has(tool.name) ? tool.name : 'unknown', reason, ...(detail ? { detail } : {}) });
         }
         append(model.toolOutput(tool.id, output));
       }

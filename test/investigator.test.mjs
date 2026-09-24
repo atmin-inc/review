@@ -247,9 +247,14 @@ test('a claim carrying a check outside the catalogue is rejected by the schema',
   const { revisions, sourceOf } = corpus(t);
   const invented = { ...GUARD_CLAIM, evidenceToCheck: [{ proposition: 'The guard is gone.',
     check: { assertion: 'run_shell', symbol: 'update', pattern: 'rm -rf /' } }] };
-  const emitted = await investigateClaims(revisions, sourceOf, {}, model([action('record_claim', invented), end()]), LIMITS);
+  const stub = model([action('record_claim', invented), end()]);
+  const emitted = await investigateClaims(revisions, sourceOf, {}, stub, LIMITS);
   assert.equal(emitted.claims.length, 0);
   assert.match(emitted.toolErrors[0].reason, /Invalid or unavailable tool name or arguments/);
+  // The model is told only that the call was invalid; the run record says which schema
+  // path failed, because a rejection rate nobody can explain is a cost nobody can fix.
+  assert.match(emitted.toolErrors[0].detail, /evidenceToCheck\/0\/check/);
+  assert.ok(!stub.inputs.some(input => JSON.stringify(input).includes('evidenceToCheck/0/check')));
 });
 
 // A command that can spend without a ceiling is not one to hand anybody. Each request
