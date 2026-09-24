@@ -817,3 +817,29 @@ sample against $0.062.
   sharing a response with other tool calls, most of its 27 tool calls a sample; Luna had
   13 of 68 `record_claim` calls rejected on schema and 10 `read_file` calls on paths that
   do not exist at the revision.
+
+## Luna reading and writing: the emission-bench result holds on full runs (2026-09-24)
+
+Pre-registered, 40 Luna full runs (8 repeats x 5 cases, $1.39, $0.035 a run) against the
+40 DeepSeek full runs of 2026-09-23, same prompt, tools, verifier and snapshots, blind
+labels (kappa 0.71 on a 25% second pass). Full result in
+`/mnt/project-files/luna-full-result-2026-09-24/`.
+
+- **Harmful per run 1.15 to 0.03 (p < 0.001). Golden 0.35 to 0.30 (p = 0.73). Acceptable
+  0.90 to 0.47 (p = 0.051 two-sided), the drop again entirely R: 22 to 7.** Decision rule
+  2 by the letter, so **`profiles/martian-luna-openrouter.json` is the profile for Martian
+  runs from here; `martian-deepseek.json` stays for comparison.** Every run set recorded
+  above this section is DeepSeek.
+- Luna ships 20 findings in 40 runs: G12 R7 O1, 95% acceptable, 60% golden, 1 harmful.
+  DeepSeek ships 94: 38% acceptable, 49% harmful. By the benchmark's own judge, which
+  counts golden only, Luna sits near 60%, not above the 70% floor.
+- **Watch distinct golden.** DeepSeek found 6 of 12 at least once, Luna 3: it never found
+  016[1], 046[3] or the Critical 032[0], each a single hit in DeepSeek's 40. Inside noise
+  per run; not something to stop reporting.
+- Luna reads slightly more than DeepSeek (24 `read_file` and 15 searches a run against 22
+  and 12) and records a quarter as much; all 40 runs finished `completed` against 35 of 40.
+- **27 of Luna's 100 `record_claim` calls were rejected on schema and nothing recorded
+  which field.** `15780eb` fixes the telemetry: a rejected tool call now carries the
+  failing schema paths in `toolErrors[].detail`, and the model still sees the same short
+  message, so it is not an emitter change. Read that field on the next set before
+  guessing at a schema fix.
