@@ -362,3 +362,31 @@ test('a member missing from its owner settles nothing', () => {
   assert.equal(outcome.evidence.length, 0);
   assert.equal(outcome.limitations.length, 1);
 });
+
+// The same wrapped declaration read through the real source reader, which serves at most
+// 200 lines a read. Reading signature and body as one range asked for more than that
+// whenever the signature wrapped, the read failed, and the check reported the body as
+// unreadable. Seen 2026-09-24 on every multi-line TypeScript declaration in mason-v1
+// #4583, which left the model rung to settle facts grep answers for free.
+test('a wrapped TypeScript signature leaves its body readable through the real source reader', async t => {
+  const { repository } = await import('./helpers.mjs');
+  const { revisionFrom } = await import('../dist/symbolic.js');
+  const f = repository(t);
+  f.write('recovery.ts', [
+    'async function replaceIfDead(',
+    '  ctx: SandboxFailureContext,',
+    '  failures: number',
+    '): Promise<string | null> {',
+    '  const deps = ctx.deps ?? defaultRecoveryDeps;',
+    '  await deps.deleteSandbox(name);',
+    ...Array.from({ length: 250 }, (_, i) => `  const filler${i} = ${i};`),
+    '}',
+    'export const last = 1;',
+  ].join('\n') + '\n');
+  const revision = revisionFrom(f.source, f.commit('wrapped signature'));
+  const body = { assertion: 'body_contains', symbol: 'replaceIfDead', pattern: 'await deps.deleteSandbox(name);' };
+  assert.equal(runCheck(revision, body).evidence[0]?.result, 'hit');
+  // Still disjoint from the declaration, and absence past the read cap stays unproven.
+  assert.equal(runCheck(revision, { ...body, pattern: 'failures: number', expect: 'absent' }).evidence.length, 0);
+  assert.equal(runCheck(revision, { assertion: 'declaration_contains', symbol: 'replaceIfDead', pattern: 'failures: number' }).evidence[0].result, 'hit');
+});

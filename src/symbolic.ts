@@ -118,9 +118,15 @@ const settle = (established: boolean, expect: Expectation = 'present'): 'hit' | 
 // Works for braces and for significant indentation alike, because the closing brace
 // sits back at the definition's own indent.
 function bodyOf(revision: Revision, path: string, line: number, span = 1): { text: string; capped: boolean } | null {
-  const text = revision.slice(path, line, BODY_LINES + span - 1);
-  if (text === null) return null;
-  const lines = text.split('\n');
+  // The signature and what follows it are read separately. Read as one range, a wrapped
+  // signature pushed the request past the 200-line read limit, the read threw, and every
+  // body check on it came back "could not be read": seen 2026-09-24 on every multi-line
+  // TypeScript declaration in mason-v1 #4583, which is what Prettier makes of most of them.
+  const signature = revision.slice(path, line, span);
+  if (signature === null) return null;
+  const rest = followingLines(revision, path, line + span);
+  if (rest === null) return null;
+  const lines = [...signature.split('\n'), ...rest];
   const opening = indentOf(lines[0] ?? '');
   let end = span;
   while (end < lines.length && (!lines[end]!.trim() || indentOf(lines[end]!) > opening)) end++;
@@ -134,7 +140,19 @@ function bodyOf(revision: Revision, path: string, line: number, span = 1): { tex
   // declaration, so there the line stays; dropping it would leave an empty body that
   // refutes every `expect: 'present'` check.
   const body = end > span ? lines.slice(span, end) : lines.slice(0, end);
-  return { text: body.join('\n'), capped: end === lines.length && lines.length === BODY_LINES };
+  return { text: body.join('\n'), capped: end === lines.length && rest.length === BODY_LINES - 1 };
+}
+// Up to BODY_LINES - 1 lines from `start`, fewer when the range would pass the read's
+// 24 KB limit, and none at the end of the file, where a definition has no body below it.
+function followingLines(revision: Revision, path: string, start: number): string[] | null {
+  for (let count = BODY_LINES - 1; count >= 1; count = Math.floor(count / 2)) {
+    const text = revision.slice(path, start, count);
+    if (text !== null) return text.split('\n');
+  }
+  // Nothing readable: either the declaration is the file's last line or a single line is
+  // over the limit. The first is an empty body; the second cannot be told from it here, so
+  // it is read as unreadable rather than as empty.
+  return revision.lineAt(path, start - 1) !== null && revision.lineAt(path, start) === null ? [] : null;
 }
 
 export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome {
