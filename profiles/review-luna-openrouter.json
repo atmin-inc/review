@@ -1,0 +1,10 @@
+{
+  "provider": "openrouter",
+  "model": "openai/gpt-6-luna",
+  "maxUsd": 2,
+  "maxTurns": 60,
+  "maxToolCalls": 200,
+  "maxInputTokens": 1000000,
+  "maxOutputTokens": 8192,
+  "deadlineMs": 1800000
+}
