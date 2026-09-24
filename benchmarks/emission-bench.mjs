@@ -8,7 +8,7 @@
 // each variant's build, over the same recordings.
 //
 // Usage: node benchmarks/emission-bench.mjs <recorded-run-dir> <out-dir> [--samples N]
-//          [--dist path/to/dist] [--profile profiles/martian-deepseek.json | profiles/martian-claude-sonnet.json] [--turns 16] [--temperature T] [--no-jev] [--require-correction]
+//          [--dist path/to/dist] [--profile profiles/martian-luna-openrouter.json | profiles/martian-deepseek.json] [--turns 16] [--temperature T] [--no-jev] [--require-correction]
 // Each sample is written as <out-dir>/<case>-r<n>/{claims,verification,telemetry}.json, the
 // layout score-runs.mjs and the blind labelling already read.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -31,7 +31,7 @@ const { BALANCED } = await import(join(dist, 'policy.js'));
 const { price } = await import(join(dist, 'investigation.js'));
 const { openRouterModel } = await import(join(dist, 'openrouter-model.js'));
 
-const profile = readProfile(resolve(flag('--profile', new URL('../profiles/martian-deepseek.json', import.meta.url).pathname)));
+const profile = readProfile(resolve(flag('--profile', new URL('../profiles/martian-luna-openrouter.json', import.meta.url).pathname)));
 const { packet } = loadReview(runDir);
 const repository = join(runDir, 'source.git');
 const revisions = { head: revisionFrom(repository, packet.headSha), base: revisionFrom(repository, packet.mergeBaseSha) };
