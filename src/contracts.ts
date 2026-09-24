@@ -1,7 +1,10 @@
 import { Ajv } from 'ajv';
 
 // Controller-authored validation messages only; never wrap provider or OS errors.
-export class ReviewInputError extends Error {}
+export class ReviewInputError extends Error {
+  /** Schema paths behind a rejection, for telemetry; never shown to the model. */
+  detail?: string;
+}
 
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
 export type Priority = typeof PRIORITIES[number];
