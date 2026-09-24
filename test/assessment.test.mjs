@@ -160,7 +160,8 @@ test('scan-first report separates clean source from missing CI and never hides i
     for (const freshness of ['current', 'superseded', 'unverified']) {
       const result = completed(packet); result.status = status; result.validation = [];
       const report = renderMarkdown(packet, result, assess(packet, result, { ...current(), status: freshness }));
-      assert.match(report, /^## <img[^>]+> Not rated/);
+      // Only a finished, current review is scored; missing CI does not withhold it.
+      assert.match(report, status === 'completed' && freshness === 'current' ? /^## <img[^>]+> 5\/5 — Waiting for required checks/ : /^## <img[^>]+> Not rated/);
       assert.ok(!report.includes('/review-icons/5.svg'));
       assert.match(report, /Required checks not verified/);
       assert.match(report, /<details><summary>Run summary and checks/);
@@ -169,7 +170,7 @@ test('scan-first report separates clean source from missing CI and never hides i
   }
   const result = completed(packet); result.findings = [finding('P1')];
   const report = renderMarkdown(packet, result, assess(packet, result, current()));
-  assert.match(report, /^## <img[^>]+> Not rated — 1 fix before merge/);
+  assert.match(report, /^## <img[^>]+> 1\/5 — 1 fix before merge/);
   assert.ok(report.indexOf('**Fix:**') < report.indexOf('<details>'));
 });
 
@@ -200,6 +201,6 @@ test('free-form readiness claims cannot override partial, failed or stale review
     const report = renderMarkdown(packet, result, assessment);
     assert.ok(!report.includes(result.summary));
     assert.ok(reviewSummary(assessment).includes(assessment.outcome));
-    assert.ok(reviewSummary(assessment).includes('Not rated.'));
+    assert.ok(reviewSummary(assessment).includes(status === 'completed' && freshness === 'current' ? 'Rating: 5/5.' : 'Not rated.'));
   }
 });

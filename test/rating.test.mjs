@@ -35,14 +35,21 @@ test('presets are closed, customizable and hash in canonical property order', ()
     { preset: 'balanced', perfectRequires: { noP0: false } }]) assert.throws(() => parsePolicy({ ...defaultPolicy(), rating }), /Invalid policy/);
 });
 
-test('balanced needs affirmative quality evidence; optional advice and absent patches do not subtract points', t => {
+test('balanced uses quality evidence when there is some, and otherwise always scores by findings', t => {
   const f = fixture(t);
   assert.equal(f.rating().score, 5);
   f.result.findings = [finding('P4')];
   assert.equal(f.rating().score, 5);
   assert.equal(f.result.findings[0].fix, undefined);
+  // The claim pipeline makes no quality assessment; its reviews must still get a score
+  // (Lors, 2026-09-24), and a clean one earns 5/5 while defects keep their caps.
   delete f.result.quality;
-  assert.equal(f.rating().score, null);
+  assert.equal(f.rating().score, 5);
+  assert.match(f.rating().reasons.join(' '), /rated by its findings alone/);
+  f.result.findings = [finding('P1')];
+  assert.equal(f.rating().score, 1);
+  f.result.findings = [finding('P2')];
+  assert.equal(f.rating().score, 3);
 });
 
 test('serious defects cap subjective scores and remain visible under every preset', t => {
@@ -66,7 +73,7 @@ test('correctness first can earn 5 with P3/P4; explicit noP3 and quality overrid
   f.packet.policy.rating.perfectRequires.noP3 = true;
   assert.equal(f.rating().score, 4);
   f.packet.policy.rating.perfectRequires.verification = true;
-  assert.equal(f.rating().score, null);
+  assert.equal(f.rating().score, 4, 'a required criterion nothing assessed does not withhold the score');
   f.result.quality = quality(2);
   f.result.quality.criteria.verification.status = 'concern';
   assert.equal(f.rating().score, 4, 'this preset ignores the subjective score but enforces requested gates');
@@ -87,7 +94,7 @@ test('conventions use explicit rule evidence; unknown required criteria are unra
   assert.throws(() => f.rating(), /captured source reads/);
 });
 
-test('incomplete or stale reviews never get a score; checks are independent of severity', t => {
+test('incomplete or stale reviews never get a score; missing checks do not withhold one', t => {
   const f = fixture(t);
   for (const preset of ['balanced', 'correctness-first', 'strict-conventions']) {
     f.packet.policy.rating.preset = preset;
@@ -98,7 +105,8 @@ test('incomplete or stale reviews never get a score; checks are independent of s
     assert.equal(f.rating({ ...current(), status: 'unverified' }).score, null);
   }
   const check = status => [{ name: 'change-validation', status, reason: 'Synthetic check.' }];
-  assert.equal(f.rating(current(), check('not-run')).score, null);
+  assert.equal(f.rating(current(), check('not-run')).score, 5);
+  assert.match(f.rating(current(), check('not-run')).reasons.join(' '), /Required check results are missing/);
   assert.equal(f.rating(current(), check('fail')).score, 4);
   assert.equal(f.rating(current(), check('pass')).score, 5);
   f.packet.policy.rating.perfectRequires.passingChecks = false;

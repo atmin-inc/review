@@ -220,9 +220,11 @@ Presets: `balanced` (default: fit, simplicity, appropriate verification and requ
 checks), `correctness-first` (5/5 for a complete current review without P0–P2), and
 `strict-conventions` (Balanced plus documented rules). Overrides are booleans:
 `codebaseFit`, `simplicity`, `verification`, `documentedConventions`, `passingChecks`,
-`noP3`. A concern in a required criterion caps the score at 4; missing evidence
-makes it unrated. P0/P1 cap at 1 and P2 at 3. Balanced and Strict conventions also
-require a supported subjective quality assessment. No average, test-count quota,
+`noP3`. A concern in a required criterion caps the score at 4; an assessed criterion
+left unknown makes it unrated. P0/P1 cap at 1 and P2 at 3. A review with no quality
+assessment, which is every claim-pipeline review, is scored by its findings alone, so a
+clean one earns 5/5. Missing required check results are noted and do not withhold the
+score; a failed one caps it at 4. No average, test-count quota,
 or automatic penalty for optional P4 suggestions or unavailable patches.
 
 Ratings are subjective and independent from finding severity and GitHub check
