@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 347 tests: 345 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 348 tests: 346 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -897,6 +897,13 @@ already reads, so freshness, checks, inline comments and the dashboard are uncha
   claims rather than being killed by the child deadline with nothing written.
 - Receipt spend is metered only on a finished run; otherwise it may hold a reservation
   and is recorded as unknown.
+- **Findings get short titles from one call after verification** (`src/titles.ts`, Lors
+  2026-09-24). Only confirmed claims are sent, so it cannot change what is found or rated;
+  it is not part of `runClaimReview`, so no benchmark number moves. A failure leaves the
+  description as the title and names the reason as a limitation. Titles are written to
+  `titles.json` and carried to the next incremental review, so a push with nothing new
+  still calls no model. On mason #4583 it cost $0.0001. A finding with no proposed change
+  now leads with its consequence instead of a placeholder "Fix" line.
 - **Diff limit raised from 128 KB to 512 KB** (`MAX_DIFF_BYTES` in `src/claim-run.ts`) on
   Lors's "we definitely need to raise the limit": 128 KB refused 29% of mason-v1's merged
   PRs, 512 KB refuses 7% (`/mnt/project-files/mason-cost-estimate-2026-09-24.md`). The

@@ -32,14 +32,18 @@ function model(steps) {
   let index = 0;
   return {
     async count() { return 1000; },
-    async respond() {
-      const step = steps[index++];
+    async respond(input) {
+      const next = steps[index++];
+      const step = typeof next === 'function' ? next(input) : next;
       return { model: profile.model, inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0,
         status: 'completed', continuation: [], calls: Array.isArray(step) ? step : step ? [step] : [] };
     },
     toolOutput: (id, value) => ({ id, value }),
   };
 }
+// The titling call's reply: a short title for every finding it was sent.
+const titled = input => action('record_titles', { titles: JSON.parse(input.context).findings
+  .map(finding => ({ claimId: finding.claimId, title: 'Update skips the ownership check' })) });
 // Tests must never reach the live rung-3 API, whatever the environment holds.
 function withoutJev(t) {
   const saved = process.env.TYPESAFE_API_KEY;
@@ -168,15 +172,17 @@ test('nothing new to read asks no model; a moved merge base or a rewritten head 
   withoutJev(t);
   const fixture = repository(t);
   const first = persist(fixture);
-  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done(), titled]));
   const earlier = previousReview(first);
+  assert.deepEqual(Object.values(earlier.titles), ['Update skips the ownership check']);
 
   const same = secondPush(t, fixture, false);
   writeFileSync(join(same, 'previous.json'), JSON.stringify(earlier));
   let asked = false;
   await runClaimReviewAsResult(same, profile, undefined, { ...model([]), async respond() { asked = true; } });
-  assert.equal(asked, false);
+  assert.equal(asked, false, 'the carried finding keeps its title, so nothing is asked');
   assert.equal(loadReview(same).result.findings.length, 1);
+  assert.equal(loadReview(same).result.findings[0].title, 'Update skips the ownership check');
   assert.equal(loadReview(same).result.status, 'completed');
 
   for (const [previous, reason] of [[{ ...earlier, mergeBaseSha: 'e'.repeat(40) }, /merge base moved/],
@@ -219,4 +225,30 @@ test('a confirmed claim on an unchanged caller is a finding and the verdict says
   assert.deepEqual(packet.changedFiles.map(f => f.path), ['update.ts']);
   assert.deepEqual(result.findings.map(f => [f.anchor.path, f.anchor.line]), [['caller.ts', 2]]);
   assert.equal(assess(packet, result, current()).outcome, 'Changes needed');
+});
+
+test('confirmed findings get a short title and no placeholder fix; a failed titling call falls back and says why', async t => {
+  withoutJev(t);
+  const steps = [action('record_claim', claim('P1')), done()];
+  const titledRun = persist(repository(t));
+  let sent;
+  await runClaimReviewAsResult(titledRun, profile, undefined, model([...steps, input => { sent = JSON.parse(input.context); return titled(input); }]));
+  // Only the confirmed claim is sent to be titled, so titling cannot reach a refuted one.
+  assert.equal(sent.findings.length, 1);
+  const { packet, result } = loadReview(titledRun);
+  assert.equal(result.findings[0].title, 'Update skips the ownership check');
+  assert.equal(result.findings[0].suggestion, undefined);
+  const { renderMarkdown } = await import('../dist/render.js');
+  const report = renderMarkdown(packet, result, assess(packet, result, current()));
+  assert.ok(!report.includes('did not propose a specific change'));
+  assert.equal(report.split('without comparing owner to account').length - 1, 1, 'the description appears once');
+  const receipt = JSON.parse(readFileSync(join(titledRun, 'receipt.json'), 'utf8'));
+  assert.equal(receipt.calls.at(-1).purpose, 'titles');
+  assert.ok(receipt.calls.at(-1).meteredUsd > 0);
+
+  const failed = persist(repository(t));
+  await runClaimReviewAsResult(failed, profile, undefined, model([...steps, action('record_titles', { titles: [{ claimId: 'x', title: 'Line one\nline two' }] })]));
+  const fallback = loadReview(failed).result;
+  assert.equal(fallback.findings[0].title, 'update() returns without comparing owner to account.');
+  assert.match(fallback.limitations.join(' '), /titles were not written \(invalid-reply\)/);
 });

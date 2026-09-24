@@ -21,10 +21,11 @@ function sourceLink(packet: Packet, anchor: EvidenceAnchor): string {
 }
 export function renderFinding(packet: Packet, f: Finding, showFix = true): string {
   const e = escapeMarkdown;
+  // Without a proposed change the consequence leads, once, instead of a placeholder fix.
   const lines = [`### ${icon(f.priority.toLowerCase(), 20)} ${f.priority} · ${e(f.title)}${f.priority === 'P4' ? ' (optional)' : ''}`, '',
-    `**${f.priority === 'P4' ? 'Optional' : 'Fix'}:** ${e(f.suggestion)}`, '', sourceLink(packet, f.anchor), '',
+    f.suggestion ? `**${f.priority === 'P4' ? 'Optional' : 'Fix'}:** ${e(f.suggestion)}` : e(f.consequence), '', sourceLink(packet, f.anchor), '',
     '<details><summary>Review details</summary>', '',
-    `- Trigger: ${e(f.trigger)}`, `- Consequence: ${e(f.consequence)}`,
+    `- Trigger: ${e(f.trigger)}`, ...(f.suggestion ? [`- Consequence: ${e(f.consequence)}`] : []),
     `- Priority rationale: ${e(f.priorityReason)}`, `- Counterevidence checked: ${e(f.counterEvidence)}`,
     `- Evidence: ${f.evidenceIds.map(e).join(', ')}`, ''];
   if (showFix && f.fix) lines.push('**Reviewed code**', '', '```', f.fix.original, '```', '',
