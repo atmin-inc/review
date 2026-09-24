@@ -197,3 +197,26 @@ test('a partial earlier review is not built on', async t => {
   await runClaimReviewAsResult(stopped, { ...profile, maxTurns: 2 }, undefined, model([action('record_claim', claim('P1')), action('record_claim', REFUTED)]));
   assert.equal(previousReview(stopped), null);
 });
+
+// A change can break a caller it never touched. That caller is where the defect is, so it
+// must be published as a finding, not hidden in the limitations under a clean verdict.
+test('a confirmed claim on an unchanged caller is a finding and the verdict says so', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  // Put a caller at the merge base, then change only update.ts on the branch.
+  fixture.run('checkout', '-q', fixture.state.baseSha);
+  fixture.write('caller.ts', 'import { update } from "./update";\nexport const run = (a, b) => update(a, b);\n');
+  const baseSha = fixture.commit('base with caller');
+  fixture.write('update.ts', 'export function update(owner, account) {\n  return "updated";\n}\n');
+  const headSha = fixture.commit('drop the guard');
+  const state = { ...fixture.state, baseSha, headSha };
+  const directory = persist({ ...fixture, root: mkdtempSync(join(fixture.root, 'caller-')), ...capture(fixture.source, state) });
+  const onCaller = claim('P1', { type: 'contract_break', location: 'caller.ts:2',
+    description: 'run() still relies on update() refusing a mismatched owner.',
+    evidenceToCheck: [{ proposition: 'caller.ts calls update.', check: { assertion: 'file_contains', path: 'caller.ts', pattern: 'update(a, b)' } }] });
+  await runClaimReviewAsResult(directory, profile, undefined, model([action('record_claim', onCaller), done()]));
+  const { packet, result } = loadReview(directory);
+  assert.deepEqual(packet.changedFiles.map(f => f.path), ['update.ts']);
+  assert.deepEqual(result.findings.map(f => [f.anchor.path, f.anchor.line]), [['caller.ts', 2]]);
+  assert.equal(assess(packet, result, current()).outcome, 'Changes needed');
+});

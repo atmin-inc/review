@@ -46,14 +46,12 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     let anchor: Anchor | undefined;
     try {
       const { path, line } = parseLocation(claim.location);
-      const file = changed.get(path);
-      if (file) {
-        anchor = { path, side: file.change === 'deleted' ? 'base' : 'head', line };
-        validateAnchor(repository, packet, anchor);
-      }
+      anchor = { path, side: changed.get(path)?.change === 'deleted' ? 'base' : 'head', line };
+      validateAnchor(repository, packet, anchor);
     } catch { anchor = undefined; }
-    // A finding must anchor to a changed line that exists. A confirmed claim elsewhere is
-    // still reported, as a limitation, rather than dropped.
+    // A finding may sit outside the changed files, as a caller the change broke, but its
+    // line must exist. A confirmed claim whose location does not resolve is still
+    // reported, as a limitation, rather than dropped.
     if (!anchor) { outside.push(`${claim.severity} ${claim.type} at ${claim.location}: ${claim.description}`); return; }
     const id = `claim-${index + 1}`;
     const established = chain.propositions.filter(item => item.status === 'established');
@@ -69,7 +67,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
       suggestion: clip(claim.shouldBe?.text ?? 'The reviewer did not propose a specific change; the trigger and checked propositions are under Review details.'),
       anchor, evidenceIds: [id] });
   });
-  for (const item of outside) limitations.push(clip(`Confirmed outside the changed lines: ${item}`));
+  for (const item of outside) limitations.push(clip(`Confirmed, but its location does not resolve at this revision: ${item}`));
   const withheld = run.chains.filter(chain => chain.verdict === 'withheld').map(chain => byId.get(chain.claimId)?.location).filter(Boolean);
   if (withheld.length) limitations.push(`${withheld.length} confirmed minor (P3) finding(s) withheld: ${withheld.join(', ')}.`);
 

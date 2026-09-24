@@ -90,7 +90,11 @@ export function validateEvidence(packet: Packet, result: Result): void {
   for (const finding of result.findings) {
     validateFix(finding);
     checkRefs(finding.evidenceIds);
-    if (!inventory.has(finding.anchor.path)) throw new Error('Finding must anchor to a changed path; callers belong in supporting evidence');
+    // A change can break code it did not touch: a caller left calling a function whose
+    // contract changed. Seen live 2026-09-24, seven confirmed P1s on callers that this rule
+    // could only report as limitations, under a check that read "no issues". Such a finding
+    // anchors to the head revision, where the broken caller is; loadReview checks the line.
+    if (!inventory.has(finding.anchor.path) && finding.anchor.side !== 'head') throw new Error('A finding outside the changed paths must anchor to the head revision');
     if ((finding.priority === 'P4') !== (finding.kind === 'improvement')) throw new Error('P4 is an optional improvement; P0–P3 are defects');
     if (!finding.evidenceIds.some(id => evidence.get(id)?.anchors.some(a => a.path === finding.anchor.path && a.side === finding.anchor.side))) {
       throw new Error('Finding needs evidence anchored to its changed path and side');
