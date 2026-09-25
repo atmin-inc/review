@@ -1,3 +1,4 @@
+import { failureExcerpt } from '../dist/failure-excerpt.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -216,6 +217,24 @@ function recording(steps, failurePathSteps) {
   return { inputs, ...inner, async respond(input, ...rest) { inputs.push(input); return inner.respond(input, ...rest); } };
 }
 
+// The second pass costs a whole review again on a large change, so it is shown only the
+// diff around error handling and does not run when the change has none.
+test('a change with no error handling gets no failure-path pass', async t => {
+  const fixture = repository(t);
+  fixture.write('update.ts', 'export function update(owner, account) {\n  return "saved";\n}\n');
+  const headSha = fixture.commit('rename the result');
+  const plain = { ...fixture, ...capture(fixture.source, { ...fixture.state, baseSha: fixture.state.headSha, headSha }) };
+  const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
+  const directory = persist(plain);
+
+  await runClaimReview(directory, profile, fake);
+
+  assert.equal(fake.inputs.filter(input => input.instructions.includes(failurePathInstruction)).length, 0);
+  const telemetry = JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8'));
+  assert.equal(telemetry.failurePathSites, 0);
+  assert.equal(telemetry.failurePathTurns, 0);
+});
+
 // The repository's own rules are what a reviewer that knows the codebase holds a change
 // to: on mason-v1 #4590, 5 of CodeRabbit's 12 items came from its AGENTS.md. They are read
 // from the target branch, because a PR that edits AGENTS.md must not get to rewrite the
@@ -302,4 +321,7 @@ test('the failure-path pass runs after the main pass and its claims are verified
   assert.deepEqual(telemetry.failurePathClaimIds, claims.map(claim => claim.claimId));
   assert.equal(telemetry.turns, 4);
   assert.equal(telemetry.failurePathTurns, 2, 'the pass reports its own share, not the total');
+  assert.equal(JSON.parse(fake.inputs[2].context).diff, failureExcerpt(readFileSync(join(directory, 'change.diff'), 'utf8')).excerpt,
+    'the pass is shown the excerpt around error handling, not the whole diff');
+  assert.equal(telemetry.failurePathSites, 1);
 });
