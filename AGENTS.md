@@ -1005,3 +1005,12 @@ failed its pre-registered rule (3 of 40 sampled real claims stopped shipping). T
 version touches 23 of 657 labelled claims and held both lines on the 12 not already sampled,
 which is a small n. `20fbe81` and `993ddd8` also settle absence when the base has no such
 file or never mentions the symbol; the verifier bench shows 0 verdicts changed by either.
+
+Later the same day: the failure-path pass is shown only the diff within 20 lines of error
+handling and does not run when a change has none (`81dee2e`). On that PR the trimmed pass
+found the defect in 2 of 2 runs at $0.10 a pass, about a quarter cheaper, not the fourfold
+the diff size suggested: each turn also re-sends every earlier read, and the provider caches
+nothing (0 of 6,420 repeated tokens). 77% of the target repository's recent merges touch
+error handling, so the skip saves on about a quarter of PRs. Rung 3 is now also shown
+another file's declaration when it is the symbol's only one (a later commit); on a fresh
+sample of 56 labelled claims harmful shipped held at 33 of 40 and acceptable went 6 to 8 of 16.
