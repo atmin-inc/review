@@ -6,6 +6,7 @@ import { repository, persist, current } from './helpers.mjs';
 import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
 import { capture, loadReview } from '../dist/snapshot.js';
 import { MAX_DIFF_BYTES } from '../dist/claim-run.js';
+import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
 import { readVerification } from '../dist/verification.js';
 import { runView } from '../dist/github/dashboard-view.js';
@@ -28,12 +29,16 @@ const REFUTED = { type: 'contract_break', location: 'update.ts:1', severity: 'P1
   suspectedCondition: 'Another module calls update() and relies on the throw.',
   evidenceToCheck: [{ proposition: 'update is referenced outside update.ts.',
     check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts' } }] };
+// The failure-path pass is a second investigation over the same change. A test that
+// scripts only the main pass has it end at once with nothing recorded.
 function model(steps) {
   let index = 0;
   return {
     async count() { return 1000; },
     async respond(input) {
-      const next = steps[index++];
+      const next = input.instructions.includes(failurePathInstruction)
+        ? { id: `end-${Math.random()}`, name: 'end_investigation', arguments: JSON.stringify({ complete: true, limitations: [] }) }
+        : steps[index++];
       const step = typeof next === 'function' ? next(input) : next;
       return { model: profile.model, inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0,
         status: 'completed', continuation: [], calls: Array.isArray(step) ? step : step ? [step] : [] };

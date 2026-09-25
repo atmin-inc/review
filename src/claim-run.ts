@@ -82,6 +82,36 @@ export function targetGuidance(repository: string, packet: Packet): { guidance: 
   return { guidance, omitted };
 }
 
+// Both passes as one investigation: a claim either recorded counts once, the run is
+// complete only if both were, and the second pass's limitations say which pass they are from.
+function combined(main: ClaimInvestigation, focus: ClaimInvestigation): ClaimInvestigation {
+  const ids = new Set(main.claims.map(claim => claim.claimId));
+  const byName = { ...main.telemetry.toolCallsByName };
+  for (const [name, count] of Object.entries(focus.telemetry.toolCallsByName)) byName[name] = (byName[name] ?? 0) + count;
+  const transcript = main.transcript && focus.transcript ? [...main.transcript, ...focus.transcript] : undefined;
+  return {
+    claims: [...main.claims, ...focus.claims.filter(claim => !ids.has(claim.claimId))],
+    complete: main.complete && focus.complete,
+    limitations: [...main.limitations, ...focus.limitations.map(line => `Failure-path pass: ${line}`)],
+    toolErrors: [...main.toolErrors, ...focus.toolErrors],
+    stopReason: main.stopReason === 'finished' ? focus.stopReason : main.stopReason,
+    spentUsd: main.spentUsd + focus.spentUsd,
+    telemetry: {
+      turns: main.telemetry.turns + focus.telemetry.turns,
+      toolCalls: main.telemetry.toolCalls + focus.telemetry.toolCalls,
+      toolCallsByName: byName,
+      droppedTurns: main.telemetry.droppedTurns + focus.telemetry.droppedTurns,
+      inputTokens: main.telemetry.inputTokens + focus.telemetry.inputTokens,
+      outputTokens: main.telemetry.outputTokens + focus.telemetry.outputTokens,
+      finishReason: focus.telemetry.finishReason ?? main.telemetry.finishReason,
+      failure: main.telemetry.failure ?? focus.telemetry.failure,
+      reads: [...main.telemetry.reads, ...focus.telemetry.reads],
+      failurePathClaimIds: focus.claims.map(claim => claim.claimId),
+    },
+    ...(transcript ? { transcript } : {}),
+  };
+}
+
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null, reads: [] } });
@@ -120,13 +150,19 @@ export async function runClaimReview(directory: string, profile: Profile,
       ...(recheck.length ? { earlierFindings: recheck.map(({ type, location, description, suspectedCondition }) => ({ type, location, description, suspectedCondition })) } : {}) }
     : { packet, ...guided, diff: diff.toString('utf8') };
 
-  // Nothing new to read, as when only the target branch moved: no model is asked.
-  const investigation = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, {
+  const limits = (maxUsd: number) => ({
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
-    maxUsd: profile.maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}),
-    costOf: (input, output) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
-  }, signal);
+    maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}),
+    costOf: (input: number, output: number) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
+  });
+  // Nothing new to read, as when only the target branch moved: no model is asked.
+  const main = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, limits(profile.maxUsd), signal);
+  // A second pass on failure paths alone, from the same context and within what the first
+  // left of the budget. See failurePathInstruction for why it is a pass of its own.
+  const failurePaths = incremental && !diff.length ? idle()
+    : await investigateClaims(revisions, sourceOf, context, model, { ...limits(profile.maxUsd - main.spentUsd), focus: 'failure_paths' }, signal);
+  const investigation = combined(main, failurePaths);
   // Earlier claims first, so a claim the model records again keeps the earlier wording
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
