@@ -221,7 +221,7 @@ test('render loading verifies immutable anchors, inventory and policy', t => {
 
 test('a symlink policy is rejected without following its destination', t => {
   const f = repository(t);
-  f.write('.atmin/placeholder', 'fixture');
+  unlinkSync(join(f.source, '.atmin/review.json'));
   symlinkSync('/etc/passwd', join(f.source, '.atmin/review.json'));
   const baseSha = f.commit('invalid policy');
   f.write('update.ts', 'changed\n');

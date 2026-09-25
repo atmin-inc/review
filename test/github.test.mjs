@@ -12,6 +12,7 @@ import { Store } from '../dist/github/store.js';
 import { webhook, validSignature } from '../dist/github/webhook.js';
 import { assessmentCheck } from '../dist/github/checks.js';
 import { assess } from '../dist/assessment.js';
+import { capture } from '../dist/snapshot.js';
 import { Worker, markerFor } from '../dist/github/worker.js';
 import { AppGitHub, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
@@ -391,6 +392,22 @@ test('check verdict requires completion, validation and current evidence; P3/P4 
   result.findings = [finding('P2')];
   assert.equal(assessmentCheck(assess(f.packet, result, current())).conclusion, 'failure');
   assert.equal(assessmentCheck(assess(f.packet, completed(f.packet), {...current(), status: 'superseded'})).conclusion, 'failure');
+});
+
+test('a repository without a policy file requires no CI, so a clean review passes without waiting', t => {
+  // Most repositories have no check named change-validation; requiring it by default left their checks pending forever.
+  const f = repository(t);
+  f.run('checkout', '-q', f.state.baseSha);
+  f.run('rm', '-q', '.atmin/review.json');
+  const baseSha = f.commit('no policy file');
+  f.write('update.ts', 'export function update(owner, account) {\n  return "updated";\n}\n');
+  const headSha = f.commit('remove the guard');
+  const { packet } = capture(f.source, { ...f.state, baseSha, headSha });
+  assert.deepEqual(packet.policy.requiredChecks, []);
+  const check = assessmentCheck(assess(packet, completed(packet), current()));
+  assert.equal(check.status, 'completed'); assert.equal(check.conclusion, 'success');
+  const result = completed(packet); result.findings = [finding('P2')];
+  assert.equal(assessmentCheck(assess(packet, result, current())).conclusion, 'failure');
 });
 
 test('lost check creation response reconciles without duplicate checks or inference', async t => {
