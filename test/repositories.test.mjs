@@ -16,7 +16,7 @@ function setup(t) {
   const store = new Store(root); assert.ok(store.acquire('worker'));
   const directory = new Repositories(config, store, models, 'worker');
   t.after(() => { directory.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
-  return { directory, config, store, models, first: directory.entries.get(42), second: directory.connect(43, 'owner/second') };
+  return { directory, config, store, models, first: directory.entries.get(42), second: directory.connect(43, 'owner/second', 99), third: directory.connect(44, 'other/third', 100) };
 }
 
 test('repositories retain separate jobs/settings after restart and share a durable rolling review cap', t => {
@@ -59,9 +59,15 @@ test('signed webhooks dispatch by installation and repository, and removal only 
     }, body: payload });
   };
   const pr = { installation: { id: 99 }, repository: { id: 43, full_name: 'owner/second' }, action: 'opened', number: 1 };
-  f.first.store.enable(true); f.second.store.enable(true);
+  f.first.store.enable(true); f.second.store.enable(true); f.third.store.enable(true);
   assert.equal((await send('pull_request', pr, false)).status, 401);
   await send('pull_request', { ...pr, installation: { id: 100 } });
+  // A repository is reached only through the installation it was connected from.
+  const third = { ...pr, installation: { id: 100 }, repository: { id: 44, full_name: 'other/third' } };
+  await send('pull_request', { ...third, installation: { id: 99 } });
+  assert.equal(f.third.store.db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0);
+  await send('pull_request', third);
+  assert.equal(f.third.store.db.prepare('SELECT count(*) AS n FROM jobs').get().n, 1);
   await send('pull_request', { ...pr, repository: { id: 43, full_name: 'owner/first' } });
   assert.equal(f.second.store.db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0);
   await send('pull_request', pr); await send('pull_request', pr);
@@ -71,7 +77,7 @@ test('signed webhooks dispatch by installation and repository, and removal only 
   assert.equal(f.first.store.enabled(), true); assert.equal(f.second.store.enabled(), false);
   assert.equal(f.second.store.db.prepare('SELECT state FROM jobs').get().state, 'cancelled');
   await send('installation', { installation: { id: 100 }, action: 'suspend' });
-  assert.equal(f.first.store.enabled(), true);
+  assert.equal(f.first.store.enabled(), true); assert.equal(f.third.store.enabled(), false);
   await send('installation', { installation: { id: 99 }, action: 'suspend' });
   assert.equal(f.first.store.enabled(), false);
 });
