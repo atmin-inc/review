@@ -96,7 +96,8 @@ headline. A numerical average cannot cancel out a serious defect.
 Priority depends on a concrete trigger, impact, reachability and counterevidence.
 Findings cite immutable source. A model's reasoning is not proof of execution.
 The target commit's `.atmin/review.json` may enable optional suggestions and name
-required validation checks; a PR cannot weaken its own policy:
+required validation checks; a PR cannot weaken its own policy. Without the file no
+check is required, and the `atmin review` check reflects the review alone:
 
 ```json
 {"schemaVersion":1,"rubricVersion":"1","includeOptional":false,"requiredChecks":["change-validation"]}
