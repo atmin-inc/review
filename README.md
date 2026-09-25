@@ -154,7 +154,10 @@ using it. The worker queries GitHub on the exact reviewed head. CI that runs on
 both push and pull_request leaves one run per event there; a pass needs every run
 of the check from that App completed and successful, and any failed run fails it.
 Missing, skipped, cancelled, still-running or unavailable checks remain unverified. A check on a different merge commit is
-not automatically treated as evidence for the head.
+not automatically treated as evidence for the head. The review does not wait for CI: while
+unverified required checks are all that stand between a clean review and a pass, the
+`atmin review` check stays pending (in progress) instead of failing, and a required check
+that never passes keeps it pending.
 
 Protect CI workflow changes according to your repository's policy: trusting an
 App and check name is not verification of the workflow's code. Trusted Check run
