@@ -307,22 +307,24 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
   return { evidence: [{ rung: 'symbolic', check: `${label}${where}`, result: settle(outside.length > 0, expect) }], limitations: [] };
 }
 
-// Where a symbol check looks in the claim's own file, so rung 3 can be shown it: the
+// Where a symbol check looks, so rung 3 can be shown it: in the claim's own file, the
 // declaration there whose signature or body has the pattern, else the only one there. Rung 3
 // sees a window of each file, and a body far from the claim's line is text that window never
 // holds. Seen 2026-09-25 on mason-v1 #4590: grep established that the mapper's fallback sets
 // `retryAfterMs: 5000`, 700 lines below the claim in the same file, Jev was shown only the
 // claim's window and answered 0.22, and a real Major was held back as a contradicted check.
-// Other files are left out on measurement: taking the first declaration anywhere showed Jev
-// an unrelated `handler` or another class's method, and on 80 labelled claims 3 real ones
-// stopped shipping (scratch PREREG.md, 2026-09-25).
+// Another file's declaration is taken only when it is the symbol's one declaration: taking
+// the first one anywhere showed Jev an unrelated `handler` or another class's method, and on
+// 80 labelled claims 3 real ones stopped shipping (2026-09-25). A defect that crosses files,
+// new code throwing into an unchanged mapper, needs the other file.
 export function checkedSite(revision: Revision, check: SymbolicCheck, path: string): { path: string; line: number } | null {
   if (check.assertion !== 'body_contains' && check.assertion !== 'declaration_contains') return null;
   if (!searchable(check.symbol)) return null;
-  const here = declarations(revision, check.symbol).found.filter(site => site.path === path);
+  const { found, truncated } = declarations(revision, check.symbol);
+  const here = found.filter(site => site.path === path);
   const has = (site: Declaration) => check.assertion === 'declaration_contains' ? site.text.includes(check.pattern)
     : bodyOf(revision, site.path, site.line, site.span)?.text.includes(check.pattern) ?? false;
-  const site = here.find(has) ?? (here.length === 1 ? here[0] : undefined);
+  const site = here.find(has) ?? (here.length === 1 ? here[0] : !here.length && found.length === 1 && !truncated ? found[0] : undefined);
   return site ? { path: site.path, line: site.line } : null;
 }
 

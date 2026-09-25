@@ -228,7 +228,8 @@ test('the state carries the declaration a symbol check reads when the claim wind
   const lines = ['export function create(input) {', '  try { return run(input); } catch (error) { throw mapError(error); }', '}'];
   while (lines.length < 699) lines.push('// filler');
   lines.push('function mapError(error) {', "  return { kind: 'VendorUnavailable', retryAfterMs: 5000 };", '}');
-  const files = { 'broker.ts': lines.join('\n') + '\n', 'other.ts': 'function helper() {\n  return 1;\n}\n' };
+  const files = { 'broker.ts': lines.join('\n') + '\n', 'other.ts': 'function helper() {\n  return 1;\n}\n',
+    'a.ts': 'function handler() {\n  return 1;\n}\n', 'b.ts': 'function handler() {\n  return 2;\n}\n' };
   const revision = {
     search: pattern => ({ matches: Object.entries(files).flatMap(([path, text]) => text.split('\n')
       .flatMap((line, index) => line.includes(pattern) ? [{ path, line: index + 1, text: line }] : [])), truncated: false }),
@@ -248,13 +249,15 @@ test('the state carries the declaration a symbol check reads when the claim wind
         check: { assertion: 'body_contains', symbol: 'mapError', pattern: 'retryAfterMs: 5000' } },
       { proposition: 'helper returns one.',
         check: { assertion: 'body_contains', symbol: 'helper', pattern: 'return 1' } },
+      { proposition: 'handler returns one.',
+        check: { assertion: 'body_contains', symbol: 'handler', pattern: 'return 1' } },
       { proposition: 'mapError did not exist before.',
         check: { assertion: 'declaration_contains', symbol: 'mapError', pattern: 'mapError', expect: 'absent', revision: 'base' } },
     ],
   };
   const head = jevState(claim, { head: revision, base: revision }, 'diff text');
-  assert.deepEqual(head.files.map(file => file.path), ['broker.ts', 'broker.ts'],
-    'the claim window, then the far declaration; create sits inside the claim window and is not repeated, and a declaration in another file is not added');
+  assert.deepEqual(head.files.map(file => file.path), ['broker.ts', 'broker.ts', 'other.ts'],
+    'the claim window, the far declaration, then another file\'s only declaration; create sits inside the claim window, and a name declared twice elsewhere is not guessed at');
   assert.doesNotMatch(head.files[0].source, /retryAfterMs/, 'the claim window alone does not hold the fallback');
   assert.match(head.files[1].source, /^function mapError[\s\S]*retryAfterMs: 5000/, 'the added window starts at the declaration');
   assert.equal(jevState(claim, { head: revision, base: revision }, 'diff text', 'base').files.length, 2,

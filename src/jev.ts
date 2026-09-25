@@ -134,8 +134,8 @@ function statePaths(claim: Claim): string[] {
   const named = claim.evidenceToCheck.flatMap(({ check }) => check && 'path' in check ? [check.path] : []);
   return [...new Set([parseLocation(claim.location).path, ...named])].slice(0, MAX_STATE_FILES);
 }
-// The declarations this revision's symbol checks read in the claim's own file, where the
-// claim's window does not already hold them. A body starts at its declaration, so its
+// The declarations this revision's symbol checks read, where the claim's window does not
+// already hold them. A body starts at its declaration, so its
 // window does too.
 function checkedSites(claim: Claim, source: Revisions['head'], revision: Side): { path: string; line: number }[] {
   const { path: located, line } = parseLocation(claim.location);
@@ -143,7 +143,7 @@ function checkedSites(claim: Claim, source: Revisions['head'], revision: Side): 
     item.check && propositionSide(item) === revision ? [checkedSite(source, item.check, located)] : []);
   const seen = new Set<string>();
   return sites.filter((site): site is { path: string; line: number } => {
-    if (!site || Math.abs(site.line - line) < 100 || seen.has(`${site.path}:${site.line}`)) return false;
+    if (!site || (site.path === located && Math.abs(site.line - line) < 100) || seen.has(`${site.path}:${site.line}`)) return false;
     seen.add(`${site.path}:${site.line}`);
     return true;
   });
