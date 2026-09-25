@@ -102,6 +102,23 @@ required validation checks; a PR cannot weaken its own policy:
 {"schemaVersion":1,"rubricVersion":"1","includeOptional":false,"requiredChecks":["change-validation"]}
 ```
 
+## Hosted private pilot
+
+The hosted dashboard at [review.atmin.ai](https://review.atmin.ai) is available
+for repositories in the pilot's approved GitHub installation. It is not yet
+open for public onboarding. The hosted service currently runs ahead of the
+published npm and Homebrew alpha.
+
+Repository administrators can sign in with GitHub, open **Repositories → Connect
+repository**, and use **Manage GitHub access** to select another repository.
+Return to the dashboard, refresh, and connect it. New connections start paused;
+check the model and budget settings before enabling reviews.
+
+Then open a pull request, or comment `/atmin review` on an existing open PR.
+The App publishes its check and review summary in GitHub. The dashboard's
+repository picker keeps each repository's settings and history separate, while
+all connected repositories share the pilot's rolling 24-hour review limit.
+
 ## GitHub App worker
 
 The current source adds automatic CI refresh and inline findings. These changes
