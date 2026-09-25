@@ -113,6 +113,7 @@ calledCode holds the current definitions of functions the added lines call and t
 // failure path gets a pass of its own rather than a longer list in the main prompt.
 export const failurePathInstruction = `
 This pass has one focus: what happens when something fails. Another pass covers everything else, so record only claims about failure paths.
+The diff here holds only the lines around error handling that the change adds or touches; read_file reads the rest of any file.
 For each throw, rejected promise, error result or catch that the change adds or changes, follow the error to where it is finally handled: the catch that receives it, the function that classifies or wraps it, and what the caller, user or agent is told as a result, such as its kind, message, status or retry advice. Read that handler even when the change does not touch it.
 Claim a defect when the outcome is wrong for the failure: an expected condition such as bad input, a missing record or an empty result reported as an outage, a timeout or a retryable error; a retry advised for a failure that retrying cannot fix; an error swallowed so the caller sees success; or a failure reported without what the user needs to correct it.
 If no failure path is wrong, end without claims.`;
@@ -164,6 +165,8 @@ export interface ClaimTelemetry {
   // without it. Combined record only.
   failurePathSpentUsd?: number;
   failurePathTurns?: number;
+  // Error-handling lines the pass was shown; 0 means it did not run.
+  failurePathSites?: number;
 }
 export interface ClaimInvestigation {
   claims: Claim[];

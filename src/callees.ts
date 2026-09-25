@@ -16,7 +16,7 @@ const CALL = /(?<![\w$])([A-Za-z_$][\w$]*)\s*\(/g;
 const NOT_CALLS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof', 'await',
   'super', 'import', 'require', 'def', 'elif', 'not', 'and', 'or', 'in', 'lambda', 'assert', 'print', 'with']);
 const SOURCE = /\.(?:[cm]?[jt]sx?|py)$/;
-const TEST = /(?:^|\/)(?:__tests__|tests?)\/|\.(?:test|spec)\.[^/]+$|(?:^|\/)test_[^/]+\.py$/;
+export const TEST = /(?:^|\/)(?:__tests__|tests?)\/|\.(?:test|spec)\.[^/]+$|(?:^|\/)test_[^/]+\.py$/;
 
 // Added lines per file, from a unified diff. A deleted file has no head side to call from.
 function addedLines(diff: string): Map<string, string[]> {

@@ -12,6 +12,7 @@ import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import { parseLocation, type Claim } from './claim.js';
 import { calledCode, MAX_CALLED_CODE_BYTES } from './callees.js';
+import { failureExcerpt } from './failure-excerpt.js';
 import type { Rung } from './evidence.js';
 import type { Packet } from './contracts.js';
 
@@ -84,7 +85,7 @@ export function targetGuidance(repository: string, packet: Packet): { guidance: 
 
 // Both passes as one investigation: a claim either recorded counts once, the run is
 // complete only if both were, and the second pass's limitations say which pass they are from.
-function combined(main: ClaimInvestigation, focus: ClaimInvestigation): ClaimInvestigation {
+function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: number): ClaimInvestigation {
   const ids = new Set(main.claims.map(claim => claim.claimId));
   const byName = { ...main.telemetry.toolCallsByName };
   for (const [name, count] of Object.entries(focus.telemetry.toolCallsByName)) byName[name] = (byName[name] ?? 0) + count;
@@ -109,6 +110,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation): ClaimInv
       failurePathClaimIds: focus.claims.map(claim => claim.claimId),
       failurePathSpentUsd: focus.spentUsd,
       failurePathTurns: focus.telemetry.turns,
+      failurePathSites: sites,
     },
     ...(transcript ? { transcript } : {}),
   };
@@ -160,11 +162,13 @@ export async function runClaimReview(directory: string, profile: Profile,
   });
   // Nothing new to read, as when only the target branch moved: no model is asked.
   const main = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, limits(profile.maxUsd), signal);
-  // A second pass on failure paths alone, from the same context and within what the first
-  // left of the budget. See failurePathInstruction for why it is a pass of its own.
-  const failurePaths = incremental && !diff.length ? idle()
-    : await investigateClaims(revisions, sourceOf, context, model, { ...limits(profile.maxUsd - main.spentUsd), focus: 'failure_paths' }, signal);
-  const investigation = combined(main, failurePaths);
+  // A second pass on failure paths alone, within what the first left of the budget, shown
+  // only the diff around error handling; a change with none gets no second pass. See
+  // failurePathInstruction for why it is a pass of its own, failureExcerpt for the cost.
+  const failure = failureExcerpt(diff.toString('utf8'));
+  const failurePaths = !failure.excerpt ? idle()
+    : await investigateClaims(revisions, sourceOf, { ...context, diff: failure.excerpt }, model, { ...limits(profile.maxUsd - main.spentUsd), focus: 'failure_paths' }, signal);
+  const investigation = combined(main, failurePaths, failure.sites);
   // Earlier claims first, so a claim the model records again keeps the earlier wording
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
