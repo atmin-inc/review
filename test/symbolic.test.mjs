@@ -203,6 +203,33 @@ test('file_contains reports absence only when it established it', () => {
   assert.match(truncated.limitations[0], /truncated/);
 });
 
+// "This was introduced by the change" about a file the change adds is a base-side check
+// on a file the base does not have. When no file at the base has the pattern, that is
+// settled: on mason-v1 #4590 a real label bug went unsettled on exactly this in 4 of 4
+// emissions. When some other file has it, the code may have moved there, so nothing is.
+test('a missing file settles absence only when no file in the revision has the pattern', () => {
+  const nowhere = runCheck(revisionOf({ 'old.ts': 'export const a = 1;\n' }),
+    { assertion: 'file_contains', path: 'new.ts', pattern: 'function summaryLabel', expect: 'absent', revision: 'base' });
+  assert.equal(nowhere.evidence[0].result, 'hit');
+  assert.match(nowhere.evidence[0].check, /does not exist here, and no file has the pattern/);
+
+  const moved = runCheck(revisionOf({ 'old.ts': 'function summaryLabel(prefix) {}\n' }),
+    { assertion: 'file_contains', path: 'new.ts', pattern: 'function summaryLabel', expect: 'absent', revision: 'base' });
+  assert.deepEqual(moved.evidence, []);
+
+  // A missing file never establishes presence, whatever the rest of the revision holds.
+  const asked = runCheck(revisionOf({ 'old.ts': 'export const a = 1;\n' }),
+    { assertion: 'file_contains', path: 'new.ts', pattern: 'function summaryLabel' });
+  assert.deepEqual(asked.evidence, []);
+
+  // A capped search cannot show the pattern is nowhere.
+  const noisy = Object.fromEntries([...Array(60)].map((_, i) => [`noise${i}.ts`, 'unrelated\n']));
+  const capped = revisionOf(noisy, 50);
+  const truncated = runCheck({ ...capped, search: () => ({ matches: [], truncated: true }) },
+    { assertion: 'file_contains', path: 'new.ts', pattern: 'function summaryLabel', expect: 'absent' });
+  assert.deepEqual(truncated.evidence, []);
+});
+
 // A regression claim is a claim about the difference, so the check has to be able to
 // ask the same question of the merge base.
 test('file_contains can ask the base side, and says which side it asked', () => {

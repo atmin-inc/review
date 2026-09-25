@@ -257,7 +257,16 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     // A file that is not in this revision settles nothing. Reading it as "the pattern
     // is absent" would let a claim about a test be supported by the test not existing,
     // which is a different claim and one nobody made.
+    // One case does settle: the pattern is nowhere in this revision at all. Then no file
+    // has it, this one included, wherever the model thought it lived. That is how "this
+    // was introduced by the change" is stated about a file the change adds, and it went
+    // unsettled on every such claim: seen 2026-09-24 on mason-v1 #4590, where a real
+    // label bug was emitted in 4 of 9 runs and never shipped for this alone.
     if (revision.slice(check.path, 1, 1) === null) {
+      const anywhere = expect === 'absent' ? revision.search(check.pattern) : undefined;
+      if (anywhere && !anywhere.matches.length && !anywhere.truncated) {
+        return { evidence: [{ rung: 'symbolic', check: `${label} (${check.path} does not exist here, and no file has the pattern)`, result: 'hit' }], limitations: [] };
+      }
       return inconclusive(label, `${check.path} does not exist in this revision`);
     }
     const { matches, truncated } = revision.search(check.pattern, check.path);
