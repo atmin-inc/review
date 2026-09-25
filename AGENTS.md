@@ -983,3 +983,25 @@ private PR, same snapshot, three runs each way: guidance produced no house-rule 
 best defect a competing reviewer found was reached by none of the six runs, 3 of 3 guided
 runs shipped a finding against 1 of 3 unguided, and cost rose about 30%. That is n=3 on one
 PR, not a result. No private code or finding text belongs in this public file.
+
+## Failure paths and what rung 3 is shown (2026-09-25)
+
+The defect the six runs above missed is a class, not a gap in context: new code that is
+right locally but wrong once it reaches unchanged code downstream (here, plain errors reaching
+a catch-all mapper that reports a vendor outage and asks for a retry). `af72f40` puts the
+bodies of unchanged functions the added lines call into the context and logs every read's
+path and range in `telemetry.json`; 0 of 3 runs found it even with the mapper in view.
+`b617c99` adds a second pass that looks only at failure paths. On that PR it found the
+defect in both runs that finished it. On the five labelled Martian cases (10 runs) it added
+4 claims and shipped 2 (one new real finding, one repeat of a main-pass finding) and no
+harmful one. Its cost is real: those PR runs cost $0.16-0.21 against $0.04-0.08. `da16990`
+logs the pass's own spend and turns (`failurePathSpentUsd`, `failurePathTurns`).
+
+The finding still did not ship, because rung 3 was shown a 200-line window around the
+claim's line and the mapper was 700 lines further down: it answered 0.22 to a fact grep had
+established, and the claim was held as a contradicted check. `993ddd8` adds a window at
+each declaration a check reads in the claim's own file. Adding declarations from any file
+failed its pre-registered rule (3 of 40 sampled real claims stopped shipping). The narrow
+version touches 23 of 657 labelled claims and held both lines on the 12 not already sampled,
+which is a small n. `20fbe81` and `993ddd8` also settle absence when the base has no such
+file or never mentions the symbol; the verifier bench shows 0 verdicts changed by either.
