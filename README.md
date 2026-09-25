@@ -150,9 +150,10 @@ and installation IDs in a local configuration:
 `trustedChecks` is optional. Use the actual check name and producer App ID you
 trust; check names must match the target policy's required checks. App 15368 is
 an illustrative configuration; verify the producer in your repository before
-using it. The worker queries GitHub on the exact reviewed head. Only a unique
-completed success counts as a pass. Missing, skipped, ambiguous, cancelled or
-unavailable checks remain unverified. A check on a different merge commit is
+using it. The worker queries GitHub on the exact reviewed head. CI that runs on
+both push and pull_request leaves one run per event there; a pass needs every run
+of the check from that App completed and successful, and any failed run fails it.
+Missing, skipped, cancelled, still-running or unavailable checks remain unverified. A check on a different merge commit is
 not automatically treated as evidence for the head.
 
 Protect CI workflow changes according to your repository's policy: trusting an

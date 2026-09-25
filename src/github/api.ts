@@ -155,23 +155,27 @@ export class AppGitHub implements GitHub {
     const checks: ValidationCheck[] = [];
     for (const trusted of this.config.trustedChecks ?? []) {
       if (!names.includes(trusted.name)) continue;
-      const missing: ValidationCheck = { name: trusted.name, status: 'not-run', reason: 'No unique completed check from the trusted GitHub App on this exact head.' };
+      const missing: ValidationCheck = { name: trusted.name, status: 'not-run', reason: 'No completed check from the trusted GitHub App on this exact head.' };
       // The review App cannot attest its own required validation.
       if (String(trusted.appId) === this.appId) { checks.push(missing); continue; }
       try {
         const query = new URLSearchParams({ check_name: trusted.name, app_id: String(trusted.appId), filter: 'latest', per_page: '100' });
         const data = await this.request(`/repos/${this.config.repository}/commits/${head}/check-runs?${query}`, await this.token('checks'));
-        if (!Array.isArray(data.check_runs) || data.total_count !== data.check_runs.length || data.check_runs.length !== 1) {
+        // One head can carry several runs of the same check from the same App: a workflow on
+        // both push and pull_request runs once per event (atmin-inc/review PR 9, 2026-09-25).
+        // Every run must be completed; any failure fails, and only all successes pass.
+        const runs = data.check_runs;
+        if (!Array.isArray(runs) || !runs.length || data.total_count !== runs.length
+          || runs.some(run => run.name !== trusted.name || run.app?.id !== trusted.appId || run.head_sha !== head
+            || !Number.isSafeInteger(run.id) || run.id < 1 || run.status !== 'completed')) {
           checks.push(missing); continue;
         }
-        const run = data.check_runs[0];
-        if (run.name !== trusted.name || run.app?.id !== trusted.appId || run.head_sha !== head
-          || !Number.isSafeInteger(run.id) || run.id < 1 || run.status !== 'completed') {
-          checks.push(missing); continue;
-        }
-        const status = run.conclusion === 'success' ? 'pass'
+        const statusOf = (run: { conclusion: string }) => run.conclusion === 'success' ? 'pass'
           : ['failure', 'timed_out', 'action_required', 'startup_failure'].includes(run.conclusion) ? 'fail' : 'not-run';
-        checks.push({ name: trusted.name, status, reason: `GitHub App ${trusted.appId}, check ${run.id}: ${status === 'pass' ? 'passed' : status === 'fail' ? 'failed' : 'did not establish a pass'}.`,
+        const status = runs.some(run => statusOf(run) === 'fail') ? 'fail' : runs.every(run => statusOf(run) === 'pass') ? 'pass' : 'not-run';
+        const run = runs.find(run => statusOf(run) === status) ?? runs[0];
+        const more = runs.length > 1 ? ` (and ${runs.length - 1} more run${runs.length > 2 ? 's' : ''} of it on this head)` : '';
+        checks.push({ name: trusted.name, status, reason: `GitHub App ${trusted.appId}, check ${run.id}${more}: ${status === 'pass' ? 'passed' : status === 'fail' ? 'failed' : 'did not establish a pass'}.`,
           url: `https://github.com/${this.config.repository}/runs/${run.id}` });
       } catch { checks.push({ ...missing, reason: 'GitHub CI evidence could not be retrieved. Validation remains unverified.' }); }
     }
