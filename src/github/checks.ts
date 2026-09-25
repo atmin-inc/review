@@ -3,11 +3,16 @@ import type { GitHub, CheckOutput } from './api.js';
 import type { Job, Store } from './store.js';
 
 export function assessmentCheck(assessment: Assessment): CheckOutput {
-  const success = assessment.freshness.status === 'current' && assessment.scope === 'complete'
-    && ['passed', 'not-applicable'].includes(assessment.validation) && assessment.findingsVerdict !== 'Changes needed';
-  return { status: 'completed', conclusion: success ? 'success' : 'failure', output: {
+  const reviewed = assessment.freshness.status === 'current' && assessment.scope === 'complete' && assessment.findingsVerdict !== 'Changes needed';
+  const output = {
     title: assessment.outcome, summary: `Rating: ${assessment.rating.score === null ? 'Not rated' : `${assessment.rating.score}/5`} · ${assessment.rating.policy.label}.\n\nScope: ${assessment.scope}. Required validation: ${assessment.validation}.\n\n${assessment.reasons.join('\n')}\n\nP0–P2 block this check; P3 and optional P4 do not. This is a review result, not merge approval.`,
-  } };
+  };
+  // The review does not wait for CI. When required CI is all that is outstanding, the check
+  // stays pending rather than red until a trusted check event refreshes it (Lors, 2026-09-25).
+  // A required check that never reports a pass keeps it pending; the summary says why.
+  if (reviewed && assessment.validation === 'missing') return { status: 'in_progress', output };
+  const success = reviewed && ['passed', 'not-applicable'].includes(assessment.validation);
+  return { status: 'completed', conclusion: success ? 'success' : 'failure', output };
 }
 
 // A creation attempt is durable before POST. On a lost response, reconcile by

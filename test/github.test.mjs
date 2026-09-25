@@ -42,7 +42,7 @@ async function harness(t, findings = []) {
     validation: async () => [],
     findCheck: async (head, externalId) => checks.find(c => c.head === head && c.externalId === externalId)?.id ?? null,
     createCheck: async (head, externalId, output) => { const id = checks.length + 1; checks.push({id, head, externalId, ...output}); return id; },
-    updateCheck: async (id, output) => { Object.assign(checks.find(c => c.id === id), output); },
+    updateCheck: async (id, output) => { Object.assign(checks.find(c => c.id === id), { conclusion: undefined }, output); },
     pull: async () => ({ ...live }), canReview: async login => login === 'maintainer', readToken: async () => 'read-only-fixture',
     summary: async () => comment,
     create: async (_pr, body) => { creates++; comment = { id: 10, body, user: { login: 'atmin-test[bot]', type: 'Bot' } }; return 10; },
@@ -384,6 +384,11 @@ test('check verdict requires completion, validation and current evidence; P3/P4 
   }
   const result = completed(f.packet);
   result.validation[0].status = 'not-run';
+  // CI still outstanding on an otherwise clean review is pending, not red: the review never waits for CI.
+  const pending = assessmentCheck(assess(f.packet, result, current()));
+  assert.equal(pending.status, 'in_progress'); assert.equal(pending.conclusion, undefined);
+  // A blocking finding stays red whatever CI is doing.
+  result.findings = [finding('P2')];
   assert.equal(assessmentCheck(assess(f.packet, result, current())).conclusion, 'failure');
   assert.equal(assessmentCheck(assess(f.packet, completed(f.packet), {...current(), status: 'superseded'})).conclusion, 'failure');
 });
@@ -423,7 +428,7 @@ test('completed publication can be reconciled to add a check without another rev
   assert.equal(h.store.status().jobs[0].started, before);
 });
 
-test('trusted CI requires exact App, check name and head; skipped, ambiguous and unavailable evidence never passes', async () => {
+test('trusted CI requires exact App, check name and head; skipped, conflicting and unavailable evidence never passes', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const head = 'a'.repeat(40);
   const good = { id: 9, name: 'change-validation', app: { id: 15368 }, head_sha: head, status: 'completed', conclusion: 'success' };
@@ -442,9 +447,18 @@ test('trusted CI requires exact App, check name and head; skipped, ambiguous and
     runs = [{ ...good, ...patch }];
     assert.equal((await api.validation(head, [good.name]))[0].status, expected);
   }
-  for (const candidates of [[], [good, { ...good, id: 10 }]]) {
-    runs = candidates; assert.equal((await api.validation(head, [good.name]))[0].status, 'not-run');
+  runs = []; assert.equal((await api.validation(head, [good.name]))[0].status, 'not-run');
+  // CI on both push and pull_request leaves two runs of one check on one head (atmin-inc/review
+  // PR 9): two successes pass, and a second run can never turn a failure or a pending run into a pass.
+  for (const [second, expected] of [[{}, 'pass'], [{ conclusion: 'failure' }, 'fail'], [{ status: 'in_progress' }, 'not-run'],
+    [{ conclusion: 'skipped' }, 'not-run'], [{ app: { id: 999 } }, 'not-run'], [{ head_sha: 'b'.repeat(40) }, 'not-run']]) {
+    runs = [good, { ...good, id: 10, ...second }];
+    const [check] = await api.validation(head, [good.name]);
+    assert.equal(check.status, expected);
+    if (expected === 'fail') assert.match(check.url, /\/runs\/10$/);
   }
+  runs = [good, { ...good, id: 10 }];
+  assert.match((await api.validation(head, [good.name]))[0].reason, /check 9 \(and 1 more run of it on this head\): passed/);
   unavailable = true;
   assert.match((await api.validation(head, [good.name]))[0].reason, /could not be retrieved/);
   assert.deepEqual(await api.validation(head, ['unmapped']), []);
@@ -458,7 +472,7 @@ test('CI reconciliation refreshes the same report and check without inference or
     return [{ name: 'change-validation', status, reason: 'Controller CI fixture.' }];
   };
   h.store.enqueue('ci-first', 1); await h.worker.tick();
-  assert.equal(h.checks[0].conclusion, 'failure');
+  assert.equal(h.checks[0].status, 'in_progress'); assert.equal(h.checks[0].conclusion, undefined);
   assert.match(h.comment.body, /5\/5 — Waiting for required checks/);
   status = 'pass'; h.store.retryPublication(1); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'success');
@@ -490,7 +504,7 @@ test('trusted check events refresh saved evidence, ignore payload verdicts and n
   const started = h.store.get(id).started;
   const event = { action: 'completed', check_run: { name: 'change-validation', app: { id: 15368 }, head_sha: h.live.headSha, conclusion: 'success', pull_requests: [] } };
   await post('check_run', event, 'ci-1'); await h.worker.tick();
-  assert.equal(h.checks[0].conclusion, 'failure'); // The webhook cannot attest a pass.
+  assert.equal(h.checks[0].status, 'in_progress'); // The webhook cannot attest a pass.
   status = 'pass';
   await post('check_run', event, 'ci-2'); await h.worker.tick();
   assert.equal(h.checks[0].conclusion, 'success');
@@ -498,7 +512,7 @@ test('trusted check events refresh saved evidence, ignore payload verdicts and n
   assert.equal(await h.worker.tick(), false);
   status = 'not-run';
   await post('check_run', { ...event, action: 'created' }, 'ci-rerun'); await h.worker.tick();
-  assert.equal(h.checks[0].conclusion, 'failure');
+  assert.equal(h.checks[0].status, 'in_progress'); assert.equal(h.checks[0].conclusion, undefined); // An old pass is not trusted.
   assert.equal(h.store.get(id).started, started);
   assert.equal(h.counts.runs, 1); assert.equal(h.counts.creates, 1); assert.equal(h.checks.length, 1);
 });
@@ -526,7 +540,7 @@ test('CI arriving during publication survives until a second pass, including a w
     return [{ name: 'change-validation', status: reads === 1 ? 'not-run' : 'pass', reason: 'Concurrent CI fixture.' }];
   };
   h.store.enqueue('source', 1); await h.worker.tick();
-  assert.equal(h.checks[0].conclusion, 'failure');
+  assert.equal(h.checks[0].status, 'in_progress');
   h.store.release('owner'); assert.equal(h.store.acquire('replacement'), true);
   const worker = new Worker(h.config, h.store, h.github, h.runner, 'replacement');
   assert.equal(await worker.tick(), true);
