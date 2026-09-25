@@ -7,13 +7,18 @@ import type { Store } from './store.js';
 
 export interface ModelChoice { id: string; label: string; profile: Profile; }
 export interface ReviewPreferences { model: string; maxUsd: number; maxReviewsPerDay: number; }
-export interface DashboardConfig { origin: string; clientId: string; clientSecret: string; models: ModelChoice[]; }
+// operators: GitHub user IDs (immutable, unlike logins) who may connect repositories from any
+// installation they can see. Everyone else sees only installations an operator already approved.
+export interface DashboardConfig { origin: string; clientId: string; clientSecret: string; models: ModelChoice[]; operators: number[]; appSlug?: string; }
 export function readDashboardConfig(path: string, secret: string): DashboardConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8'));
-  if (!raw || Object.keys(raw).some(k => !['origin', 'clientId', 'models'].includes(k))
+  if (!raw || Object.keys(raw).some(k => !['origin', 'clientId', 'models', 'operators', 'appSlug'].includes(k))
     || typeof raw.origin !== 'string' || new URL(raw.origin).origin !== raw.origin || !raw.origin.startsWith('https://')
     || typeof raw.clientId !== 'string' || !/^[\w.-]{1,100}$/.test(raw.clientId) || !secret
-    || !Array.isArray(raw.models) || !raw.models.length || raw.models.length > 3) throw new Error('Invalid dashboard configuration');
+    || !Array.isArray(raw.models) || !raw.models.length || raw.models.length > 3
+    || (raw.operators !== undefined && (!Array.isArray(raw.operators) || raw.operators.length > 20
+      || raw.operators.some((id: unknown) => !Number.isSafeInteger(id) || (id as number) < 1) || new Set(raw.operators).size !== raw.operators.length))
+    || (raw.appSlug !== undefined && (typeof raw.appSlug !== 'string' || !/^[a-z0-9-]{1,100}$/.test(raw.appSlug)))) throw new Error('Invalid dashboard configuration');
   const models: ModelChoice[] = raw.models.map((m: any) => {
     if (!m || Object.keys(m).some(k => !['id', 'label', 'profile'].includes(k))
       || typeof m.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(m.id)
@@ -23,7 +28,7 @@ export function readDashboardConfig(path: string, secret: string): DashboardConf
     return { id: m.id, label: m.label, profile };
   });
   if (new Set(models.map(m => m.id)).size !== models.length) throw new Error('Duplicate dashboard model');
-  return { origin: raw.origin, clientId: raw.clientId, clientSecret: secret, models };
+  return { origin: raw.origin, clientId: raw.clientId, clientSecret: secret, models, operators: raw.operators ?? [], ...(raw.appSlug ? { appSlug: raw.appSlug } : {}) };
 }
 
 const sameProfile = (a: Profile, b: Profile) => Object.entries(a).every(([key, value]) => Reflect.get(b, key) === value);

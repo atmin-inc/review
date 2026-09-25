@@ -13,7 +13,7 @@ import { dashboard, history } from '../dist/github/dashboard.js';
 const origin = 'https://review.example.test';
 const profile = resolve('profiles/smoke-openrouter-free.json');
 const models = [{ id: 'free', label: 'Free', profile: readProfile(profile) }, { id: 'deepseek', label: 'DeepSeek', profile: readProfile(resolve('profiles/baseline-deepseek.json')) }];
-async function setup(t, hosted = false) {
+async function setup(t, hosted = false, operators = []) {
   const root = mkdtempSync(join(tmpdir(), 'review-dashboard-'));
   const config = { repository: 'owner/repo', repositoryId: 42, installationId: 99, profile, stateDirectory: root, host: '127.0.0.1', port: 8787, maxReviewsPerDay: 12 };
   const store = new Store(root), settings = new ReviewSettings(config, store, models);
@@ -29,7 +29,10 @@ async function setup(t, hosted = false) {
     assert.equal(init.headers.Authorization, 'Bearer ghu_faketoken0123456789');
     if (state.revoked) return Response.json({}, { status: 401 });
     if (url.includes('/pulls?')) return Response.json([]);
-    if (url.endsWith('/user')) return Response.json({ id: 7, login: 'owner', email: 'private@example.test' });
+    if (url.endsWith('/user')) return Response.json({ id: state.userId ?? 7, login: 'owner', email: 'private@example.test' });
+    if (url.includes('/user/installations?')) return Response.json({ installations: (state.installations ?? [99]).map(id => ({ id })) });
+    if (url.includes('/user/installations/77/repositories')) return Response.json({ repositories: [{ id: 55, full_name: 'other/app', owner: { type: 'Organization' } }] });
+    if (url.endsWith('/repos/other/app')) return Response.json({ id: 55, full_name: 'other/app', permissions: { admin: true } });
     if (url.endsWith('/repos/owner/repo') && state.redirectTo) return new Response(null, { status: 301, headers: { Location: state.redirectTo } });
     if (url.endsWith('/repositories/42')) return Response.json({ id: 42, full_name: 'owner/repo', permissions: { admin: state.admin } });
     if (url.endsWith('/repos/owner/repo')) return Response.json({ id: 42, full_name: 'owner/repo', permissions: { admin: state.admin } });
@@ -39,7 +42,7 @@ async function setup(t, hosted = false) {
   };
   store.acquire('test-owner');
   const repositories = hosted ? new Repositories(config, store, models, 'test-owner') : undefined;
-  const handler = dashboard(config, { origin, clientId: 'client-id', clientSecret: 'private-secret', models }, store, settings, fetcher, repositories);
+  const handler = dashboard(config, { origin, clientId: 'client-id', clientSecret: 'private-secret', models, operators, appSlug: 'atmin-review' }, store, settings, fetcher, repositories);
   const server = createServer(async (req, res) => { if (!await handler(req, res)) { res.writeHead(404); res.end(); } });
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   t.after(async () => { server.closeAllConnections(); await new Promise(done => server.close(done)); repositories?.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
@@ -145,6 +148,13 @@ test('operator config rejects unsafe origins and unavailable credentials', async
   t.after(() => { if (old === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = old; });
   writeFileSync(path, JSON.stringify({ origin, clientId: 'client-id', models: [{ id: 'free', label: 'Free', profile }] })); assert.throws(() => readDashboardConfig(path, 'secret'));
   process.env.OPENROUTER_API_KEY = 'test-key'; assert.equal(readDashboardConfig(path, 'secret').models.length, 1);
+  assert.deepEqual(readDashboardConfig(path, 'secret').operators, []);
+  // Operators are GitHub user IDs: a login can be renamed and re-registered by someone else.
+  for (const operators of [['lorsk'], [0], [8, 8]]) {
+    writeFileSync(path, JSON.stringify({ origin, clientId: 'client-id', models: [{ id: 'free', label: 'Free', profile }], operators })); assert.throws(() => readDashboardConfig(path, 'secret'));
+  }
+  writeFileSync(path, JSON.stringify({ origin, clientId: 'client-id', models: [{ id: 'free', label: 'Free', profile }], operators: [8], appSlug: 'atmin-review' }));
+  assert.deepEqual(readDashboardConfig(path, 'secret').operators, [8]); assert.equal(readDashboardConfig(path, 'secret').appSlug, 'atmin-review');
 });
 
 
@@ -186,7 +196,8 @@ test('hosted connection uses GitHub identity, explicit repository scope, and ind
   const cookie = await f.login();
   const session = await (await f.get('/api/review/v1/session', cookie)).json();
   assert.equal(session.connections.manageUrl, 'https://github.com/organizations/owner/settings/installations/99');
-  assert.deepEqual(session.connections.repositories, [{ id: 42, name: 'owner/repo', connected: true }, { id: 43, name: 'owner/second', connected: false }]);
+  assert.deepEqual(session.connections.repositories, [{ id: 42, name: 'owner/repo', installationId: 99, connected: true }, { id: 43, name: 'owner/second', installationId: 99, connected: false }]);
+  assert.equal(session.connections.installUrl, 'https://github.com/apps/atmin-review/installations/new');
   assert.equal((await f.post('enabled', { enabled: true }, cookie)).status, 400);
   assert.equal((await f.post('connect?repository=43', { repository: 'attacker/repo', installation: 999 }, cookie)).status, 200);
   const second = f.repositories.entries.get(43);
@@ -234,4 +245,30 @@ test('sign-in returns to the exact review without allowing redirects or changing
   }
   const { cookie } = await f.finish(await f.begin('?repository=999&review=abc'));
   assert.equal((await f.get('/api/review/v1/reviews/abc?repository=999', cookie)).status, 404);
+});
+
+test('a new installation stays invisible until an operator connects one of its repositories', async t => {
+  // The App installs on any account, and each connected repository spends model budget, so an
+  // installation is approved only when an operator (by GitHub user ID) connects its first repository.
+  const f = await setup(t, true, [8]); f.state.installations = [99, 77];
+  let cookie = await f.login();
+  let session = await (await f.get('/api/review/v1/session', cookie)).json();
+  assert.deepEqual(session.connections.repositories.map(r => r.id), [42]);
+  assert.equal((await f.post('connect?repository=55', {}, cookie)).status, 403);
+  assert.equal(f.repositories.entries.has(55), false);
+  f.state.installations = [77];
+  assert.equal((await f.finish(await f.begin())).response.headers.get('location'), '/?signin=denied');
+  f.state.userId = 8; cookie = await f.login();
+  session = await (await f.get('/api/review/v1/session', cookie)).json();
+  assert.deepEqual(session.connections.repositories.map(r => [r.id, r.installationId, r.connected]), [[55, 77, false]]);
+  assert.equal((await f.post('connect?repository=55', {}, cookie)).status, 200);
+  const entry = f.repositories.entries.get(55);
+  assert.equal(entry.config.installationId, 77); assert.equal(entry.config.repository, 'other/app');
+  assert.equal(entry.config.stateDirectory, join(f.root, 'repositories', '77', '55')); assert.equal(entry.store.enabled(), false);
+  f.state.userId = 7; cookie = await f.login();
+  session = await (await f.get('/api/review/v1/session?repository=55', cookie)).json();
+  assert.equal(session.repository.id, 55); assert.equal(session.repository.installationId, 77);
+  f.repositories.close();
+  const reopened = new Repositories(f.config, f.store, models, 'test-owner');
+  assert.equal(reopened.entries.get(55).config.installationId, 77); reopened.close();
 });
