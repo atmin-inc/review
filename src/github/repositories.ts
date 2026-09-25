@@ -5,37 +5,39 @@ import { ReviewSettings, type ModelChoice } from './settings.js';
 
 export interface Repository { config: PilotConfig; store: Store; settings: ReviewSettings; }
 
-// ponytail: one approved installation, at most ten repositories, one scheduler.
+// ponytail: operator-approved installations, at most ten repositories, one scheduler.
 // Separate stores reuse the worker's existing isolation boundary without tenant SQL.
 export class Repositories {
   readonly entries = new Map<number, Repository>();
   constructor(readonly config: PilotConfig, readonly root: Store, private models: ModelChoice[], private owner: string) {
     root.db.exec('CREATE TABLE IF NOT EXISTS repositories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, installation INTEGER NOT NULL)');
     const rows = root.db.prepare('SELECT * FROM repositories').all();
-    if (rows.length > 9 || rows.some(row => row.installation !== config.installationId || row.id === config.repositoryId)) throw new Error('Repository directory does not match installation');
+    if (rows.length > 9 || rows.some(row => row.id === config.repositoryId)) throw new Error('Repository directory does not match installation');
     this.entries.set(config.repositoryId, { config, store: root, settings: new ReviewSettings(config, root, models) });
-    for (const row of rows) this.open(Number(row.id), String(row.name));
+    for (const row of rows) this.open(Number(row.id), String(row.name), Number(row.installation));
   }
-  private open(id: number, name: string): Repository {
-    if (!Number.isSafeInteger(id) || id < 1 || !/^[\w.-]+\/[\w.-]+$/.test(name)) throw new Error('Invalid repository identity');
-    const config = { ...this.config, repositoryId: id, repository: name, trustedChecks: [],
-      stateDirectory: join(this.config.stateDirectory, 'repositories', String(this.config.installationId), String(id)) };
+  private open(id: number, name: string, installation: number): Repository {
+    if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(installation) || installation < 1 || !/^[\w.-]+\/[\w.-]+$/.test(name)) throw new Error('Invalid repository identity');
+    const config = { ...this.config, repositoryId: id, repository: name, installationId: installation, trustedChecks: [],
+      stateDirectory: join(this.config.stateDirectory, 'repositories', String(installation), String(id)) };
     const store = new Store(config.stateDirectory);
     if (!store.acquire(this.owner)) { store.close(); throw new Error('Repository already has a worker'); }
     const repository = { config, store, settings: new ReviewSettings(config, store, this.models) };
     this.entries.set(id, repository);
     return repository;
   }
-  // Caller must verify both current admin permission and installation membership.
-  connect(id: number, name: string): Repository {
+  // Installations with a connected repository; an operator approves one by connecting its first repository.
+  installations(): Set<number> { return new Set([...this.entries.values()].map(entry => entry.config.installationId)); }
+  // Caller must verify current admin permission, installation membership and installation approval.
+  connect(id: number, name: string, installation: number): Repository {
     const existing = this.entries.get(id);
     if (existing) {
-      if (existing.config.repository !== name) throw new Error('Repository name changed; operator reconciliation required');
+      if (existing.config.repository !== name || existing.config.installationId !== installation) throw new Error('Repository name or installation changed; operator reconciliation required');
       return existing;
     }
     if (this.entries.size >= 10) throw new Error('Private pilot repository limit reached');
-    const repository = this.open(id, name);
-    try { this.root.db.prepare('INSERT INTO repositories VALUES(?,?,?)').run(id, name, this.config.installationId); }
+    const repository = this.open(id, name, installation);
+    try { this.root.db.prepare('INSERT INTO repositories VALUES(?,?,?)').run(id, name, installation); }
     catch (error) { repository.store.close(); this.entries.delete(id); throw error; }
     return repository;
   }

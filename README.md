@@ -192,6 +192,16 @@ Provide snapshot retention and disk limits before widening access. Capture
 fetches repository history, so large repositories can exceed the pilot's capacity.
 No hosted signup, billing, or repository execution is included.
 
+With `REVIEW_DASHBOARD_CONFIG` pointing at a JSON file (`origin`, `clientId`, `models`,
+and optionally `operators` and `appSlug`) and `GITHUB_OAUTH_CLIENT_SECRET` set, `serve`
+also hosts the dashboard API. Repository administrators sign in with GitHub, connect
+up to ten repositories in total, and pause or configure each one. `operators` lists
+GitHub user IDs, not logins, because a login can be renamed and taken by someone else.
+An operator sees every installation of the App they can access and approves one by
+connecting its first repository. Everyone else sees only approved installations. With
+`appSlug` set, the dashboard offers the App's install link; set the App's Setup URL to
+the dashboard origin so GitHub returns people there after installing.
+
 ## Develop
 
 ```sh

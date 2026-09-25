@@ -46,25 +46,50 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     if (!response.ok) throw new Error('GitHub unavailable');
     return response.json();
   };
-  const available = async (token: string) => {
-    const repositories: { id: number; full_name: string; organization: boolean }[] = [];
+  const operator = (user: User) => (options.operators ?? []).includes(user.id);
+  const listed = async (token: string, installationId: number) => {
+    const repositories: { id: number; full_name: string; organization: boolean; installationId: number }[] = [];
     for (let page = 1; page <= 10; page++) {
-      const result = await api(`/user/installations/${config.installationId}/repositories?per_page=100&page=${page}`, token);
+      const result = await api(`/user/installations/${installationId}/repositories?per_page=100&page=${page}`, token);
       if (!Array.isArray(result.repositories)) throw new Error('Invalid GitHub response');
       for (const repo of result.repositories) {
         if (!Number.isSafeInteger(repo.id) || repo.id < 1 || typeof repo.full_name !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo.full_name)) throw new Error('Invalid GitHub repository');
-        repositories.push({ id: repo.id, full_name: repo.full_name, organization: repo.owner?.type === 'Organization' });
+        repositories.push({ id: repo.id, full_name: repo.full_name, organization: repo.owner?.type === 'Organization', installationId });
       }
       if (result.repositories.length < 100) return repositories;
     }
     throw new Error('Installation exceeds pilot repository listing limit');
   };
-  const authorize = async (token: string, target = config) => {
+  // Hosted mode: installation IDs come only from GitHub's list for this user, never from a
+  // request or the install callback. An installation is approved once an operator connects
+  // one of its repositories; operators also see installations nobody has approved yet.
+  const installations = async (token: string, all: boolean) => {
+    const approved = repositories!.installations(), ids: number[] = [];
+    for (let page = 1; page <= 3; page++) {
+      const result = await api(`/user/installations?per_page=100&page=${page}`, token);
+      if (!Array.isArray(result.installations)) throw new Error('Invalid GitHub response');
+      for (const installation of result.installations) {
+        if (!Number.isSafeInteger(installation?.id) || installation.id < 1) throw new Error('Invalid GitHub installation');
+        if (all || approved.has(installation.id)) ids.push(installation.id);
+      }
+      if (result.installations.length < 100) break;
+      if (page === 3) throw new Error('User exceeds pilot installation listing limit');
+    }
+    // The bootstrap installation stays first, so existing defaults and links are unchanged.
+    return ids.sort((a, b) => Number(b === config.installationId) - Number(a === config.installationId)).slice(0, 20);
+  };
+  const available = async (token: string, all = false) => {
+    if (!repositories) return listed(token, config.installationId);
+    const found = [];
+    for (const id of await installations(token, all)) found.push(...await listed(token, id));
+    return found;
+  };
+  const authorize = async (token: string, target = config, all = false) => {
     // Names and callback installation_id are never authority. Check canonical
     // identity, current admin permission, and user/installation intersection.
     const repo = await api(`/repos/${target.repository}`, token, target.repositoryId);
     if (repo.id !== target.repositoryId || repo.full_name !== target.repository || repo.permissions?.admin !== true) throw new Denied();
-    if (!(await available(token)).some(r => r.id === target.repositoryId && r.full_name === target.repository)) throw new Denied();
+    if (!(await available(token, all)).some(r => r.id === target.repositoryId && r.full_name === target.repository && r.installationId === target.installationId)) throw new Denied();
   };
   return async (request: IncomingMessage, response: ServerResponse): Promise<boolean> => {
     let url: URL;
@@ -105,8 +130,9 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
           || grant.token_type?.toLowerCase() !== 'bearer' || (grant.expires_in !== undefined && (!Number.isSafeInteger(grant.expires_in) || grant.expires_in < 1))) throw new Denied();
         const user = await api('/user', grant.access_token);
         if (!Number.isSafeInteger(user.id) || user.id < 1 || typeof user.login !== 'string' || !/^[a-zA-Z0-9-]{1,39}$/.test(user.login)) throw new Denied();
-        if (repositories) await available(grant.access_token);
-        else await authorize(grant.access_token);
+        if (repositories) {
+          if (!operator(user) && !(await installations(grant.access_token, false)).length) throw new Denied();
+        } else await authorize(grant.access_token);
         const id = random(), seconds = Math.min(3600, grant.expires_in ?? 3600);
         sessions.delete(sessionId);
         sessions.set(hash(id), { token: grant.access_token, user: { id: user.id, login: user.login }, expires: Date.now() + seconds * 1000 });
@@ -127,12 +153,15 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
       }
       let { config, store, settings } = initial;
       let connections;
+      const all = operator(session.user);
       if (repositories) {
-        const visible = await available(session.token);
+        const visible = await available(session.token, all);
+        const bootstrap = visible.find(repo => repo.installationId === config.installationId);
         connections = { installationId: config.installationId,
-          manageUrl: visible.length ? `https://github.com/${visible[0]!.organization ? `organizations/${encodeURIComponent(visible[0]!.full_name.split('/')[0]!)}/` : ''}settings/installations/${config.installationId}` : 'https://github.com/settings/installations',
+          manageUrl: bootstrap ? `https://github.com/${bootstrap.organization ? `organizations/${encodeURIComponent(bootstrap.full_name.split('/')[0]!)}/` : ''}settings/installations/${config.installationId}` : 'https://github.com/settings/installations',
+          ...(options.appSlug ? { installUrl: `https://github.com/apps/${options.appSlug}/installations/new` } : {}),
           maxRepositories: 10,
-          repositories: visible.map(repo => ({ id: repo.id, name: repo.full_name, connected: repositories.entries.has(repo.id) })) };
+          repositories: visible.map(repo => ({ id: repo.id, name: repo.full_name, installationId: repo.installationId, connected: repositories.entries.has(repo.id) })) };
         const selected = url.searchParams.get('repository');
         if (url.searchParams.getAll('repository').length > 1 || (selected !== null && !/^[1-9][0-9]{0,15}$/.test(selected))) {
           json(response, 400, { error: 'Choose a repository.' }); return true;
@@ -140,9 +169,10 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         if (request.method === 'POST' && url.pathname === '/api/review/v1/connect') {
           const candidate = visible.find(repo => repo.id === Number(selected));
           if (!candidate) throw new Denied();
-          await authorize(session.token, { ...config, repositoryId: candidate.id, repository: candidate.full_name });
+          await authorize(session.token, { ...config, repositoryId: candidate.id, repository: candidate.full_name, installationId: candidate.installationId }, all);
           if (!repositories.entries.has(candidate.id) && repositories.entries.size >= 10) { json(response, 409, { error: 'The private pilot supports ten repositories.' }); return true; }
-          const entry = repositories.connect(candidate.id, candidate.full_name);
+          const entry = repositories.connect(candidate.id, candidate.full_name, candidate.installationId);
+          process.stderr.write(`atmin review: repository ${candidate.id} connected from installation ${candidate.installationId} by GitHub user ${session.user.id}\n`);
           json(response, 200, { repository: { id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled() } }); return true;
         }
         const isSession = request.method === 'GET' && url.pathname === '/api/review/v1/session';
@@ -151,7 +181,7 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         if (selected === null) for (const candidate of visible) {
           const entry = repositories.entries.get(candidate.id);
           if (!entry) continue;
-          try { await authorize(session.token, entry.config); id = candidate.id; break; }
+          try { await authorize(session.token, entry.config, all); id = candidate.id; break; }
           catch (error) { if (!(error instanceof Denied)) throw error; }
         }
         const entry = id === undefined ? undefined : repositories.entries.get(id);
@@ -161,7 +191,7 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         }
         ({ config, store, settings } = entry);
       }
-      await authorize(session.token, config);
+      await authorize(session.token, config, all);
       const scopedApi = (path: string) => api(path, session.token, config.repositoryId);
       if (request.method === 'GET' && ['/api/review/v1/session', '/api/review/v1/dashboard'].includes(url.pathname)) {
         const [live, repositories] = await Promise.all([
