@@ -107,6 +107,8 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation): ClaimInv
       failure: main.telemetry.failure ?? focus.telemetry.failure,
       reads: [...main.telemetry.reads, ...focus.telemetry.reads],
       failurePathClaimIds: focus.claims.map(claim => claim.claimId),
+      failurePathSpentUsd: focus.spentUsd,
+      failurePathTurns: focus.telemetry.turns,
     },
     ...(transcript ? { transcript } : {}),
   };

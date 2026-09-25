@@ -160,6 +160,10 @@ export interface ClaimTelemetry {
   // The ids of claims the failure-path pass recorded, including any the main pass also
   // recorded, so what that pass adds can be measured on its own. Combined record only.
   failurePathClaimIds?: string[];
+  // That pass's share of spentUsd and turns, so its cost is read, not inferred from runs
+  // without it. Combined record only.
+  failurePathSpentUsd?: number;
+  failurePathTurns?: number;
 }
 export interface ClaimInvestigation {
   claims: Claim[];
