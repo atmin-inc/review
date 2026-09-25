@@ -219,3 +219,44 @@ test('the state carries the files the checks name, not just the located file', (
     'the located file first, then every path a check names');
   assert.match(JSON.stringify(state), /Forbidden/, 'the text the proposition is about is in the state');
 });
+
+// A symbol check reads a declaration wherever it is, and the state shows a window around
+// the claim's line. Seen 2026-09-25 on mason-v1 #4590: grep established that the mapper's
+// fallback sets `retryAfterMs: 5000` 700 lines below the claim, Jev was shown only the
+// claim's window and answered 0.22, and a real Major was held back as a contradicted check.
+test('the state carries the declaration a symbol check reads when the claim window lacks it', () => {
+  const lines = ['export function create(input) {', '  try { return run(input); } catch (error) { throw mapError(error); }', '}'];
+  while (lines.length < 699) lines.push('// filler');
+  lines.push('function mapError(error) {', "  return { kind: 'VendorUnavailable', retryAfterMs: 5000 };", '}');
+  const files = { 'broker.ts': lines.join('\n') + '\n', 'other.ts': 'function helper() {\n  return 1;\n}\n' };
+  const revision = {
+    search: pattern => ({ matches: Object.entries(files).flatMap(([path, text]) => text.split('\n')
+      .flatMap((line, index) => line.includes(pattern) ? [{ path, line: index + 1, text: line }] : [])), truncated: false }),
+    lineAt: (path, line) => files[path]?.split('\n')[line - 1] ?? null,
+    slice: (path, startLine, count) => files[path]
+      ? files[path].split('\n').slice(startLine - 1, startLine - 1 + count).join('\n') : null,
+  };
+  const claim = {
+    claimId: 'c-test', type: 'error_handling_gap', location: 'broker.ts:2',
+    description: 'Deterministic failures are reported as a vendor outage.',
+    suspectedCondition: 'The request names a missing dashboard.',
+    severity: 'P2',
+    evidenceToCheck: [
+      { proposition: 'create sends failures to mapError.',
+        check: { assertion: 'body_contains', symbol: 'create', pattern: 'mapError(error)' } },
+      { proposition: 'The fallback asks for a retry.',
+        check: { assertion: 'body_contains', symbol: 'mapError', pattern: 'retryAfterMs: 5000' } },
+      { proposition: 'helper returns one.',
+        check: { assertion: 'body_contains', symbol: 'helper', pattern: 'return 1' } },
+      { proposition: 'mapError did not exist before.',
+        check: { assertion: 'declaration_contains', symbol: 'mapError', pattern: 'mapError', expect: 'absent', revision: 'base' } },
+    ],
+  };
+  const head = jevState(claim, { head: revision, base: revision }, 'diff text');
+  assert.deepEqual(head.files.map(file => file.path), ['broker.ts', 'broker.ts'],
+    'the claim window, then the far declaration; create sits inside the claim window and is not repeated, and a declaration in another file is not added');
+  assert.doesNotMatch(head.files[0].source, /retryAfterMs/, 'the claim window alone does not hold the fallback');
+  assert.match(head.files[1].source, /^function mapError[\s\S]*retryAfterMs: 5000/, 'the added window starts at the declaration');
+  assert.equal(jevState(claim, { head: revision, base: revision }, 'diff text', 'base').files.length, 2,
+    'a base check adds its declaration to the base state only');
+});

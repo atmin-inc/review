@@ -108,6 +108,23 @@ function declarations(revision: Revision, symbol: string) {
   return withinOwner(revision, owner, member);
 }
 
+// A name no file mentions has no declaration, so nothing declared under it has the
+// pattern. That is how "this function is new" is stated about the merge base, and it went
+// unsettled on every such claim: seen 2026-09-25 on mason-v1 #4590, where a real Major (a
+// new catch reports plain errors as a vendor outage) was held on "createDashboardWorkbook
+// is absent at the merge base". Only the name appearing nowhere counts, not `declaresSymbol`
+// finding no declaration: a declaration form it does not recognise would otherwise
+// establish that a guard is absent from a body that has it. It supports absence only; a
+// name that exists nowhere more likely means the claim named the wrong symbol than that
+// its proposition is false, so it refutes nothing.
+function unnamed(revision: Revision, symbol: string, label: string, expect: Expectation): CheckOutcome | null {
+  const name = symbol.slice(symbol.lastIndexOf('.') + 1);
+  if (expect !== 'absent' || !searchable(name)) return null;
+  const { matches, truncated } = revision.search(name);
+  return matches.length || truncated ? null
+    : { evidence: [{ rung: 'symbolic', check: `${label} (no file here mentions \`${name}\`)`, result: 'hit' }], limitations: [] };
+}
+
 // The assertion is evaluated in its positive form, then read against what the claim
 // expects. A claim that a guard is gone is supported by the guard being absent, so
 // polarity has to come from the claim, not from the check's phrasing.
@@ -194,7 +211,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     const { found, truncated } = declarations(revision, check.symbol);
     if (!found.length) {
       return truncated ? inconclusive(label, 'the search truncated before any declaration was found')
-        : inconclusive(label, `no declaration of \`${check.symbol}\` was found in this revision`);
+        : unnamed(revision, check.symbol, label, expect) ?? inconclusive(label, `no declaration of \`${check.symbol}\` was found in this revision`);
     }
     // Every declaration, not the first one that turned up. A symbol can be defined
     // more than once — an interface and its implementation, a platform variant — and
@@ -237,7 +254,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
       // refutation is the strongest verdict available. Absence of evidence here is
       // a limitation, never a miss, whichever way the claim points.
       return truncated ? inconclusive(label, 'the search truncated before any declaration was found')
-        : inconclusive(label, `no declaration of \`${check.symbol}\` was found in this revision`);
+        : unnamed(revision, check.symbol, label, expect) ?? inconclusive(label, `no declaration of \`${check.symbol}\` was found in this revision`);
     }
     const matching = found.filter(item => item.text.includes(check.pattern));
     // Same as `body_contains`: nothing found among an incomplete set of declarations is
@@ -288,6 +305,25 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
   }
   const where = outside.length ? ` (${outside.length} site(s), first ${outside[0]!.path}:${outside[0]!.line})` : '';
   return { evidence: [{ rung: 'symbolic', check: `${label}${where}`, result: settle(outside.length > 0, expect) }], limitations: [] };
+}
+
+// Where a symbol check looks in the claim's own file, so rung 3 can be shown it: the
+// declaration there whose signature or body has the pattern, else the only one there. Rung 3
+// sees a window of each file, and a body far from the claim's line is text that window never
+// holds. Seen 2026-09-25 on mason-v1 #4590: grep established that the mapper's fallback sets
+// `retryAfterMs: 5000`, 700 lines below the claim in the same file, Jev was shown only the
+// claim's window and answered 0.22, and a real Major was held back as a contradicted check.
+// Other files are left out on measurement: taking the first declaration anywhere showed Jev
+// an unrelated `handler` or another class's method, and on 80 labelled claims 3 real ones
+// stopped shipping (scratch PREREG.md, 2026-09-25).
+export function checkedSite(revision: Revision, check: SymbolicCheck, path: string): { path: string; line: number } | null {
+  if (check.assertion !== 'body_contains' && check.assertion !== 'declaration_contains') return null;
+  if (!searchable(check.symbol)) return null;
+  const here = declarations(revision, check.symbol).found.filter(site => site.path === path);
+  const has = (site: Declaration) => check.assertion === 'declaration_contains' ? site.text.includes(check.pattern)
+    : bodyOf(revision, site.path, site.line, site.span)?.text.includes(check.pattern) ?? false;
+  const site = here.find(has) ?? (here.length === 1 ? here[0] : undefined);
+  return site ? { path: site.path, line: site.line } : null;
 }
 
 // The definition a call resolves to, for the investigator's context rather than for

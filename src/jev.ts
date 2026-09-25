@@ -1,6 +1,6 @@
 import { verifyClaims, type CrossFamilyAnswer, type VerifyOptions } from './lifecycle.js';
-import type { Revisions, Side } from './symbolic.js';
-import { parseLocation, type Claim } from './claim.js';
+import { checkedSite, type Revisions, type Side } from './symbolic.js';
+import { parseLocation, propositionSide, type Claim } from './claim.js';
 import type { Evidence } from './evidence.js';
 import { ProviderRequestError } from './provider-error.js';
 import { BALANCED, type Policy } from './policy.js';
@@ -108,10 +108,13 @@ export function jevState(claim: Claim, revisions: Revisions, diff: string, revis
     // One revision, named, and the files are that revision's. A question asked against
     // this state has one reading available to it.
     revision,
-    files: statePaths(claim).map(path => {
-      const at = path === located ? line : 1;
-      return { path, source: window(source, path, at) };
-    }),
+    files: [
+      ...statePaths(claim).map(path => {
+        const at = path === located ? line : 1;
+        return { path, source: window(source, path, at) };
+      }),
+      ...checkedSites(claim, source, revision).map(site => ({ path: site.path, source: window(source, site.path, site.line, 'from') })),
+    ].slice(0, MAX_STATE_FILES),
     // The diff stays: a claim about a regression is about a difference, and removing it
     // changed nothing measurable either way. It is context, and the files are the answer.
     diff: diff.length > MAX_DIFF_BYTES ? `${diff.slice(0, MAX_DIFF_BYTES)}\n[diff truncated]` : diff,
@@ -131,13 +134,27 @@ function statePaths(claim: Claim): string[] {
   const named = claim.evidenceToCheck.flatMap(({ check }) => check && 'path' in check ? [check.path] : []);
   return [...new Set([parseLocation(claim.location).path, ...named])].slice(0, MAX_STATE_FILES);
 }
+// The declarations this revision's symbol checks read in the claim's own file, where the
+// claim's window does not already hold them. A body starts at its declaration, so its
+// window does too.
+function checkedSites(claim: Claim, source: Revisions['head'], revision: Side): { path: string; line: number }[] {
+  const { path: located, line } = parseLocation(claim.location);
+  const sites = claim.evidenceToCheck.flatMap(item =>
+    item.check && propositionSide(item) === revision ? [checkedSite(source, item.check, located)] : []);
+  const seen = new Set<string>();
+  return sites.filter((site): site is { path: string; line: number } => {
+    if (!site || Math.abs(site.line - line) < 100 || seen.has(`${site.path}:${site.line}`)) return false;
+    seen.add(`${site.path}:${site.line}`);
+    return true;
+  });
+}
 // A window around the claim's line rather than the head of the file: a claim at line
 // 900 is not served by the first 200 lines. `slice` caps a read at 200 lines and at
 // 24 KB and returns null past either, so a file of very long lines falls back to a
 // narrower window instead of arriving empty.
-const window = (revision: Revisions['head'], path: string, line: number): string | null => {
+const window = (revision: Revisions['head'], path: string, line: number, anchor: 'around' | 'from' = 'around'): string | null => {
   for (const span of [200, 40]) {
-    const text = revision.slice(path, Math.max(1, line - Math.floor(span / 2)), span);
+    const text = revision.slice(path, anchor === 'from' ? line : Math.max(1, line - Math.floor(span / 2)), span);
     if (text !== null) return text;
   }
   return null;
