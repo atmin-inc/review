@@ -301,4 +301,5 @@ test('the failure-path pass runs after the main pass and its claims are verified
   const telemetry = JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8'));
   assert.deepEqual(telemetry.failurePathClaimIds, claims.map(claim => claim.claimId));
   assert.equal(telemetry.turns, 4);
+  assert.equal(telemetry.failurePathTurns, 2, 'the pass reports its own share, not the total');
 });
