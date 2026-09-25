@@ -28,6 +28,8 @@ export function repository(t) {
   };
   const commit = message => { run('add', '-A'); run('commit', '-qm', message); return run('rev-parse', 'HEAD'); };
   write('update.ts', 'export function update(owner, account) {\n  if (owner !== account) throw new Error("forbidden");\n  return "updated";\n}\n');
+  // The default policy requires no CI; this fixture opts in so CI handling stays under test.
+  write('.atmin/review.json', JSON.stringify({ schemaVersion: 1, rubricVersion: '1', includeOptional: false, requiredChecks: ['change-validation'] }));
   const baseSha = commit('fixture base');
   write('update.ts', 'export function update(owner, account) {\n  return "updated";\n}\n');
   const headSha = commit('fixture head');

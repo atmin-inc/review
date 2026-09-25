@@ -193,7 +193,7 @@ export function parsePolicy(value: unknown): Policy {
   }
   return policy;
 }
-export const defaultPolicy = (): Policy => ({ schemaVersion: 1, rubricVersion: '1', includeOptional: false, requiredChecks: ['change-validation'] });
+export const defaultPolicy = (): Policy => ({ schemaVersion: 1, rubricVersion: '1', includeOptional: false, requiredChecks: [] });
 
 export function initialResult(packet: Packet): Result {
   return {
