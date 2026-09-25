@@ -423,7 +423,7 @@ test('completed publication can be reconciled to add a check without another rev
   assert.equal(h.store.status().jobs[0].started, before);
 });
 
-test('trusted CI requires exact App, check name and head; skipped, ambiguous and unavailable evidence never passes', async () => {
+test('trusted CI requires exact App, check name and head; skipped, conflicting and unavailable evidence never passes', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const head = 'a'.repeat(40);
   const good = { id: 9, name: 'change-validation', app: { id: 15368 }, head_sha: head, status: 'completed', conclusion: 'success' };
@@ -442,9 +442,18 @@ test('trusted CI requires exact App, check name and head; skipped, ambiguous and
     runs = [{ ...good, ...patch }];
     assert.equal((await api.validation(head, [good.name]))[0].status, expected);
   }
-  for (const candidates of [[], [good, { ...good, id: 10 }]]) {
-    runs = candidates; assert.equal((await api.validation(head, [good.name]))[0].status, 'not-run');
+  runs = []; assert.equal((await api.validation(head, [good.name]))[0].status, 'not-run');
+  // CI on both push and pull_request leaves two runs of one check on one head (atmin-inc/review
+  // PR 9): two successes pass, and a second run can never turn a failure or a pending run into a pass.
+  for (const [second, expected] of [[{}, 'pass'], [{ conclusion: 'failure' }, 'fail'], [{ status: 'in_progress' }, 'not-run'],
+    [{ conclusion: 'skipped' }, 'not-run'], [{ app: { id: 999 } }, 'not-run'], [{ head_sha: 'b'.repeat(40) }, 'not-run']]) {
+    runs = [good, { ...good, id: 10, ...second }];
+    const [check] = await api.validation(head, [good.name]);
+    assert.equal(check.status, expected);
+    if (expected === 'fail') assert.match(check.url, /\/runs\/10$/);
   }
+  runs = [good, { ...good, id: 10 }];
+  assert.match((await api.validation(head, [good.name]))[0].reason, /check 9 \(and 1 more run of it on this head\): passed/);
   unavailable = true;
   assert.match((await api.validation(head, [good.name]))[0].reason, /could not be retrieved/);
   assert.deepEqual(await api.validation(head, ['unmapped']), []);
