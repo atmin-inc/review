@@ -4,7 +4,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist } from './helpers.mjs';
 import { ablate, runClaimReview, MAX_GUIDANCE_BYTES } from '../dist/claim-run.js';
-import { claimInstructions } from '../dist/investigator.js';
+import { claimInstructions, failurePathInstruction } from '../dist/investigator.js';
 import { capture } from '../dist/snapshot.js';
 import { renderClaimReview } from '../dist/render-claim.js';
 
@@ -33,12 +33,17 @@ const FALSE_CLAIM = {
   ],
 };
 
-function model(steps) {
-  let index = 0;
+// The failure-path pass is a second investigation over the same change. A test that
+// scripts only the main pass has it end at once with nothing recorded.
+const failurePathPass = input => input.instructions.includes(failurePathInstruction);
+function model(steps, failurePathSteps = []) {
+  let index = 0, focusIndex = 0;
   return {
     async count() { return 1000; },
-    async respond() {
-      const step = steps[index++];
+    async respond(input) {
+      const step = failurePathPass(input)
+        ? failurePathSteps[focusIndex++] ?? action('end_investigation', { complete: true, limitations: [] })
+        : steps[index++];
       return { model: profile.model, inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0,
         status: 'completed', continuation: [], calls: Array.isArray(step) ? step : step ? [step] : [] };
     },
@@ -205,9 +210,9 @@ test('the report lists a withheld P3 finding by location and keeps its text out'
 });
 
 // A fake that keeps what each turn was asked, so a test can see what the model was shown.
-function recording(steps) {
+function recording(steps, failurePathSteps) {
   const inputs = [];
-  const inner = model(steps);
+  const inner = model(steps, failurePathSteps);
   return { inputs, ...inner, async respond(input, ...rest) { inputs.push(input); return inner.respond(input, ...rest); } };
 }
 
@@ -274,4 +279,26 @@ test('unchanged code the change calls is in the context, and what the model read
   assert.match(fake.inputs[0].instructions, /calledCode holds the current definitions/);
   assert.deepEqual(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).reads,
     [{ side: 'head', path: 'lib/errors.ts', startLine: 1, count: 3 }]);
+});
+
+// On mason-v1 #4590 the main pass never claimed a failure-path defect in ten runs, so
+// failure paths get a pass of their own. What it records is verified with everything
+// else, and a claim both passes record counts once.
+test('the failure-path pass runs after the main pass and its claims are verified with the rest', async t => {
+  const fixture = repository(t);
+  const end = action('end_investigation', { complete: true, limitations: [] });
+  const fake = recording([[action('record_claim', TRUE_CLAIM)], end],
+    [[action('record_claim', TRUE_CLAIM), action('record_claim', FALSE_CLAIM)], end]);
+  const directory = persist(fixture);
+
+  const { claims, investigation, verification } = await runClaimReview(directory, profile, fake);
+
+  const focused = fake.inputs.map(input => input.instructions.includes(failurePathInstruction));
+  assert.deepEqual(focused, [false, false, true, true]);
+  assert.equal(claims.length, 2);
+  assert.deepEqual(verification.chains.map(chain => chain.verdict), ['confirmed', 'refuted']);
+  assert.equal(investigation.complete, true);
+  const telemetry = JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8'));
+  assert.deepEqual(telemetry.failurePathClaimIds, claims.map(claim => claim.claimId));
+  assert.equal(telemetry.turns, 4);
 });

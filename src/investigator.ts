@@ -106,6 +106,17 @@ targetGuidance holds the reviewed repository's own AGENTS.md files, read from th
 export const calledCodeInstruction = `
 calledCode holds the current definitions of functions the added lines call and this change does not define. What they do with the values the change passes, returns or throws to them is part of the change's behavior.`;
 
+// The second pass, asked with `focus: 'failure_paths'`. Measured 2026-09-24 on mason-v1
+// #4590: in ten runs the main pass never claimed that new code's plain errors reached a
+// catch-all mapper that reports every one as a vendor outage with a retry, even with that
+// mapper's body in calledCode on every turn. Its attention stays on the data path, so the
+// failure path gets a pass of its own rather than a longer list in the main prompt.
+export const failurePathInstruction = `
+This pass has one focus: what happens when something fails. Another pass covers everything else, so record only claims about failure paths.
+For each throw, rejected promise, error result or catch that the change adds or changes, follow the error to where it is finally handled: the catch that receives it, the function that classifies or wraps it, and what the caller, user or agent is told as a result, such as its kind, message, status or retry advice. Read that handler even when the change does not touch it.
+Claim a defect when the outcome is wrong for the failure: an expected condition such as bad input, a missing record or an empty result reported as an outage, a timeout or a retryable error; a retry advised for a failure that retrying cannot fix; an error swallowed so the caller sees success; or a failure reported without what the user needs to correct it.
+If no failure path is wrong, end without claims.`;
+
 // The investigator spends money, so its bound is a reservation rather than a turn
 // count alone: each request is priced before it is made and settled after, and a
 // request that cannot be reserved is not made. costOf keeps the rate card with the
@@ -122,6 +133,8 @@ export interface ClaimLimits {
   // Under measurement (pre-registration 2026-09-23): a claim must name what the code
   // should have carried, and the code checks it. Off until the run set says otherwise.
   requireCorrection?: boolean;
+  // Runs the pass on failure paths only; see failurePathInstruction.
+  focus?: 'failure_paths';
 }
 // Everything here is controller-owned: counts, an allowlisted finish reason, and the
 // structured `ProviderFailure`, which exists precisely because it is safe to persist.
@@ -144,6 +157,9 @@ export interface ClaimTelemetry {
   // run missed a defect took a paid rerun with the transcript on (mason-v1 #4590,
   // 2026-09-24): the answer was that it never opened the file the defect was in.
   reads: { side: 'head' | 'base'; path: string; startLine: number; count: number }[];
+  // The ids of claims the failure-path pass recorded, including any the main pass also
+  // recorded, so what that pass adds can be measured on its own. Combined record only.
+  failurePathClaimIds?: string[];
 }
 export interface ClaimInvestigation {
   claims: Claim[];
@@ -194,7 +210,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
           ? 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.'
           : 'Read the change and its dependencies, then emit every claim you can support with propositions.',
       } });
-      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: contextFor(0), transcript, tools };
+      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: contextFor(0), transcript, tools };
       let inputTokens = await model.count(input, signal);
       signal.throwIfAborted();
       // A long investigation on a real PR outgrows the window: measured 2026-09-21 over
