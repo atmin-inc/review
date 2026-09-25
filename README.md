@@ -123,8 +123,9 @@ Optional [isolated checks](docs/isolated-checks.md) run selected commands and
 verify proposed patches on a configured Linux worker. This private pilot is not
 a hardened isolation boundary for many tenants.
 
-Register an App with repository Contents read, Pull requests write and Checks
-write. Subscribe to Pull request, Push, Issue comment and Check run events. Install it only
+Register an App with repository Contents read, Issues read, Pull requests write and
+Checks write. Issues read is what makes GitHub offer the Issue comment event, which carries
+`/atmin review`. Subscribe to Pull request, Push, Issue comment and Check run events. Install it only
 on the intended repository. Set its webhook to your HTTPS proxy's
 `/webhooks/github`, forwarding to the worker on loopback port 8787.
 
