@@ -68,6 +68,11 @@ export function engineRunner(config: PilotConfig, github: GitHub, settings?: Rev
         await child(['verify', directory, checksPath], childEnvironment(home, {}), signal, checks.length * 120_000 + 30_000);
       }
       return directory;
-    } finally { rmSync(home, { recursive: true, force: true }); }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      // Only the run itself reads the repository copy. Publication, CI refreshes, push reviews
+      // and the dashboard read the JSON records beside it, and a mason-v1 copy is 164-175 MB.
+      rmSync(join(directory, 'source.git'), { recursive: true, force: true });
+    }
   };
 }

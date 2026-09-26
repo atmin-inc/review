@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync, verify } from 'node:crypto';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,7 @@ import { capture } from '../dist/snapshot.js';
 import { Worker, markerFor } from '../dist/github/worker.js';
 import { AppGitHub, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
-import { childEnvironment } from '../dist/github/runner.js';
+import { childEnvironment, engineRunner } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
 import { repository, completed, finding, current } from './helpers.mjs';
 
@@ -314,6 +314,23 @@ test('child environments omit controller secrets and separate source/model crede
   assert.equal(inference.GITHUB_WEBHOOK_SECRET, undefined);
   assert.equal(inference.NODE_OPTIONS, undefined);
   assert.equal(inference.GH_CONFIG_DIR, '/private/job/gh');
+});
+
+// Each review fetches the repository's history into its run directory (164-175 MB for
+// mason-v1, measured 2026-09-26) and nothing else ever deleted it, so a busy repository
+// filled the worker's disk. The JSON records beside it are what everything later reads.
+test('a run keeps its review records but not its copy of the repository, whether or not it finished', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'atmin-runner-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const config = { repository: 'o/r', stateDirectory: root, profile: fileURLToPath(new URL('../profiles/review-luna-openrouter.json', import.meta.url)) };
+  const run = join(root, 'runs', 'job-1');
+  mkdirSync(join(run, 'source.git', 'objects'), { recursive: true });
+  writeFileSync(join(run, 'source.git', 'objects', 'pack'), 'history');
+  writeFileSync(join(run, 'packet.json'), '{}');
+  const stopped = new AbortController(); stopped.abort();
+  await assert.rejects(engineRunner(config, { readToken: async () => 'read-token' })({ id: 'job-1', pr: 1 }, stopped.signal), /cancelled/);
+  assert.equal(existsSync(join(run, 'source.git')), false);
+  assert.equal(existsSync(join(run, 'packet.json')), true);
 });
 
 test('App JWT verifies, installation tokens are repository scoped, forged summary marker is ignored', async () => {

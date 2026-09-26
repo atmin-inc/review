@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
 import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
@@ -228,6 +228,21 @@ test('a push is reviewed incrementally and earlier findings are re-checked, not 
   assert.equal(JSON.parse(readFileSync(join(second, 'carried-claims.json'), 'utf8')).length, 1);
   // A third push carries the finding again, from the carried record this time.
   assert.equal(previousReview(second).claims.length, 1);
+});
+
+// The worker deletes a run's repository copy once the run ends, so a push review must be
+// able to build on the earlier run from its JSON records alone.
+test('a push review builds on an earlier run whose repository copy was deleted', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const first = persist(fixture);
+  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  rmSync(join(first, 'source.git'), { recursive: true });
+  const second = secondPush(t, fixture);
+  writeFileSync(join(second, 'previous.json'), JSON.stringify(previousReview(first)));
+  await runClaimReviewAsResult(second, profile, undefined, model([done()]));
+  const { result } = loadReview(second);
+  assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
 });
 
 // Measured 2026-09-24 on a real push: the fix added a guard that none of the claim's recorded
