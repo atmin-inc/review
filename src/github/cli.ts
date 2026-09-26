@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { readConfig, requiredEnv } from './config.js';
 import { Store } from './store.js';
@@ -10,6 +11,7 @@ import { Repositories, type Repository } from './repositories.js';
 import { Worker } from './worker.js';
 import { engineRunner } from './runner.js';
 import { dashboard } from './dashboard.js';
+import { site } from './site.js';
 import { ReviewSettings, readDashboardConfig } from './settings.js';
 import { readProfile } from '../run.js';
 
@@ -66,8 +68,10 @@ async function main(): Promise<void> {
     }
     return value;
   };
+  const api = dashboardConfig ? dashboard(config, dashboardConfig, store, initial.settings, fetch, repositories, { id: appId, key }) : undefined;
+  const pages = dashboardConfig ? site(fileURLToPath(new URL('../../web/dist', import.meta.url))) : undefined;
   const server = webhookServer(secret, (event, delivery, payload) => dispatchRepositories(entries, entry => runtime(entry).github, event, delivery, payload),
-    dashboardConfig ? dashboard(config, dashboardConfig, store, initial.settings, fetch, repositories) : undefined);
+    api && pages ? async (request, response) => await api(request, response) || pages(request, response) : undefined);
   let stopping = false, cursor = 0;
   const stop = () => { stopping = true; for (const { worker } of workers.values()) worker.stop(); server.close(); };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);

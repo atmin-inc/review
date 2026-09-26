@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { Repositories } from '../dist/github/repositories.js';
 import { Store } from '../dist/github/store.js';
 import { ReviewSettings, readDashboardConfig } from '../dist/github/settings.js';
@@ -13,6 +13,8 @@ import { dashboard, history } from '../dist/github/dashboard.js';
 const origin = 'https://review.example.test';
 const profile = resolve('profiles/smoke-openrouter-free.json');
 const models = [{ id: 'free', label: 'Free', profile: readProfile(profile) }, { id: 'deepseek', label: 'DeepSeek', profile: readProfile(resolve('profiles/baseline-deepseek.json')) }];
+const appKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const accounts = { 99: 'owner', 77: 'other', 300: 'gone' };
 async function setup(t, hosted = false, operators = []) {
   const root = mkdtempSync(join(tmpdir(), 'review-dashboard-'));
   const config = { repository: 'owner/repo', repositoryId: 42, installationId: 99, profile, stateDirectory: root, host: '127.0.0.1', port: 8787, maxReviewsPerDay: 12 };
@@ -26,11 +28,18 @@ async function setup(t, hosted = false, operators = []) {
       assert.equal(init.body.get('redirect_uri'), `${origin}/auth/github/callback`); assert.equal(init.body.get('repository_id'), hosted ? null : '42');
       return Response.json({ access_token: 'ghu_faketoken0123456789', token_type: 'bearer', expires_in: 3600 });
     }
+    if (url.startsWith('https://api.github.com/app/installations?')) {
+      // Only a JWT signed with the App's key lists installations.
+      const [header, payload, signature] = init.headers.Authorization.slice(7).split('.');
+      assert.ok(verify('RSA-SHA256', Buffer.from(`${header}.${payload}`), appKey.publicKey, Buffer.from(signature, 'base64url')));
+      assert.equal(JSON.parse(Buffer.from(payload, 'base64url')).iss, '5076861');
+      return Response.json(state.appInstallations ?? []);
+    }
     assert.equal(init.headers.Authorization, 'Bearer ghu_faketoken0123456789');
     if (state.revoked) return Response.json({}, { status: 401 });
     if (url.includes('/pulls?')) return Response.json([]);
     if (url.endsWith('/user')) return Response.json({ id: state.userId ?? 7, login: 'owner', email: 'private@example.test' });
-    if (url.includes('/user/installations?')) return Response.json({ installations: (state.installations ?? [99]).map(id => ({ id })) });
+    if (url.includes('/user/installations?')) return Response.json({ installations: (state.installations ?? [99]).map(id => ({ id, account: { login: accounts[id], type: id === 77 ? 'User' : 'Organization' } })) });
     if (url.includes('/user/installations/77/repositories')) return Response.json({ repositories: [{ id: 55, full_name: 'other/app', owner: { type: 'Organization' } }] });
     if (url.endsWith('/repos/other/app')) return Response.json({ id: 55, full_name: 'other/app', permissions: { admin: true } });
     if (url.endsWith('/repos/owner/repo') && state.redirectTo) return new Response(null, { status: 301, headers: { Location: state.redirectTo } });
@@ -42,7 +51,8 @@ async function setup(t, hosted = false, operators = []) {
   };
   store.acquire('test-owner');
   const repositories = hosted ? new Repositories(config, store, models, 'test-owner') : undefined;
-  const handler = dashboard(config, { origin, clientId: 'client-id', clientSecret: 'private-secret', models, operators, appSlug: 'atmin-review' }, store, settings, fetcher, repositories);
+  const handler = dashboard(config, { origin, clientId: 'client-id', clientSecret: 'private-secret', models, operators, appSlug: 'atmin-review' }, store, settings, fetcher, repositories,
+    { id: '5076861', key: appKey.privateKey.export({ type: 'pkcs8', format: 'pem' }) });
   const server = createServer(async (req, res) => { if (!await handler(req, res)) { res.writeHead(404); res.end(); } });
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   t.after(async () => { server.closeAllConnections(); await new Promise(done => server.close(done)); repositories?.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
@@ -66,7 +76,7 @@ async function setup(t, hosted = false, operators = []) {
 
 test('OAuth binds browser/state/PKCE/repository; tokens stay server-side; codes cannot replay', async t => {
   const f = await setup(t);
-  assert.deepEqual(await (await f.get('/api/review/v1/session')).json(), { version: 'atmin.review.v1', user: null });
+  assert.deepEqual(await (await f.get('/api/review/v1/session')).json(), { version: 'atmin.review.v1', user: null, installUrl: 'https://github.com/apps/atmin-review/installations/new' });
   assert.equal((await f.get('/api/review/v1/dashboard')).status, 401);
   const flow = await f.begin();
   assert.equal((await f.get(flow.path, 'unrelated=cookie')).headers.get('location'), '/?signin=expired'); assert.equal(f.state.exchanges, 0);
@@ -77,6 +87,10 @@ test('OAuth binds browser/state/PKCE/repository; tokens stay server-side; codes 
   assert.deepEqual(JSON.parse(text).user, { id: 7, login: 'owner' });
   for (const secret of ['ghu_', 'private-secret', 'private@example.test', f.root]) assert.ok(!text.includes(secret));
   assert.equal((await f.get(flow.path, flow.cookie)).headers.get('location'), '/?signin=expired'); assert.equal(f.state.exchanges, 1);
+  // Anyone may sign in, so one GitHub user holds at most five sessions and cannot fill the table.
+  const later = []; for (let i = 0; i < 5; i++) later.push(await f.login());
+  assert.equal((await f.get('/api/review/v1/dashboard', cookie)).status, 401);
+  for (const kept of later) assert.equal((await f.get('/api/review/v1/dashboard', kept)).status, 200);
 });
 
 test('repository admin and actual installation access are required and revalidated', async t => {
@@ -195,8 +209,8 @@ test('hosted connection uses GitHub identity, explicit repository scope, and ind
   const f = await setup(t, true); f.state.second = true;
   const cookie = await f.login();
   const session = await (await f.get('/api/review/v1/session', cookie)).json();
-  assert.equal(session.connections.manageUrl, 'https://github.com/organizations/owner/settings/installations/99');
-  assert.deepEqual(session.connections.repositories, [{ id: 42, name: 'owner/repo', installationId: 99, connected: true }, { id: 43, name: 'owner/second', installationId: 99, connected: false }]);
+  assert.equal(session.connections.installations[0].manageUrl, 'https://github.com/organizations/owner/settings/installations/99');
+  assert.deepEqual(session.connections.repositories, [{ id: 42, name: 'owner/repo', installationId: 99, connected: true, enabled: false }, { id: 43, name: 'owner/second', installationId: 99, connected: false }]);
   assert.equal(session.connections.installUrl, 'https://github.com/apps/atmin-review/installations/new');
   assert.equal((await f.post('enabled', { enabled: true }, cookie)).status, 400);
   assert.equal((await f.post('connect?repository=43', { repository: 'attacker/repo', installation: 999 }, cookie)).status, 200);
@@ -247,28 +261,92 @@ test('sign-in returns to the exact review without allowing redirects or changing
   assert.equal((await f.get('/api/review/v1/reviews/abc?repository=999', cookie)).status, 404);
 });
 
-test('a new installation stays invisible until an operator connects one of its repositories', async t => {
-  // The App installs on any account, and each connected repository spends model budget, so an
-  // installation is approved only when an operator (by GitHub user ID) connects its first repository.
+test('any installation connects its own repositories, up to ten, without an operator', async t => {
+  // Self-serve onboarding: the monthly plan, not an approval, bounds what a new installation spends.
   const f = await setup(t, true, [8]); f.state.installations = [99, 77];
   let cookie = await f.login();
   let session = await (await f.get('/api/review/v1/session', cookie)).json();
-  assert.deepEqual(session.connections.repositories.map(r => r.id), [42]);
-  assert.equal((await f.post('connect?repository=55', {}, cookie)).status, 403);
-  assert.equal(f.repositories.entries.has(55), false);
-  f.state.installations = [77];
-  assert.equal((await f.finish(await f.begin())).response.headers.get('location'), '/?signin=denied');
-  f.state.userId = 8; cookie = await f.login();
-  session = await (await f.get('/api/review/v1/session', cookie)).json();
-  assert.deepEqual(session.connections.repositories.map(r => [r.id, r.installationId, r.connected]), [[55, 77, false]]);
+  assert.equal(session.operator, false);
+  assert.deepEqual(session.connections.installations.map(i => [i.id, i.account, i.manageUrl]), [
+    [99, 'owner', 'https://github.com/organizations/owner/settings/installations/99'], [77, 'other', 'https://github.com/settings/installations/77']]);
+  assert.deepEqual(session.connections.installations[1].plan, { freeReviews: 20, monthlyReviews: 20 });
+  assert.equal(session.connections.installations[1].usage.remaining, 20);
+  assert.deepEqual(session.connections.repositories.map(r => [r.id, r.installationId, r.connected]), [[42, 99, true], [55, 77, false]]);
   assert.equal((await f.post('connect?repository=55', {}, cookie)).status, 200);
   const entry = f.repositories.entries.get(55);
   assert.equal(entry.config.installationId, 77); assert.equal(entry.config.repository, 'other/app');
   assert.equal(entry.config.stateDirectory, join(f.root, 'repositories', '77', '55')); assert.equal(entry.store.enabled(), false);
-  f.state.userId = 7; cookie = await f.login();
   session = await (await f.get('/api/review/v1/session?repository=55', cookie)).json();
   assert.equal(session.repository.id, 55); assert.equal(session.repository.installationId, 77);
+  // A user whose only installation is new signs in; one with none signs in to find the install link.
+  f.state.installations = [77]; cookie = await f.login();
+  assert.deepEqual((await (await f.get('/api/review/v1/session', cookie)).json()).connections.repositories.map(r => r.id), [55]);
+  f.state.installations = []; cookie = await f.login();
+  session = await (await f.get('/api/review/v1/session', cookie)).json();
+  assert.equal(session.repository, null); assert.deepEqual(session.connections.installations, []); assert.deepEqual(session.connections.repositories, []);
+  assert.equal(session.connections.installUrl, 'https://github.com/apps/atmin-review/installations/new');
+  // Operators see only their own installations here; every customer is on the admin panel.
+  f.state.userId = 8; cookie = await f.login();
+  session = await (await f.get('/api/review/v1/session', cookie)).json();
+  assert.equal(session.operator, true); assert.deepEqual(session.connections.repositories, []);
+  f.state.userId = 7; f.state.installations = [99, 77];
+  f.repositories.entries.delete(55); f.repositories.root.db.prepare('DELETE FROM repositories WHERE id=55').run(); entry.store.close();
+  for (let id = 1; id <= 10; id++) f.repositories.connect(1000 + id, `other/r${id}`, 77);
+  cookie = await f.login();
+  const refused = await f.post('connect?repository=55', {}, cookie);
+  assert.equal(refused.status, 409); assert.match((await refused.json()).error, /up to 10 repositories/);
   f.repositories.close();
   const reopened = new Repositories(f.config, f.store, models, 'test-owner');
-  assert.equal(reopened.entries.get(55).config.installationId, 77); reopened.close();
+  assert.equal(reopened.entries.get(1001).config.installationId, 77); reopened.close();
+});
+
+test('the admin panel is operator-only, lists every installation, and plan changes are validated', async t => {
+  const f = await setup(t, true, [8]);
+  f.state.appInstallations = [{ id: 99, account: { login: 'owner', type: 'Organization' }, created_at: '2026-09-25T17:40:00Z', suspended_at: null },
+    { id: 77, account: { login: 'other', type: 'User' }, created_at: '2026-09-26T01:00:00Z', suspended_at: '2026-09-26T02:00:00Z' }];
+  f.repositories.connect(60, 'gone/app', 300);
+  let cookie = await f.login();
+  // A customer is refused without losing their session.
+  assert.deepEqual(await (await f.get('/api/review/v1/admin', cookie)).json(), { error: 'Operator access is required.' });
+  assert.equal((await f.post('admin/plan?installation=99', { freeReviews: 0, monthlyReviews: 1000, multiplier: 1, minimumUsd: 0 }, cookie)).status, 403);
+  assert.equal(f.repositories.plan(99).updatedAt, null);
+  assert.equal((await f.get('/api/review/v1/session', cookie)).status, 200);
+  f.state.userId = 8; cookie = await f.login();
+  // Usage: the first review is free, then max(cost x multiplier, minimum); unsettled cost is counted, not guessed.
+  f.repositories.setPlan(99, { freeReviews: 1, monthlyReviews: 5, multiplier: 2, minimumUsd: .05 }, 8);
+  const now = Date.now(); f.store.enable(true);
+  [[.10, true], [.01, true], [.10, true], [.03, false]].forEach(([usd, settled], i) => {
+    const id = f.store.enqueue(`paid-${i}`, i + 1), directory = join(f.root, `run-${i}`);
+    mkdirSync(directory);
+    writeFileSync(join(directory, 'receipt.json'), JSON.stringify({ profile: models[0].profile, finishedAt: 'now', calls: [{ meteredUsd: usd }, ...(settled ? [] : [{ meteredUsd: null }])] }));
+    f.store.db.prepare("UPDATE jobs SET state='completed', started=?, artifact=? WHERE id=?").run(now - 1000 + i, directory, id);
+  });
+  const admin = await (await f.get('/api/review/v1/admin', cookie)).json();
+  assert.deepEqual(admin.limits, { maxReviewsPerDay: 12, reviewsToday: 4 });
+  assert.deepEqual(admin.installations.map(i => [i.id, i.account, i.accountType, i.suspended, i.removed]),
+    [[99, 'owner', 'Organization', false, false], [77, 'other', 'User', true, false], [300, 'gone', null, false, true]]);
+  const owner = admin.installations[0];
+  assert.deepEqual(owner.usage, { month: owner.usage.month, resetsAt: owner.usage.resetsAt, reviews: 4, remaining: 1, knownUsd: .24, estimatedUsd: .25, unknownCostReviews: 1 });
+  assert.deepEqual(owner.repositories, [{ id: 42, name: 'owner/repo', enabled: true, reviews: 4 }]);
+  assert.equal(owner.plan.custom, true); assert.equal(owner.plan.updatedBy, 8);
+  // Customers see their plan, usage and estimate, but not recorded cost.
+  const own = (await (await f.get('/api/review/v1/session', cookie)).json());
+  f.state.userId = 7; const customer = await (await f.get('/api/review/v1/session', await f.login())).json(); f.state.userId = 8;
+  assert.equal(own.operator, true);
+  assert.deepEqual(customer.connections.installations[0].usage, { month: owner.usage.month, resetsAt: owner.usage.resetsAt, reviews: 4, remaining: 1, estimatedUsd: .25, unknownCostReviews: 1 });
+  for (const bad of [{}, { freeReviews: 1, monthlyReviews: -1, multiplier: 2, minimumUsd: 0 }, { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: 0, installation: 77 }]) {
+    assert.equal((await f.post('admin/plan?installation=77', bad, cookie)).status, 400);
+  }
+  assert.equal((await f.post('admin/plan?installation=77', 'not json', cookie)).status, 400);
+  assert.equal((await f.post('admin/plan?installation=12345', { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: 0 }, cookie)).status, 404);
+  assert.equal((await f.post('admin/plan?installation=77', { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: 0 }, cookie, { Origin: 'https://evil.test' })).status, 403);
+  const saved = await f.post('admin/plan?installation=77', { freeReviews: 20, monthlyReviews: 500, multiplier: 1.1, minimumUsd: 0 }, cookie);
+  assert.equal(saved.status, 200); assert.equal((await saved.json()).usage.remaining, 500);
+  assert.deepEqual(f.repositories.plan(77).plan, { freeReviews: 20, monthlyReviews: 500, multiplier: 1.1, minimumUsd: 0 });
+  assert.equal(f.repositories.plan(77).updatedBy, 8);
+  // A revoked operator token ends the session even though the operator list still names the user.
+  f.state.revoked = true;
+  assert.equal((await f.get('/api/review/v1/admin', cookie)).status, 403);
+  f.state.revoked = false;
+  assert.equal((await f.get('/api/review/v1/admin', cookie)).status, 401);
 });

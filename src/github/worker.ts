@@ -12,6 +12,7 @@ import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
 import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
 import type { ReviewSettings } from './settings.js';
+import { dailyLimitReached } from './repositories.js';
 import { InlineReviews } from './inline.js';
 
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
@@ -20,7 +21,7 @@ export class Worker {
   private checks: Checks;
   private inline: InlineReviews;
   private abort: AbortController | undefined;
-  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve = (job: Job, limit: number) => store.reserve(job, owner, limit), private dashboardOrigin?: string) {
+  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string) {
     this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github);
   }
   stop(): void { this.abort?.abort(); }
@@ -90,8 +91,9 @@ export class Worker {
       await this.checks.publish(job, initial.headSha, { status: 'in_progress', output: { title: 'Review in progress', summary: `Reviewing head ${initial.headSha} against target ${initial.baseSha}.` } });
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       let artifact: string | null = null;
-      if (!this.reserve(job, this.settings?.current().maxReviewsPerDay ?? this.config.maxReviewsPerDay)) {
-        report = '# atmin review — review not run\n\nThe operator’s rolling 24-hour review limit was reached. A maintainer can rerun after capacity is available. No inference was started.';
+      const reserved = this.reserve(job, this.settings?.current().maxReviewsPerDay ?? this.config.maxReviewsPerDay);
+      if (reserved !== true) {
+        report = `# atmin review — review not run\n\n${reserved}`;
       } else {
         artifact = join(this.config.stateDirectory, 'runs', job.id);
         // A crash publishes this honest interruption report; it never starts another model request.
