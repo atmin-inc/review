@@ -82,6 +82,7 @@ for (let n = 1; n <= samples; n++) {
       maxTurns: Number(flag('--turns', 16)), maxToolCalls: profile.maxToolCalls, maxInputTokens: profile.maxInputTokens,
       maxOutputTokens: profile.maxOutputTokens, maxUsd: profile.maxUsd,
       costOf: (input, output) => profile.maxUsd === 0 ? 0 : price(input, output, 0, profile.model), priorTranscript: prior,
+      charged: reply => profile.maxUsd === 0 ? 0 : reply.reportedCostUsd ?? price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model),
       ...(args.includes('--require-correction') ? { requireCorrection: true } : {}),
     });
   } while (++attempts < 3 && !investigation.claims.length && /^Provider response interrupted/.test(investigation.stopReason ?? ''));

@@ -9,7 +9,8 @@ import { sourceText } from '../dist/snapshot.js';
 import { ProviderRequestError } from '../dist/provider-error.js';
 
 const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxInputTokens: 50000, maxOutputTokens: 4096,
-  maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000 };
+  maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000,
+  charged: reply => (reply.inputTokens * 2.5 + reply.outputTokens * 15) / 1_000_000 };
 const action = (name, args) => ({ id: `${name}-${Math.random()}`, name, arguments: JSON.stringify(args) });
 const end = (complete = true, limitations = []) => action('end_investigation', { complete, limitations });
 

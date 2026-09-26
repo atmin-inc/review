@@ -1,7 +1,7 @@
 import { Ajv } from 'ajv';
 import { assignClaimIds, claimRejection, parseLocation, CLAIM_TYPES, type Claim, type ClaimDraft } from './claim.js';
 import { PRIORITIES, ReviewInputError, text as str } from './contracts.js';
-import type { Model, TurnInput } from './investigation.js';
+import type { Model, ModelReply, TurnInput } from './investigation.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import type { Revisions } from './symbolic.js';
 
@@ -120,11 +120,14 @@ If no failure path is wrong, end without claims.`;
 
 // The investigator spends money, so its bound is a reservation rather than a turn
 // count alone: each request is priced before it is made and settled after, and a
-// request that cannot be reserved is not made. costOf keeps the rate card with the
-// caller, which is the only place that knows which provider is answering.
+// request that cannot be reserved is not made. costOf and charged stay with the caller,
+// which is the only place that knows which provider is answering.
 export interface ClaimLimits {
   maxTurns: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number;
   maxUsd: number; costOf(inputTokens: number, outputTokens: number): number;
+  // What the provider charged for a reply, or null when it did not confirm a charge: the
+  // reservation then stands as the spend, and the call counts as unsettled.
+  charged(reply: ModelReply): number | null;
   // Benchmark hooks, off in the product. A recorded transcript is provider and repository
   // text, which nothing else here keeps; the emission bench needs it once per run so that
   // later samples re-ask only the claim-writing step over the same reading, instead of
@@ -175,6 +178,9 @@ export interface ClaimInvestigation {
   toolErrors: { tool: string; reason: string; detail?: string }[];
   stopReason: string | null;
   spentUsd: number;
+  // Requests whose charge is not known: made but unanswered, or answered without a
+  // confirmed charge. While any remain, spentUsd holds reservations and is not a cost.
+  unsettledCalls: number;
   telemetry: ClaimTelemetry;
   // Only when `recordTranscript` is set: every message in order, before any trimming.
   transcript?: unknown[];
@@ -186,7 +192,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const seen = new Set<string>();
   const guided = Array.isArray((context as { targetGuidance?: unknown }).targetGuidance);
   const calling = Array.isArray((context as { calledCode?: unknown }).calledCode);
-  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0,
+  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0, unsettledCalls: 0,
     telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
       finishReason: null, failure: null, reads: [] } };
   const transcript: unknown[] = [...(limits.priorTranscript ?? [])];
@@ -248,16 +254,19 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // The reservation is held until the reply settles it. A request whose outcome
       // is unknown stays charged at its reservation, so an unknown spend is never
       // mistaken for zero.
-      reservation = limits.costOf(inputTokens, limits.maxOutputTokens);
-      if (settled + reservation > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
+      const next = limits.costOf(inputTokens, limits.maxOutputTokens);
+      if (settled + next > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
+      reservation = next;
       outcome.spentUsd = settled + reservation;
       const reply = await model.respond(input, limits.maxOutputTokens, signal);
+      const charge = limits.charged(reply);
+      if (charge === null) outcome.unsettledCalls++;
+      settled += charge ?? reservation;
+      reservation = 0;
       signal.throwIfAborted();
-      settled += limits.costOf(reply.inputTokens, reply.outputTokens);
       outcome.telemetry.inputTokens += reply.inputTokens;
       outcome.telemetry.outputTokens += reply.outputTokens;
       outcome.telemetry.finishReason = reply.status;
-      reservation = 0;
       outcome.spentUsd = settled;
       // 'interrupted' is a stream that died or a provider-side error; 'incomplete' is the
       // model running into `maxOutputTokens` or a content filter. They have different
@@ -359,6 +368,8 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
     outcome.stopReason = reason;
     outcome.complete = false;
     outcome.limitations.push(reason);
+    // A request that was sent but never answered may still be billed.
+    if (reservation) outcome.unsettledCalls++;
     outcome.spentUsd = settled + reservation;
   }
   // Reported once with the total rather than per turn, because a long investigation

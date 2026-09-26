@@ -7,7 +7,7 @@ import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptio
 import { contributionOf, recordedRung, type RungContribution } from './ablation.js';
 import { askJev } from './jev.js';
 import { BALANCED } from './policy.js';
-import { price, subscription, type Model, type Profile } from './investigation.js';
+import { price, subscription, type Model, type ModelReply, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import { parseLocation, type Claim } from './claim.js';
@@ -97,6 +97,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
     toolErrors: [...main.toolErrors, ...focus.toolErrors],
     stopReason: main.stopReason === 'finished' ? focus.stopReason : main.stopReason,
     spentUsd: main.spentUsd + focus.spentUsd,
+    unsettledCalls: main.unsettledCalls + focus.unsettledCalls,
     telemetry: {
       turns: main.telemetry.turns + focus.telemetry.turns,
       toolCalls: main.telemetry.toolCalls + focus.telemetry.toolCalls,
@@ -117,8 +118,22 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
 }
 
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
-  spentUsd: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
+  spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null, reads: [] } });
+
+// Reservations use the rate card; settlement uses what the call cost. OpenRouter reports
+// what it billed for each call, and that is the figure: it charges uncached input at its
+// cache-write price, 25% over the listed input rate, which the rate card cannot know
+// (billing ran 15-20% over the rate card on 2026-09-25). Other providers are priced from
+// the rate card with cached input counted.
+export function charges(profile: Profile) {
+  return {
+    costOf: (input: number, output: number) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
+    charged: (reply: ModelReply): number | null => subscription(profile) ? 0 : profile.provider !== 'openrouter'
+      ? price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model)
+      : typeof reply.reportedCostUsd === 'number' && Number.isFinite(reply.reportedCostUsd) && reply.reportedCostUsd >= 0 ? reply.reportedCostUsd : null,
+  };
+}
 
 // The model a profile names, unless a test or benchmark injects one.
 export function modelFor(profile: Profile, injectedModel?: Model): Model {
@@ -157,8 +172,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const limits = (maxUsd: number) => ({
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
-    maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}),
-    costOf: (input: number, output: number) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
+    maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}), ...charges(profile),
   });
   // Nothing new to read, as when only the target branch moved: no model is asked.
   const main = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, limits(profile.maxUsd), signal);

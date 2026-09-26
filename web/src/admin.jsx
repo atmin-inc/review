@@ -85,7 +85,7 @@ function Customers({ data, onEdit }) {
   return <Card className="panel">
     <CardHeader className="panel-toolbar border-b">
       <h2 className="panel-title">Organizations</h2>
-      <p className="text-[13px] text-muted-foreground">Reviews and cost are for this month. Recorded cost runs below the provider’s bill; billing figures are estimates.</p>
+      <p className="text-[13px] text-muted-foreground">This month so far. Cost is what the model provider billed for each call. Billing applies the plan to reviews past the free allowance, and margin is billing minus cost.</p>
     </CardHeader>
     <AutoHeight>
       <Table className="panel-table">
@@ -95,8 +95,9 @@ function Customers({ data, onEdit }) {
             <TableHead>Account</TableHead>
             <TableHead className="text-right max-md:hidden">Repositories</TableHead>
             <TableHead className="text-right max-md:hidden">Reviews</TableHead>
-            <TableHead className="text-right max-md:hidden">Recorded cost</TableHead>
-            <TableHead className="text-right">Estimated billing</TableHead>
+            <TableHead className="text-right max-md:hidden">Cost</TableHead>
+            <TableHead className="text-right">Billing</TableHead>
+            <TableHead className="text-right max-md:hidden">Margin</TableHead>
             <TableHead className="max-md:hidden">Plan</TableHead>
             <TableHead className="max-md:hidden"><span className="sr-only">Actions</span></TableHead>
           </TableRow>
@@ -130,6 +131,7 @@ function Customers({ data, onEdit }) {
                   <Figure>{usd(usage.estimatedUsd)}</Figure>
                   {usage.unknownCostReviews > 0 && <div className="text-[13px] text-muted-foreground">{usage.unknownCostReviews} unsettled</div>}
                 </TableCell>
+                <TableCell className="text-right max-md:hidden"><Figure>{usd(usage.estimatedUsd - usage.knownUsd)}</Figure></TableCell>
                 <TableCell className="max-md:hidden">
                   <PlanSummary plan={plan}/>
                   {plan.custom && <div className="text-[13px] text-muted-foreground">Custom{plan.updatedBy ? ` · set by ${plan.updatedBy}` : ''}</div>}
@@ -137,7 +139,7 @@ function Customers({ data, onEdit }) {
                 <TableCell className="text-right max-md:hidden"><Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button></TableCell>
               </TableRow>
               {expanded && <TableRow id={`repositories-${installation.id}`} className="hover:bg-transparent">
-                <TableCell colSpan={8} className="bg-muted/40 py-3 whitespace-normal">
+                <TableCell colSpan={9} className="bg-muted/40 py-3 whitespace-normal">
                   {repositories.length
                     ? <ul className="admin-repositories">
                       {repositories.map(repository => <li key={repository.id}>
@@ -151,7 +153,7 @@ function Customers({ data, onEdit }) {
               </TableRow>}
             </Fragment>;
           })}
-          {!data.installations.length && <TableRow><TableCell colSpan={8} className="empty-cell">No organization has installed atmin review.</TableCell></TableRow>}
+          {!data.installations.length && <TableRow><TableCell colSpan={9} className="empty-cell">No organization has installed atmin review.</TableCell></TableRow>}
         </TableBody>
       </Table>
     </AutoHeight>
@@ -164,7 +166,7 @@ function Operator() {
   const data = admin.data;
   const error = admin.error && (admin.error.status === 403 ? operatorOnly : admin.error.message);
   return <>
-    <PageHeader title="Admin">Plans, usage and recorded cost for each organization that installed atmin review.</PageHeader>
+    <PageHeader title="Admin">Plans, usage, cost and billing for each organization that installed atmin review.</PageHeader>
     <div className="grid grid-cols-1 gap-4">
       {error && <Notice tone="error">{error}</Notice>}
       {!data && admin.loading && <Loading>Loading organizations</Loading>}

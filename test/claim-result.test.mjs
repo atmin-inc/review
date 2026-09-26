@@ -108,8 +108,39 @@ test('a withheld minor finding is listed, not published, and a run that stops cl
   assert.ok(result.coverage.every(c => c.status === 'unreviewed'));
   assert.equal(result.findings.length, 1);
   assert.equal(assess(packet, result, current()).scope, 'partial');
-  // Spend on a stopped run may hold a reservation, so it is not shown as metered.
-  assert.equal(JSON.parse(readFileSync(join(stopped, 'receipt.json'), 'utf8')).calls[0].meteredUsd, null);
+  // A run that stopped with every request answered has a known cost; one whose request went
+  // unanswered holds a reservation, which is not shown as metered.
+  const receipt = JSON.parse(readFileSync(join(stopped, 'receipt.json'), 'utf8'));
+  assert.ok(receipt.calls[0].meteredUsd > 0); assert.equal(receipt.calls[0].meteredUsd, receipt.calls[0].reservedUsd);
+  const cut = persist(repository(t)), script = model([action('record_claim', claim('P1'))]);
+  let calls = 0;
+  await runClaimReviewAsResult(cut, profile, undefined, { ...script, async respond(input) { if (++calls === 2) throw new Error('socket hang up'); return script.respond(input); } });
+  assert.equal(JSON.parse(readFileSync(join(cut, 'receipt.json'), 'utf8')).calls[0].meteredUsd, null);
+});
+
+test('OpenRouter spend is what OpenRouter billed for each call, and an unconfirmed charge is never shown as a cost', async t => {
+  // Customers are billed from this figure. OpenRouter charges uncached input at its
+  // cache-write price, 25% over the listed rate, so the rate card undercounted by 15-20%.
+  withoutJev(t);
+  const luna = { ...profile, provider: 'openrouter', model: 'openai/gpt-6-luna' };
+  const billed = (cost) => {
+    const script = model([action('record_claim', claim('P1')), done(), titled]);
+    const made = { calls: 0 };
+    return { made, model: { ...script, async respond(input) { made.calls++; return { ...(await script.respond(input)), model: luna.model, reportedCostUsd: cost }; } } };
+  };
+  const paid = persist(repository(t)), run = billed(0.0125);
+  await runClaimReviewAsResult(paid, luna, undefined, run.model);
+  const receipt = JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8'));
+  assert.equal(receipt.calls.at(-1).purpose, 'titles'); assert.equal(receipt.calls.at(-1).meteredUsd, 0.0125);
+  assert.ok(Math.abs(receipt.calls[0].meteredUsd - 0.0125 * (run.made.calls - 1)) < 1e-12);
+  const view = runView({ repository: 'o/r' }, { id: 'j', pr: 1, state: 'completed', created: 0, started: 1, report: null, artifact: paid });
+  assert.ok(Math.abs(view.usage.totalUsd - 0.0125 * run.made.calls) < 1e-12);
+  // No reported charge: the spend is unknown, so the dashboard and billing count it as unsettled.
+  const unknown = persist(repository(t));
+  await runClaimReviewAsResult(unknown, luna, undefined, billed(undefined).model);
+  const unconfirmed = JSON.parse(readFileSync(join(unknown, 'receipt.json'), 'utf8'));
+  assert.deepEqual(unconfirmed.calls.map(call => call.meteredUsd), [null, null]);
+  assert.equal(runView({ repository: 'o/r' }, { id: 'j', pr: 1, state: 'completed', created: 0, started: 1, report: null, artifact: unknown }).usage.totalUsd, null);
 });
 
 // 128 KB refused 29% of mason-v1's merged PRs. A diff up to 512 KB is reviewed; past that

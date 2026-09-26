@@ -1,12 +1,12 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { charges, modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
 import { git, loadReview, validateAnchor } from './snapshot.js';
 import type { Chain } from './evidence.js';
-import { price, subscription, type Model, type Profile } from './investigation.js';
+import type { Model, Profile } from './investigation.js';
 
 // The claim pipeline, written into the Result and receipt shapes the GitHub worker and
 // the `review` command already publish from. This is the bridge that makes what ships
@@ -135,18 +135,17 @@ export function previousReview(artifact: string): PreviousReview | null {
 }
 
 // The fields the dashboard reads from a receipt, and nothing it would misread. Spend is
-// metered only when the run finished; otherwise it may include an unsettled reservation,
-// and an unknown spend must not be shown as a known one.
+// metered only when every request's charge is known, stopped runs included; otherwise it
+// holds a reservation, and an unknown spend must not be shown as a known one.
 export function claimReceipt(profile: Profile, review: ClaimReview, startedAt: string, finishedAt: string, titling?: Titling) {
   const { investigation } = review;
-  const finished = investigation.stopReason === 'finished';
   return { schemaVersion: 1, pipeline: 'claims', profile, startedAt, finishedAt, stopReason: investigation.stopReason,
     providerFailure: investigation.telemetry.failure, toolCalls: investigation.telemetry.toolCalls, toolErrors: investigation.toolErrors,
     calls: [{ inputTokens: investigation.telemetry.inputTokens, outputTokens: investigation.telemetry.outputTokens, cachedInputTokens: null,
-      reservedUsd: investigation.spentUsd, meteredUsd: finished ? investigation.spentUsd : null, model: profile.model },
-    // The titling call, when one was made: metered only when it answered.
+      reservedUsd: investigation.spentUsd, meteredUsd: investigation.unsettledCalls ? null : investigation.spentUsd, model: profile.model },
+    // The titling call, when one was made: metered only when its charge is known.
     ...(titling && (titling.spentUsd || titling.failure) ? [{ purpose: 'titles', inputTokens: titling.inputTokens, outputTokens: titling.outputTokens,
-      cachedInputTokens: null, reservedUsd: titling.spentUsd, meteredUsd: titling.inputTokens ? titling.spentUsd : null, model: profile.model }] : [])] };
+      cachedInputTokens: null, reservedUsd: titling.spentUsd, meteredUsd: titling.unsettled ? null : titling.spentUsd, model: profile.model }] : [])] };
 }
 
 // One claim review over a prepared snapshot, leaving result.json and receipt.json where
@@ -170,7 +169,7 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   // Titles for the confirmed findings only, from what the claim pass left of the budget.
   const confirmed = new Set(review.verification.chains.filter(chain => chain.verdict === 'confirmed').map(chain => chain.claimId));
   const titling = await titleClaims(review.claims.filter(claim => confirmed.has(claim.claimId) && !earlierTitles[claim.claimId]), modelFor(profile, injectedModel),
-    (input, output) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
+    charges(profile).costOf, charges(profile).charged,
     profile.maxUsd - review.investigation.spentUsd, signal ? AbortSignal.any([signal, deadline]) : deadline);
   const persist = (name: string, value: unknown) => {
     const temporary = join(directory, `${name}.pending`);
