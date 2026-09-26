@@ -11,6 +11,9 @@ test('USD uses two decimals, four under $0.10', () => {
   assert.equal(usd(0.1), '$0.10');
   assert.equal(usd(23.186), '$23.19');
   assert.equal(usd(1234.5), '$1,234.50');
+  // A small negative margin keeps its precision instead of reading as -$0.00.
+  assert.equal(usd(-0.0412), '-$0.0412');
+  assert.equal(usd(-0.3), '-$0.30');
 });
 
 test('unknown cost is never shown as zero', () => {

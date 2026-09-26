@@ -1,7 +1,7 @@
 // Pure display helpers. Figures render in Geist Mono with tabular numbers.
 const usdFormats = new Map();
 export function usd(value) {
-  const digits = value > 0 && value < 0.1 ? 4 : 2;
+  const size = Math.abs(value), digits = size > 0 && size < 0.1 ? 4 : 2;
   if (!usdFormats.has(digits)) usdFormats.set(digits, new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'USD', minimumFractionDigits: digits, maximumFractionDigits: digits,
   }));

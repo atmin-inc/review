@@ -205,11 +205,13 @@ cap still applies to every installation together.
 
 `operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
 by someone else. Operators get `/admin`, which lists every installation of the App (read
-with the App's credentials) with its repositories, reviews this month, recorded model
-cost and estimated charges, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
-reviews off), `multiplier` and `minimumUsd`. Charges are estimated for each review past
-the free ones as the larger of recorded cost times the multiplier and the minimum.
-Recorded cost runs below the provider's bill, and no billing is included. With
+with the App's credentials) with its repositories, reviews this month, model cost,
+billing and margin, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
+reviews off), `multiplier` and `minimumUsd`. Billing for each review past the free ones
+is the larger of its cost times the multiplier and the minimum; no payment is collected.
+On OpenRouter, cost is the amount OpenRouter reports billing for each call, not a rate
+card estimate; a call whose charge is not reported stays unsettled and is left out of
+billing. OpenRouter's fee on credit purchases is not included. With
 `appSlug` set, the dashboard offers the App's install link; set the App's Setup URL to
 the dashboard origin so GitHub returns people there after installing.
 
