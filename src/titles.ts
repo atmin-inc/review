@@ -43,7 +43,7 @@ export interface Titling {
   outputTokens: number;
   // Why no titles were written, as an allowlisted reason. Never provider text: it can
   // carry repository content.
-  failure: 'budget' | 'invalid-reply' | 'incomplete' | 'aborted' | ProviderFailure['kind'] | 'error' | null;
+  failure: 'budget' | 'over-reservation' | 'invalid-reply' | 'incomplete' | 'aborted' | ProviderFailure['kind'] | 'error' | null;
 }
 
 export async function titleClaims(claims: Claim[], model: Model, costOf: (input: number, output: number) => number,
@@ -63,6 +63,9 @@ export async function titleClaims(claims: Claim[], model: Model, costOf: (input:
     outcome.spentUsd = charge ?? reservation; outcome.unsettled = charge === null;
     outcome.inputTokens = reply.inputTokens;
     outcome.outputTokens = reply.outputTokens;
+    // A bill above the reservation broke the budget, as it stops the claim pass: kept as
+    // billed, and the review says why its findings carry no titles.
+    if (charge !== null && charge > reservation + 1e-9) return { ...outcome, failure: 'over-reservation' };
     if (reply.status !== 'completed') return { ...outcome, failure: 'incomplete' };
     const call = reply.calls.find(item => item.name === tool.name);
     let data: unknown;

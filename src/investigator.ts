@@ -300,6 +300,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
         }
         const charge = limits.charged(reply);
         if (charge === null) outcome.unsettledCalls++;
+        const reserved = reservation;
         settled += charge ?? reservation;
         reservation = 0;
         signal.throwIfAborted();
@@ -308,6 +309,10 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
         outcome.telemetry.outputTokens += reply.outputTokens;
         outcome.telemetry.finishReason = reply.status;
         outcome.spentUsd = settled;
+        // The reservation prices the request at the dearest listed rate, so a bill above it
+        // means the rate card or the token count is wrong. The bill is kept as billed, and no
+        // further request is made on a budget that no longer bounds anything.
+        if (charge !== null && charge > reserved + 1e-9) throw new Error('Provider response cost more than its reservation; recorded claims preserved');
         if (reply.status !== 'interrupted' || attempt >= delays.length) break;
         await retry('interrupted', null);
       }
