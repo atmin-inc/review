@@ -1,0 +1,118 @@
+{
+  "project": "shadcn/ui",
+  "base": "Radix",
+  "style": "radix-nova",
+  "retrieved_on": "2026-09-11",
+  "theme": "atmin semantic tokens in src/theme.css",
+  "files": [
+    {
+      "component": "button",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/button.json",
+      "upstream_sha256": "08e5f87833c5db8436e89337ebde0f776bcdbf649d3de69fb89be6441ca2e366",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "input",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/input.json",
+      "upstream_sha256": "75418e030b2a54dd017ac0f4588db4bbdbabca7525e88bbc9d84cb3e18bcb905",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "label",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/label.json",
+      "upstream_sha256": "344bde38b8531615dbf8e14af3895517c24d8ef6ce56ddeda7e2e6fe4b5d0c00",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "tabs",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/tabs.json",
+      "upstream_sha256": "b977274550595594055d850a16775c75761765e1cd76b4827e101c2f432762df",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "dialog",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/dialog.json",
+      "upstream_sha256": "9a4690ab16c37b62c2dd5c023c28fb0fbb262e21fa981f07c679e53e8155acc3",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports",
+        "Lucide close icon"
+      ]
+    },
+    {
+      "component": "switch",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/switch.json",
+      "upstream_sha256": "afd5b6e6b9c2bcd42ee164a39ca18c342b2d7a2dfedd29da3065dc37021090e8",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "badge",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/badge.json",
+      "upstream_sha256": "59953420d01d23d172b4e32583426db153ff09226e2d460d53526b9f25282801",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "card",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/card.json",
+      "upstream_sha256": "645c3d73e387a99f1492220cc619453b0c7f5454134ee3cd548be7a80f7eccde",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "separator",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/separator.json",
+      "upstream_sha256": "b5b5460e5337c2d5f361c1512001615b2e5eacb38c7449a4418bb9ddb47c4bba",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "table",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/table.json",
+      "upstream_sha256": "749b0501e97591f8d7c9ef81366d636e4b47857a15a28e6cf3b87841232e74bf",
+      "adaptations": [
+        "JavaScript source",
+        "Local cn helper and relative imports"
+      ]
+    },
+    {
+      "component": "dropdown-menu",
+      "source": "https://ui.shadcn.com/r/styles/radix-nova/dropdown-menu.json",
+      "upstream_sha256": "19964ff76e458e9ffd22da3e9669449e2ed044902a70fef88b957e20ddc5b314",
+      "adaptations": [
+        "JavaScript",
+        "Local cn helper",
+        "Lucide icons",
+        "Explicit Radix state selectors",
+        "Compact atmin theme"
+      ]
+    }
+  ],
+  "adaptations": [
+    "Explicit Radix data-state and data-orientation selectors for standalone Tailwind",
+    "Tabs orientation forwarded to its primitive",
+    "CardTitle renders a semantic h3",
+    "Atmin sizing, focus, typography and color tokens in theme.css"
+  ]
+}

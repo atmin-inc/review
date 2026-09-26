@@ -393,7 +393,7 @@ test('SDK adapter counts the same stateless tool payload and fixes endpoint/mode
     requests.push({ url: String(url), body: JSON.parse(options.body) });
     if (String(url).endsWith('/input_tokens')) return Response.json({ object: 'response.input_tokens', input_tokens: 10 });
     return Response.json({ id: 'resp_fixture', model: profile.model, status: 'completed',
-      usage: { input_tokens: 10, output_tokens: 5, input_tokens_details: { cached_tokens: 0 } },
+      usage: { input_tokens: 10, output_tokens: 5, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 3 } },
       output: [{ type: 'function_call', call_id: 'tool-1', name: 'finish', arguments: '{}' }] });
   };
   const adapter = openAIModel(profile, 'fixture-key-not-a-real-key', transport);
@@ -401,6 +401,7 @@ test('SDK adapter counts the same stateless tool payload and fixes endpoint/mode
   await adapter.count(input, AbortSignal.timeout(1000));
   const reply = await adapter.respond(input, 4096, AbortSignal.timeout(1000));
   assert.equal(reply.calls[0].name, 'finish');
+  assert.equal(reply.cacheWriteTokens, 3); // Billed above the input rate, so the adapter must carry it.
   assert.deepEqual(requests[0].body.input, requests[1].body.input);
   assert.deepEqual(requests[0].body.tools, requests[1].body.tools);
   assert.equal(requests[1].body.store, false);

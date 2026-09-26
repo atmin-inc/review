@@ -1,7 +1,7 @@
 import { Ajv } from 'ajv';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import type { Claim } from './claim.js';
-import type { Model, TurnInput } from './investigation.js';
+import type { Model, ModelReply, TurnInput } from './investigation.js';
 
 // Short titles for confirmed findings, written after verification (Lors, 2026-09-24).
 // A claim's description is two or three sentences, and publishing it as the title made
@@ -37,16 +37,18 @@ Call record_titles once with every finding.`;
 export interface Titling {
   titles: Record<string, string>;
   spentUsd: number;
+  // The request was made and its charge is not known, so spentUsd is its reservation.
+  unsettled: boolean;
   inputTokens: number;
   outputTokens: number;
   // Why no titles were written, as an allowlisted reason. Never provider text: it can
   // carry repository content.
-  failure: 'budget' | 'invalid-reply' | 'incomplete' | 'aborted' | ProviderFailure['kind'] | 'error' | null;
+  failure: 'budget' | 'over-reservation' | 'invalid-reply' | 'incomplete' | 'aborted' | ProviderFailure['kind'] | 'error' | null;
 }
 
 export async function titleClaims(claims: Claim[], model: Model, costOf: (input: number, output: number) => number,
-  budgetUsd: number, signal: AbortSignal): Promise<Titling> {
-  const outcome: Titling = { titles: {}, spentUsd: 0, inputTokens: 0, outputTokens: 0, failure: null };
+  charged: (reply: ModelReply) => number | null, budgetUsd: number, signal: AbortSignal): Promise<Titling> {
+  const outcome: Titling = { titles: {}, spentUsd: 0, unsettled: false, inputTokens: 0, outputTokens: 0, failure: null };
   if (!claims.length) return outcome;
   const input: TurnInput = { instructions, transcript: [], tools: [tool] as unknown as TurnInput['tools'],
     context: JSON.stringify({ findings: claims.map(claim => ({ claimId: claim.claimId, type: claim.type,
@@ -55,11 +57,15 @@ export async function titleClaims(claims: Claim[], model: Model, costOf: (input:
     const reservation = costOf(await model.count(input, signal), MAX_OUTPUT_TOKENS);
     if (reservation > budgetUsd) return { ...outcome, failure: 'budget' };
     // An unanswered request stays charged at its reservation, as in the claim pass.
-    outcome.spentUsd = reservation;
+    outcome.spentUsd = reservation; outcome.unsettled = true;
     const reply = await model.respond(input, MAX_OUTPUT_TOKENS, signal);
-    outcome.spentUsd = costOf(reply.inputTokens, reply.outputTokens);
+    const charge = charged(reply);
+    outcome.spentUsd = charge ?? reservation; outcome.unsettled = charge === null;
     outcome.inputTokens = reply.inputTokens;
     outcome.outputTokens = reply.outputTokens;
+    // A bill above the reservation broke the budget, as it stops the claim pass: kept as
+    // billed, and the review says why its findings carry no titles.
+    if (charge !== null && charge > reservation + 1e-9) return { ...outcome, failure: 'over-reservation' };
     if (reply.status !== 'completed') return { ...outcome, failure: 'incomplete' };
     const call = reply.calls.find(item => item.name === tool.name);
     let data: unknown;

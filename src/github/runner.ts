@@ -48,7 +48,8 @@ export function engineRunner(config: PilotConfig, github: GitHub, settings?: Rev
     const home = mkdtempSync(join(config.stateDirectory, 'job-home-'));
     try {
       const token = await github.readToken();
-      await child(['capture', `https://github.com/${config.repository}/pull/${job.pr}`, directory], childEnvironment(home, { GH_TOKEN: token }), signal, 130_000);
+      await child(['capture', `https://github.com/${config.repository}/pull/${job.pr}`, directory, join(config.stateDirectory, 'source-cache.git')],
+        childEnvironment(home, { GH_TOKEN: token }), signal, 130_000);
       const earlier = previous ? previousReview(previous) : null;
       if (earlier) writeFileSync(join(directory, 'previous.json'), JSON.stringify(earlier), { mode: 0o600, flag: 'wx' });
       const profilePath = join(directory, 'profile.json');
@@ -68,6 +69,11 @@ export function engineRunner(config: PilotConfig, github: GitHub, settings?: Rev
         await child(['verify', directory, checksPath], childEnvironment(home, {}), signal, checks.length * 120_000 + 30_000);
       }
       return directory;
-    } finally { rmSync(home, { recursive: true, force: true }); }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      // Only the run itself reads its snapshot, which borrows the repository's shared copy.
+      // Publication, CI refreshes, push reviews and the dashboard read the JSON records beside it.
+      rmSync(join(directory, 'source.git'), { recursive: true, force: true });
+    }
   };
 }
