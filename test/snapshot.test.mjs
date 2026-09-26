@@ -1,11 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, renameSync, unlinkSync, symlinkSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, renameSync, unlinkSync, symlinkSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { capture, loadReview, parsePullUrl, readPull, refPath, compareCurrent, prepare, sourceText, searchSource, changedSourceRanges } from '../dist/snapshot.js';
 import { defaultPolicy } from '../dist/contracts.js';
 import { repository, completed, finding, persist } from './helpers.mjs';
+
+// Replace only GitHub's transport with a local Git server fixture. All production
+// capture/fetch arguments still run through the real Git binary. `pull` is read on each
+// call, so a test can push to the PR between two prepares.
+function fakeGitHub(t, f, pull) {
+  f.run('config', 'uploadpack.allowFilter', 'true');
+  const realGit = spawnSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).stdout.trim();
+  const bin = join(f.root, 'bin');
+  mkdirSync(bin);
+  const state = join(f.root, 'pull.json');
+  const write = () => writeFileSync(state, JSON.stringify(pull));
+  write();
+  writeFileSync(join(bin, 'git'), `#!${process.execPath}
+const {spawnSync} = require('node:child_process');
+const args = process.argv.slice(2).map(a => a === 'protocol.file.allow=never' ? 'protocol.file.allow=always' : a === 'https://github.com/test/review-fixture.git' ? ${JSON.stringify('file://' + f.source)} : a);
+const r = spawnSync(${JSON.stringify(realGit)}, args, {stdio: 'inherit'});
+process.exit(r.status ?? 1);
+`, { mode: 0o700 });
+  writeFileSync(join(bin, 'gh'), `#!${process.execPath}
+const pull = JSON.parse(require('node:fs').readFileSync(${JSON.stringify(state)}, 'utf8'));
+console.log(JSON.stringify(process.argv.at(-1).includes('/pulls/')
+  ? {number: 1, state: 'open', head: {sha: pull.headSha}, base: {ref: 'main', repo: {full_name: 'test/review-fixture'}}}
+  : {object: {type: 'commit', sha: pull.baseSha}}));
+`, { mode: 0o700 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${bin}:${originalPath}`;
+  t.after(() => { process.env.PATH = originalPath; });
+  return { realGit, push: headSha => { pull.headSha = headSha; write(); } };
+}
 
 test('prepared snapshots can read unchanged guidance and callers with the remote removed', t => {
   const f = repository(t);
@@ -14,26 +43,7 @@ test('prepared snapshots can read unchanged guidance and callers with the remote
   const baseSha = f.commit('unchanged context');
   f.write('update.ts', 'export const changed = true;\n');
   const headSha = f.commit('reviewed change');
-  f.run('config', 'uploadpack.allowFilter', 'true');
-  const realGit = spawnSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).stdout.trim();
-  const bin = join(f.root, 'bin');
-  mkdirSync(bin);
-  // Replace only GitHub's transport with a local Git server fixture. All
-  // production capture/fetch arguments still run through the real Git binary.
-  writeFileSync(join(bin, 'git'), `#!${process.execPath}
-const {spawnSync} = require('node:child_process');
-const args = process.argv.slice(2).map(a => a === 'protocol.file.allow=never' ? 'protocol.file.allow=always' : a === 'https://github.com/test/review-fixture.git' ? ${JSON.stringify('file://' + f.source)} : a);
-const r = spawnSync(${JSON.stringify(realGit)}, args, {stdio: 'inherit'});
-process.exit(r.status ?? 1);
-`, { mode: 0o700 });
-  writeFileSync(join(bin, 'gh'), `#!${process.execPath}
-console.log(JSON.stringify(process.argv.at(-1).includes('/pulls/')
-  ? {number: 1, state: 'open', head: {sha: ${JSON.stringify(headSha)}}, base: {ref: 'main', repo: {full_name: 'test/review-fixture'}}}
-  : {object: {type: 'commit', sha: ${JSON.stringify(baseSha)}}}));
-`, { mode: 0o700 });
-  const originalPath = process.env.PATH;
-  process.env.PATH = `${bin}:${originalPath}`;
-  t.after(() => { process.env.PATH = originalPath; });
+  const { realGit } = fakeGitHub(t, f, { headSha, baseSha });
   const { directory, packet } = prepare('https://github.com/test/review-fixture/pull/1', join(f.root, 'prepared'));
   const source = join(directory, 'source.git');
   const removed = spawnSync(realGit, ['-C', source, 'remote', 'remove', 'origin'], { encoding: 'utf8' });
@@ -41,6 +51,36 @@ console.log(JSON.stringify(process.argv.at(-1).includes('/pulls/')
   assert.equal(sourceText(source, packet.baseSha, 'AGENTS.md'), 'Review source without executing repository commands.\n');
   assert.equal(sourceText(source, packet.headSha, 'caller.ts'), 'export const caller = "unchanged caller";\n');
   assert.equal(loadReview(directory).packet.headSha, headSha);
+});
+
+// Each review used to download the repository's whole history into its own snapshot:
+// 164-175 MB per review on mason-v1 (measured 2026-09-26), kept or refetched on every push.
+// With a cache, the history is stored once per repository and a push downloads only its commits.
+test('reviews of a repository share one copy of its history, and a push downloads only its own commits', t => {
+  const f = repository(t);
+  const baseSha = f.state.baseSha;
+  const remote = fakeGitHub(t, f, { headSha: f.state.headSha, baseSha });
+  const cache = join(f.root, 'source-cache.git');
+  const objects = repo => Object.fromEntries(spawnSync(remote.realGit, ['-C', repo, 'count-objects', '-v'], { encoding: 'utf8' }).stdout
+    .trim().split('\n').map(line => line.split(': ')).map(([k, v]) => [k, Number(v)]));
+
+  const first = prepare('https://github.com/test/review-fixture/pull/1', join(f.root, 'first'), cache);
+  assert.deepEqual([objects(join(first.directory, 'source.git')).count, objects(join(first.directory, 'source.git'))['in-pack']], [0, 0],
+    'a snapshot holds none of its own objects');
+  assert.equal(loadReview(first.directory).packet.headSha, f.state.headSha);
+  rmSync(join(first.directory, 'source.git'), { recursive: true });
+
+  // Keep what the next fetch receives as a pack, so it can be counted.
+  assert.equal(spawnSync(remote.realGit, ['-C', cache, 'config', 'fetch.unpackLimit', '1']).status, 0);
+  f.write('notes.ts', 'export const note = "added later";\n');
+  remote.push(f.commit('second push'));
+  const second = prepare('https://github.com/test/review-fixture/pull/1', join(f.root, 'second'), cache);
+  assert.equal(objects(cache)['in-pack'], 3, 'the push brought one commit, one tree and one file, not the history again');
+  const source = join(second.directory, 'source.git');
+  assert.equal(sourceText(source, second.packet.headSha, 'notes.ts'), 'export const note = "added later";\n');
+  assert.equal(spawnSync(remote.realGit, ['-C', source, 'merge-base', '--is-ancestor', first.packet.headSha, second.packet.headSha]).status, 0,
+    'a push review can still reach the head the earlier review saw');
+  assert.equal(loadReview(second.directory).packet.baseSha, baseSha);
 });
 
 test('capture reads immutable objects despite a dirty checkout', t => {

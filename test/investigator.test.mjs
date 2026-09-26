@@ -7,9 +7,11 @@ import { verifyClaims } from '../dist/lifecycle.js';
 import { BALANCED } from '../dist/policy.js';
 import { sourceText } from '../dist/snapshot.js';
 import { ProviderRequestError } from '../dist/provider-error.js';
+import { titleClaims } from '../dist/titles.js';
 
 const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxInputTokens: 50000, maxOutputTokens: 4096,
-  maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000 };
+  maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000,
+  charged: reply => (reply.inputTokens * 2.5 + reply.outputTokens * 15) / 1_000_000, retryDelaysMs: [0, 0] };
 const action = (name, args) => ({ id: `${name}-${Math.random()}`, name, arguments: JSON.stringify(args) });
 const end = (complete = true, limitations = []) => action('end_investigation', { complete, limitations });
 
@@ -191,6 +193,7 @@ test('a cut reply says whether it was interrupted or truncated', async t => {
   const interrupted = await investigateClaims(revisions, sourceOf, {}, cut('interrupted'), LIMITS);
   assert.match(interrupted.stopReason, /Provider response interrupted/);
   assert.equal(interrupted.telemetry.finishReason, 'interrupted');
+  assert.equal(interrupted.telemetry.retries.length, 2, 'an interrupted reply is sent twice more before the run stops');
   const truncated = await investigateClaims(revisions, sourceOf, {}, cut('incomplete'), LIMITS);
   assert.match(truncated.stopReason, /Provider response incomplete/);
   assert.equal(truncated.telemetry.finishReason, 'incomplete');
@@ -233,14 +236,78 @@ test('an unexpected failure is reported without its message', async t => {
 // measurement rounds on 2026-09-21, where "Investigation failed" was an empty account.
 test('a provider failure keeps its kind instead of becoming the generic message', async t => {
   const { revisions, sourceOf } = corpus(t);
+  let sent = 0;
   const broke = {
     async count() { return 1000; },
-    async respond() { throw new ProviderRequestError('inference', 402, 'insufficient_quota'); },
+    async respond() { sent++; throw new ProviderRequestError('inference', 402, 'insufficient_quota'); },
     toolOutput: () => ({}),
   };
   const emitted = await investigateClaims(revisions, sourceOf, {}, broke, LIMITS);
   assert.match(emitted.stopReason, /funding/i);
   assert.deepEqual(emitted.telemetry.failure, { kind: 'funding', stage: 'inference', status: 402, code: 'insufficient_quota' });
+  assert.equal(sent, 1, 'an empty account is not asked again: sending again cannot fix it');
+  assert.deepEqual(emitted.telemetry.retries, []);
+});
+
+// One dropped stream or one refused request used to end the whole review: on 2026-09-25
+// single refused calls ended 6 of 8 test reviews, and every claim the run would have
+// recorded after that point was lost. The request is sent again after a wait instead,
+// and the run record says which requests needed it and why.
+test('a dropped reply or an outage is sent again, and the review carries on', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const script = model([action('record_claim', GUARD_CLAIM), end()]);
+  let sent = 0;
+  const shaky = { ...script, async respond(input) {
+    sent++;
+    if (sent === 1) return { model: 'stub', inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0, status: 'interrupted', continuation: [], calls: [] };
+    if (sent === 2) throw new ProviderRequestError('inference', 503);
+    return script.respond(input);
+  } };
+  const emitted = await investigateClaims(revisions, sourceOf, {}, shaky, LIMITS);
+  assert.equal(emitted.stopReason, 'finished');
+  assert.equal(emitted.claims.length, 1);
+  assert.deepEqual(emitted.telemetry.retries, [
+    { turn: 1, reason: 'interrupted', status: null },
+    { turn: 1, reason: 'unavailable', status: 503 },
+  ]);
+  // The unanswered request may still be billed, so its reservation stays in the spend.
+  assert.equal(emitted.unsettledCalls, 1);
+  assert.ok(emitted.spentUsd > 3 * LIMITS.charged({ inputTokens: 1000, outputTokens: 50 }));
+});
+
+// Each request is reserved at the dearest listed rate, and the budget holds only while no
+// bill exceeds its reservation. Since reviews settle at what OpenRouter reports, a bill can:
+// a stale rate card or an undercounted input would then spend past the review's ceiling one
+// request at a time. The bill is kept as billed, so spend is never understated, and the run
+// stops saying why instead of sending more.
+test('a bill above its reservation is recorded as billed and ends the claim pass', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const fake = model([action('record_claim', GUARD_CLAIM), action('record_claim', { ...GUARD_CLAIM, location: 'update.ts:1' }), end()]);
+  const reserved = LIMITS.costOf(1000, LIMITS.maxOutputTokens);
+  let bills = 0;
+  const emitted = await investigateClaims(revisions, sourceOf, {}, fake,
+    { ...LIMITS, charged: () => (++bills === 2 ? reserved * 3 : 0.001) });
+  assert.equal(fake.inputs.length, 2, 'no request is sent after the overbilled one');
+  assert.equal(emitted.stopReason, 'Provider response cost more than its reservation; recorded claims preserved');
+  assert.equal(emitted.claims.length, 1, 'the claim recorded before the overbilled reply is kept');
+  assert.ok(Math.abs(emitted.spentUsd - (0.001 + reserved * 3)) < 1e-12);
+  assert.equal(emitted.unsettledCalls, 0);
+});
+
+test('titles from a call billed above its reservation are not used, and the spend is what was billed', async () => {
+  const claims = [{ claimId: 'claim-1', type: 'auth_bypass', location: 'update.ts:2', description: GUARD_CLAIM.description,
+    suspectedCondition: GUARD_CLAIM.suspectedCondition }];
+  const reply = { model: 'stub', inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0, status: 'completed', continuation: [],
+    calls: [action('record_titles', { titles: [{ claimId: 'claim-1', title: 'Update skips the ownership check' }] })] };
+  const titler = { async count() { return 1000; }, async respond() { return reply; }, toolOutput: (id, value) => ({ id, value }) };
+  const costOf = (input, output) => (input + output) / 1_000_000;
+  const fair = await titleClaims(claims, titler, costOf, () => costOf(1000, 50), 1, new AbortController().signal);
+  assert.deepEqual(fair.titles, { 'claim-1': 'Update skips the ownership check' });
+  const over = await titleClaims(claims, titler, costOf, () => 0.5, 1, new AbortController().signal);
+  assert.deepEqual(over.titles, {});
+  assert.equal(over.failure, 'over-reservation');
+  assert.equal(over.spentUsd, 0.5);
+  assert.equal(over.unsettled, false);
 });
 
 test('a claim carrying a check outside the catalogue is rejected by the schema', async t => {
@@ -284,11 +351,12 @@ test('spending is settled against what the provider actually reported', async t 
 // oldest turns can go instead.
 test('a transcript that outgrows the window is trimmed, not fatal', async t => {
   const { revisions, sourceOf } = corpus(t);
-  // Each turn adds one continuation entry and one tool result, and the count is charged
-  // per transcript entry, so the window is exceeded from the third turn on.
+  // Each turn adds a short budget message, one continuation entry and one tool result. The
+  // count is charged per continuation and tool result, so the window is exceeded from the
+  // third turn on.
   let turns = 0;
   const counting = {
-    async count(input) { return 100 + input.transcript.length * 1000; },
+    async count(input) { return 100 + input.transcript.filter(entry => entry.role !== 'user').length * 1000; },
     async respond() {
       const step = ++turns >= 5 ? end() : action('search_repository', { side: 'head', query: 'update' });
       return { model: 'stub', inputTokens: 100, outputTokens: 50, cachedInputTokens: 0,
@@ -311,7 +379,7 @@ test('a recorded transcript survives trimming, and a prior one is sent first', a
   const { revisions, sourceOf } = corpus(t);
   let turns = 0;
   const counting = {
-    async count(input) { return 100 + input.transcript.length * 1000; },
+    async count(input) { return 100 + input.transcript.filter(entry => entry.role !== 'user').length * 1000; },
     async respond() {
       const step = ++turns >= 5 ? end() : action('search_repository', { side: 'head', query: 'update' });
       return { model: 'stub', inputTokens: 100, outputTokens: 50, cachedInputTokens: 0,
@@ -331,7 +399,34 @@ test('a recorded transcript survives trimming, and a prior one is sent first', a
   const prior = [{ role: 'assistant', content: 'read before' }];
   const resumed = model([end()]);
   await investigateClaims(revisions, sourceOf, {}, resumed, { ...LIMITS, priorTranscript: prior });
-  assert.deepEqual(resumed.inputs[0].transcript, prior);
+  assert.deepEqual(resumed.inputs[0].transcript.slice(0, prior.length), prior);
+});
+
+// A provider reuses a prompt from its cache only when the earlier call's prompt is an exact
+// prefix of the new one. With the turn budget inside the context, nothing after the system
+// prompt was ever reused, and each review paid full price for its whole history on every
+// call (mason-v1 #4420, 2026-09-26). A budget message on every turn fixed the cache but made
+// the model read 2-3x longer, so a message is added only on the last turn.
+test('each call repeats the previous call unchanged and adds to it, so the provider can reuse it from cache', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const search = () => action('search_repository', { side: 'head', query: 'update' });
+  const fake = model([search(), search(), end()], { reply: { cachedInputTokens: 400 } });
+  const outcome = await investigateClaims(revisions, sourceOf, { change: 'fixture' }, fake, { ...LIMITS, maxTurns: 3 });
+  assert.equal(fake.inputs.length, 3);
+  for (let call = 1; call < fake.inputs.length; call++) {
+    const before = fake.inputs[call - 1], after = fake.inputs[call];
+    assert.equal(after.instructions, before.instructions);
+    assert.equal(after.context, before.context);
+    assert.deepEqual(after.transcript.slice(0, before.transcript.length), before.transcript);
+  }
+  // No turn counter reaches the model until the last turn, which says to close out.
+  const messages = fake.inputs.map(input => input.transcript.filter(entry => entry.role === 'user'));
+  assert.deepEqual(messages.slice(0, 2).map(found => found.length), [0, 0]);
+  assert.match(messages[2].at(-1).content, /Call end_investigation now/);
+  assert.equal(fake.inputs[2].transcript.at(-1), messages[2].at(-1));
+  assert.doesNotMatch(fake.inputs[0].context, /remainingTurns/);
+  // Telemetry carries the cache reads, so a cold cache shows up without a paid rerun.
+  assert.equal(outcome.telemetry.cachedInputTokens, 1200);
 });
 
 // The cap still stops a single turn that cannot fit, since there is no older turn to drop

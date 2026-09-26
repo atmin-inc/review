@@ -5,7 +5,7 @@ import { prepare, loadReview, withGitDeadline } from '../snapshot.js';
 import { readProfile } from '../run.js';
 import { runClaimReviewAsResult } from '../claim-result.js';
 
-const [phase, input, output] = process.argv.slice(2);
+const [phase, input, output, cache] = process.argv.slice(2);
 const abort = new AbortController();
 const parent = process.ppid;
 const parentMonitor = setInterval(() => { if (process.ppid !== parent) abort.abort(); }, 1000);
@@ -13,7 +13,7 @@ process.once('SIGTERM', () => abort.abort());
 process.once('SIGINT', () => abort.abort());
 try {
   if (!input || !output) throw new Error('Invalid child arguments');
-  if (phase === 'capture') withGitDeadline(120_000, () => prepare(input, output));
+  if (phase === 'capture') withGitDeadline(120_000, () => prepare(input, output, cache));
   else if (phase === 'investigate') {
     // The claim pipeline, as measured on the Martian development cases (2026-09-24).
     await runClaimReviewAsResult(input, readProfile(output), abort.signal);

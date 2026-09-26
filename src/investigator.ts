@@ -1,7 +1,8 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { Ajv } from 'ajv';
 import { assignClaimIds, claimRejection, parseLocation, CLAIM_TYPES, type Claim, type ClaimDraft } from './claim.js';
 import { PRIORITIES, ReviewInputError, text as str } from './contracts.js';
-import type { Model, TurnInput } from './investigation.js';
+import type { Model, ModelReply, TurnInput } from './investigation.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import type { Revisions } from './symbolic.js';
 
@@ -120,11 +121,14 @@ If no failure path is wrong, end without claims.`;
 
 // The investigator spends money, so its bound is a reservation rather than a turn
 // count alone: each request is priced before it is made and settled after, and a
-// request that cannot be reserved is not made. costOf keeps the rate card with the
-// caller, which is the only place that knows which provider is answering.
+// request that cannot be reserved is not made. costOf and charged stay with the caller,
+// which is the only place that knows which provider is answering.
 export interface ClaimLimits {
   maxTurns: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number;
   maxUsd: number; costOf(inputTokens: number, outputTokens: number): number;
+  // What the provider charged for a reply, or null when it did not confirm a charge: the
+  // reservation then stands as the spend, and the call counts as unsettled.
+  charged(reply: ModelReply): number | null;
   // Benchmark hooks, off in the product. A recorded transcript is provider and repository
   // text, which nothing else here keeps; the emission bench needs it once per run so that
   // later samples re-ask only the claim-writing step over the same reading, instead of
@@ -136,6 +140,8 @@ export interface ClaimLimits {
   requireCorrection?: boolean;
   // Runs the pass on failure paths only; see failurePathInstruction.
   focus?: 'failure_paths';
+  // Waits before each retry of a failed request; its length is the number of retries.
+  retryDelaysMs?: number[];
 }
 // Everything here is controller-owned: counts, an allowlisted finish reason, and the
 // structured `ProviderFailure`, which exists precisely because it is safe to persist.
@@ -151,6 +157,9 @@ export interface ClaimTelemetry {
   toolCallsByName: Record<string, number>;
   droppedTurns: number;
   inputTokens: number;
+  // Input tokens read from the provider's cache, at a tenth of the input price. A low share
+  // means the prompt changed before the cache could be reused.
+  cachedInputTokens: number;
   outputTokens: number;
   finishReason: string | null;
   failure: ProviderFailure | null;
@@ -158,6 +167,9 @@ export interface ClaimTelemetry {
   // run missed a defect took a paid rerun with the transcript on (mason-v1 #4590,
   // 2026-09-24): the answer was that it never opened the file the defect was in.
   reads: { side: 'head' | 'base'; path: string; startLine: number; count: number }[];
+  // Each request that was sent again, and why: an interrupted reply, or a rate limit or
+  // outage with no reply. A retry that also fails leaves its reason in `failure`.
+  retries: { turn: number; reason: 'interrupted' | 'rate-limit' | 'unavailable'; status: number | null }[];
   // The ids of claims the failure-path pass recorded, including any the main pass also
   // recorded, so what that pass adds can be measured on its own. Combined record only.
   failurePathClaimIds?: string[];
@@ -175,6 +187,9 @@ export interface ClaimInvestigation {
   toolErrors: { tool: string; reason: string; detail?: string }[];
   stopReason: string | null;
   spentUsd: number;
+  // Requests whose charge is not known: made but unanswered, or answered without a
+  // confirmed charge. While any remain, spentUsd holds reservations and is not a cost.
+  unsettledCalls: number;
   telemetry: ClaimTelemetry;
   // Only when `recordTranscript` is set: every message in order, before any trimming.
   transcript?: unknown[];
@@ -186,9 +201,9 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const seen = new Set<string>();
   const guided = Array.isArray((context as { targetGuidance?: unknown }).targetGuidance);
   const calling = Array.isArray((context as { calledCode?: unknown }).calledCode);
-  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0,
-    telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
-      finishReason: null, failure: null, reads: [] } };
+  const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0, unsettledCalls: 0,
+    telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
+      finishReason: null, failure: null, reads: [], retries: [] } };
   const transcript: unknown[] = [...(limits.priorTranscript ?? [])];
   // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
   // time rather than mid-exchange. Kept in step with `transcript` by the splice below.
@@ -201,6 +216,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   let done = false;
   let settled = 0;
   let reservation = 0;
+  const delays = limits.retryDelaysMs ?? [10_000, 30_000];
   try {
     for (let turn = 0; turn < limits.maxTurns && !done; turn++) {
       outcome.telemetry.turns = turn + 1;
@@ -209,15 +225,21 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // looking and close out honestly, rather than being cut off mid-investigation.
       const closing = turn === limits.maxTurns - 1 || toolCalls >= limits.maxToolCalls - 1;
       const tools = claimToolDefinitions.filter(tool => closing ? tool.name === 'end_investigation' : true);
-      const contextFor = (dropped: number) => JSON.stringify({ ...(context as object), controllerBudget: {
-        remainingTurns: limits.maxTurns - turn, recordedClaims: drafts.length,
+      // The context is the same on every call, so a provider can read the whole earlier
+      // conversation from its cache. With a turn budget inside it, every call on mason-v1
+      // re-read all but the ~2K-token system prompt at full price (2026-09-26). A message
+      // follows the transcript only when there is news: the last turn, or dropped turns.
+      // A budget message on every turn made the model read 2-3x longer and ship 2-4x more
+      // findings, some of them harmful (three mason-v1 PRs, 2026-09-26).
+      const statusFor = (dropped: number) => !dropped && !closing ? null : ({ role: 'user', content: JSON.stringify({ controllerBudget: {
         ...(dropped ? { droppedEarlierTurns: dropped,
           note: 'The oldest turns were dropped to fit the context window. Recorded claims are kept; re-read anything you still need.' } : {}),
-        instruction: closing
-          ? 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.'
-          : 'Read the change and its dependencies, then emit every claim you can support with propositions.',
-      } });
-      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: contextFor(0), transcript, tools };
+        ...(closing ? { instruction: 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.' } : {}),
+      } }) });
+      roundStart.push(transcript.length);
+      let status = statusFor(0);
+      if (status) append(status);
+      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: JSON.stringify({ ...(context as object), controllerBudget: { instruction: 'Read the change and its dependencies, then emit every claim you can support with propositions.' } }), transcript, tools };
       let inputTokens = await model.count(input, signal);
       signal.throwIfAborted();
       // A long investigation on a real PR outgrows the window: measured 2026-09-21 over
@@ -230,13 +252,15 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // model can redo and loses no finding. A turn is dropped whole, because a tool call
       // separated from its result is not a conversation any provider will accept.
       let dropped = 0;
-      while (Number.isSafeInteger(inputTokens) && inputTokens > limits.maxInputTokens && roundStart.length > 1) {
+      while (Number.isSafeInteger(inputTokens) && inputTokens > limits.maxInputTokens && roundStart.length > 2) {
         const cut = roundStart[1]!;
         transcript.splice(0, cut);
         roundStart.shift();
         for (let index = 0; index < roundStart.length; index++) roundStart[index]! -= cut;
         dropped++;
-        input.context = contextFor(dropped);
+        const next = statusFor(dropped)!;
+        if (status) { transcript[transcript.length - 1] = next; if (recorded) recorded[recorded.length - 1] = next; } else append(next);
+        status = next;
         inputTokens = await model.count(input, signal);
         signal.throwIfAborted();
       }
@@ -248,17 +272,50 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // The reservation is held until the reply settles it. A request whose outcome
       // is unknown stays charged at its reservation, so an unknown spend is never
       // mistaken for zero.
-      reservation = limits.costOf(inputTokens, limits.maxOutputTokens);
-      if (settled + reservation > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
-      outcome.spentUsd = settled + reservation;
-      const reply = await model.respond(input, limits.maxOutputTokens, signal);
-      signal.throwIfAborted();
-      settled += limits.costOf(reply.inputTokens, reply.outputTokens);
-      outcome.telemetry.inputTokens += reply.inputTokens;
-      outcome.telemetry.outputTokens += reply.outputTokens;
-      outcome.telemetry.finishReason = reply.status;
-      reservation = 0;
-      outcome.spentUsd = settled;
+      const next = limits.costOf(inputTokens, limits.maxOutputTokens);
+      // A stream that dies, a rate limit or an outage used to end the whole review on one
+      // request: on 2026-09-25 single refused calls ended 6 of 8 test reviews. The same
+      // request is sent again after a wait. Funding, authentication and rejected requests
+      // are not retried, since sending again cannot fix them.
+      let reply: ModelReply;
+      for (let attempt = 0; ; attempt++) {
+        if (settled + next > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
+        reservation = next;
+        outcome.spentUsd = settled + reservation;
+        const retry = async (reason: ClaimTelemetry['retries'][number]['reason'], status: number | null) => {
+          outcome.telemetry.retries.push({ turn: turn + 1, reason, status });
+          await sleep(delays[attempt]!, undefined, { signal });
+        };
+        try {
+          reply = await model.respond(input, limits.maxOutputTokens, signal);
+        } catch (error) {
+          const kind = error instanceof ProviderRequestError ? error.failure.kind : null;
+          if (signal.aborted || attempt >= delays.length || (kind !== 'rate-limit' && kind !== 'unavailable')) throw error;
+          // Sent but unanswered, so it may still be billed: its reservation stays spent.
+          outcome.unsettledCalls++;
+          settled += reservation;
+          reservation = 0;
+          await retry(kind, (error as ProviderRequestError).failure.status);
+          continue;
+        }
+        const charge = limits.charged(reply);
+        if (charge === null) outcome.unsettledCalls++;
+        const reserved = reservation;
+        settled += charge ?? reservation;
+        reservation = 0;
+        signal.throwIfAborted();
+        outcome.telemetry.inputTokens += reply.inputTokens;
+        outcome.telemetry.cachedInputTokens += reply.cachedInputTokens;
+        outcome.telemetry.outputTokens += reply.outputTokens;
+        outcome.telemetry.finishReason = reply.status;
+        outcome.spentUsd = settled;
+        // The reservation prices the request at the dearest listed rate, so a bill above it
+        // means the rate card or the token count is wrong. The bill is kept as billed, and no
+        // further request is made on a budget that no longer bounds anything.
+        if (charge !== null && charge > reserved + 1e-9) throw new Error('Provider response cost more than its reservation; recorded claims preserved');
+        if (reply.status !== 'interrupted' || attempt >= delays.length) break;
+        await retry('interrupted', null);
+      }
       // 'interrupted' is a stream that died or a provider-side error; 'incomplete' is the
       // model running into `maxOutputTokens` or a content filter. They have different
       // fixes -- one is worth retrying, the other needs a larger output budget or a
@@ -267,7 +324,6 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       if (reply.status !== 'completed') {
         throw new Error(`Provider response ${reply.status === 'interrupted' ? 'interrupted' : 'incomplete'}; recorded claims preserved`);
       }
-      roundStart.push(transcript.length);
       append(...reply.continuation);
       if (!reply.calls.length) {
         append({ role: 'user', content: 'Use the supplied tools. Prose alone emits no claim.' });
@@ -359,6 +415,8 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
     outcome.stopReason = reason;
     outcome.complete = false;
     outcome.limitations.push(reason);
+    // A request that was sent but never answered may still be billed.
+    if (reservation) outcome.unsettledCalls++;
     outcome.spentUsd = settled + reservation;
   }
   // Reported once with the total rather than per turn, because a long investigation

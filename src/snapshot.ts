@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -172,19 +172,48 @@ export function capture(repository: string, identity: PullState): { packet: Pack
 function saveJson(path: string, data: unknown): void {
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
 }
-export function prepare(url: string, output?: string): { directory: string; packet: Packet } {
+function bareRepository(path: string, repository: string): void {
+  mkdirSync(path, { mode: 0o700 });
+  git(path, ['init', '--bare', '--template=']);
+  git(path, ['remote', 'add', 'origin', `https://github.com/${repository}.git`]);
+}
+// One copy of a repository's history, kept for all its reviews, so a review downloads only the
+// commits the copy lacks (a mason-v1 copy is 164-175 MB). Git offers the server only commits a
+// ref points at, so each fetch moves a ref; commits a ref no longer reaches, as after a
+// force-push, must never be collected as garbage. The copy is built aside and renamed into
+// place, so a crash cannot leave a half-made one behind.
+function sourceCache(cache: string, repository: string): string {
+  if (!existsSync(cache)) {
+    const building = mkdtempSync(`${cache}.building-`);
+    try {
+      bareRepository(join(building, 'repository.git'), repository);
+      git(join(building, 'repository.git'), ['config', 'gc.auto', '0']);
+      git(join(building, 'repository.git'), ['config', 'maintenance.auto', 'false']);
+      renameSync(join(building, 'repository.git'), cache);
+    } finally { rmSync(building, { recursive: true, force: true }); }
+  }
+  return cache;
+}
+// With `cache`, the snapshot borrows the cached repository's objects instead of holding its
+// own; the worker runs one review at a time, so fetches into a cache never overlap.
+export function prepare(url: string, output?: string, cache?: string): { directory: string; packet: Packet } {
   const parsed = parsePullUrl(url);
   const current = readPull(parsed.repository, parsed.pr);
   requireValue(current.state === 'open', 'Only open pull requests can be prepared');
   const directory = output ? resolve(output) : mkdtempSync(join(tmpdir(), 'atmin-review-'));
   if (output) mkdirSync(directory, { mode: 0o700 }); // Never overwrite an existing packet/workspace.
   const source = join(directory, 'source.git');
-  mkdirSync(source, { mode: 0o700 });
-  git(source, ['init', '--bare', '--template=']);
-  git(source, ['remote', 'add', 'origin', `https://github.com/${current.repository}.git`]);
+  bareRepository(source, current.repository);
+  const store = cache ? sourceCache(resolve(cache), current.repository) : source;
   // Investigation has no GitHub credential. Capture all objects now so reading
   // unchanged guidance and callers cannot trigger an authenticated lazy fetch.
-  git(source, ['fetch', '--no-tags', 'origin', current.headSha, current.baseSha]);
+  git(store, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', ...(cache
+    ? [`+${current.headSha}:refs/atmin/pull/${current.pr}`, `+${current.baseSha}:refs/atmin/base`]
+    : [current.headSha, current.baseSha])]);
+  if (cache) {
+    mkdirSync(join(source, 'objects', 'info'), { recursive: true });
+    writeFileSync(join(source, 'objects', 'info', 'alternates'), `${join(store, 'objects')}\n`, { mode: 0o600 });
+  }
   const { packet, diff } = capture(source, current);
   requireValue(compareCurrent(packet, readPull(current.repository, current.pr)).status === 'current', 'PR changed during capture; prepare a new snapshot');
   writeFileSync(join(directory, 'change.diff'), diff, { mode: 0o600, flag: 'wx' });

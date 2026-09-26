@@ -58,6 +58,10 @@ below, the same run the GitHub worker publishes. Use `profiles/review-luna-openr
 PRs). It is the measured `martian-luna-openrouter.json` with a larger input cap, so diffs up
 to 512 KB fit with room to read; the benchmark profile keeps the cap it was measured with. Set `TYPESAFE_API_KEY` as well to turn on
 the Jev rung, which is how it was measured; without it the report says the rung was off.
+`profiles/review-luna-openai.json` runs the same model directly on OpenAI with
+`OPENAI_API_KEY`. It has not been measured on a real review yet. Its cost is priced from
+OpenAI's usage, including prompt tokens written to the cache (1.25x input) and the higher
+rate for prompts over 272K tokens.
 Confirmed findings the reviewer rated P3 are listed by location, not shown.
 
 Each run captures immutable commits, reads changed files and relevant callers,
@@ -188,17 +192,33 @@ npx atmin-review-github pause ./pilot.json
 Reconciliation refreshes the saved report and CI without new inference. Pausing
 cancels active work. Failed and cancelled starts count toward the rolling daily
 limit. Stop the service before backups; retain the database and spending receipts.
-Provide snapshot retention and disk limits before widening access. Capture
-fetches repository history, so large repositories can exceed the pilot's capacity.
-No hosted signup, billing, or repository execution is included.
+The worker keeps one copy of each connected repository's history in its state directory
+(`source-cache.git`) and fetches only the commits it lacks. Each run's snapshot borrows
+that copy and is deleted when the run ends; the JSON records stay. Disk limits per account
+are still needed before widening access.
+No billing or repository execution is included.
 
 With `REVIEW_DASHBOARD_CONFIG` pointing at a JSON file (`origin`, `clientId`, `models`,
 and optionally `operators` and `appSlug`) and `GITHUB_OAUTH_CLIENT_SECRET` set, `serve`
-also hosts the dashboard API. Repository administrators sign in with GitHub, connect
-up to ten repositories in total, and pause or configure each one. `operators` lists
-GitHub user IDs, not logins, because a login can be renamed and taken by someone else.
-An operator sees every installation of the App they can access and approves one by
-connecting its first repository. Everyone else sees only approved installations. With
+also hosts the dashboard: the API, and the pages built into `web/dist` by
+`npm run build:web` (pages answer 503 until that build exists). Anyone can install the
+App and sign in with GitHub. Repository administrators connect up to ten repositories
+per installation and pause or configure each one. Each installation is held to a
+monthly plan: 20 reviews per UTC calendar month by default, all free. A review counts
+once inference starts, failed runs included. Past the limit the PR gets a "review not
+run" comment with the reason and no model call is made. The daily `maxReviewsPerDay`
+cap still applies to every installation together.
+
+`operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
+by someone else. Operators get `/admin`, which lists every installation of the App (read
+with the App's credentials) with its repositories, reviews this month, model cost,
+billing and margin, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
+reviews off), `multiplier` and `minimumUsd`. Billing for each review past the free ones
+is the larger of its cost times the multiplier and the minimum; no payment is collected.
+On OpenRouter, cost is the amount OpenRouter reports billing for each call, not a rate
+card estimate; on OpenAI directly, it is priced from the call's usage, cache writes
+included. A call whose charge or cache writes are not reported stays unsettled and is left
+out of billing. OpenRouter's fee on credit purchases is not included. With
 `appSlug` set, the dashboard offers the App's install link; set the App's Setup URL to
 the dashboard origin so GitHub returns people there after installing.
 

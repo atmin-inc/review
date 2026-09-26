@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
 import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
@@ -10,6 +10,7 @@ import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
 import { readVerification } from '../dist/verification.js';
 import { runView } from '../dist/github/dashboard-view.js';
+import { meteredCost, price, reservedCost } from '../dist/investigation.js';
 
 // The GitHub worker and the `review` command publish from result.json. These tests hold
 // the bridge to what the worker needs: a confirmed claim becomes a finding the existing
@@ -108,8 +109,65 @@ test('a withheld minor finding is listed, not published, and a run that stops cl
   assert.ok(result.coverage.every(c => c.status === 'unreviewed'));
   assert.equal(result.findings.length, 1);
   assert.equal(assess(packet, result, current()).scope, 'partial');
-  // Spend on a stopped run may hold a reservation, so it is not shown as metered.
-  assert.equal(JSON.parse(readFileSync(join(stopped, 'receipt.json'), 'utf8')).calls[0].meteredUsd, null);
+  // A run that stopped with every request answered has a known cost; one whose request went
+  // unanswered holds a reservation, which is not shown as metered.
+  const receipt = JSON.parse(readFileSync(join(stopped, 'receipt.json'), 'utf8'));
+  assert.ok(receipt.calls[0].meteredUsd > 0); assert.equal(receipt.calls[0].meteredUsd, receipt.calls[0].reservedUsd);
+  const cut = persist(repository(t)), script = model([action('record_claim', claim('P1'))]);
+  let calls = 0;
+  await runClaimReviewAsResult(cut, profile, undefined, { ...script, async respond(input) { if (++calls === 2) throw new Error('socket hang up'); return script.respond(input); } });
+  assert.equal(JSON.parse(readFileSync(join(cut, 'receipt.json'), 'utf8')).calls[0].meteredUsd, null);
+});
+
+test('OpenRouter spend is what OpenRouter billed for each call, and an unconfirmed charge is never shown as a cost', async t => {
+  // Customers are billed from this figure. OpenRouter charges uncached input at its
+  // cache-write price, 25% over the listed rate, so the rate card undercounted by 15-20%.
+  withoutJev(t);
+  const luna = { ...profile, provider: 'openrouter', model: 'openai/gpt-6-luna' };
+  const billed = (cost) => {
+    const script = model([action('record_claim', claim('P1')), done(), titled]);
+    const made = { calls: 0 };
+    return { made, model: { ...script, async respond(input) { made.calls++; return { ...(await script.respond(input)), model: luna.model, reportedCostUsd: cost }; } } };
+  };
+  // What Luna bills for 1000 uncached input and 50 output tokens, above its listed 0.000125.
+  const paid = persist(repository(t)), run = billed(0.00015);
+  await runClaimReviewAsResult(paid, luna, undefined, run.model);
+  const receipt = JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8'));
+  assert.equal(receipt.calls.at(-1).purpose, 'titles'); assert.equal(receipt.calls.at(-1).meteredUsd, 0.00015);
+  assert.ok(Math.abs(receipt.calls[0].meteredUsd - 0.00015 * (run.made.calls - 1)) < 1e-12);
+  const view = runView({ repository: 'o/r' }, { id: 'j', pr: 1, state: 'completed', created: 0, started: 1, report: null, artifact: paid });
+  assert.ok(Math.abs(view.usage.totalUsd - 0.00015 * run.made.calls) < 1e-12);
+  // No reported charge: the spend is unknown, so the dashboard and billing count it as unsettled.
+  const unknown = persist(repository(t));
+  await runClaimReviewAsResult(unknown, luna, undefined, billed(undefined).model);
+  const unconfirmed = JSON.parse(readFileSync(join(unknown, 'receipt.json'), 'utf8'));
+  assert.deepEqual(unconfirmed.calls.map(call => call.meteredUsd), [null, null]);
+  assert.equal(runView({ repository: 'o/r' }, { id: 'j', pr: 1, state: 'completed', created: 0, started: 1, report: null, artifact: unknown }).usage.totalUsd, null);
+});
+
+test('Luna direct from OpenAI is priced with its cache writes and long-prompt rate, and usage without cache writes is never shown as a cost', async t => {
+  // Customers are billed from this figure. OpenAI bills prompt tokens written to its cache at
+  // 1.25x input, and a prompt over 272K tokens at 2x input and cache rates and 1.5x output.
+  // Pricing either at the plain input rate undercounts, as the OpenRouter rate card did.
+  withoutJev(t);
+  const direct = { ...profile, model: 'gpt-6-luna' };
+  const replying = (usage) => {
+    const script = model([action('record_claim', claim('P1')), done(), titled]);
+    return { ...script, async respond(input) { return { ...(await script.respond(input)), model: direct.model, ...usage }; } };
+  };
+  const paid = persist(repository(t));
+  await runClaimReviewAsResult(paid, direct, undefined, replying({ cachedInputTokens: 600, cacheWriteTokens: 300 }));
+  // 1,000 prompt tokens: 600 read from the cache, 300 written to it, 100 plain; 50 output.
+  assert.ok(Math.abs(JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8')).calls.at(-1).meteredUsd
+    - (100 * 0.1 + 600 * 0.01 + 300 * 0.125 + 50 * 0.5) / 1e6) < 1e-15);
+  assert.ok(Math.abs(price(300_000, 1000, 100_000, 'gpt-6-luna', 50_000) - ((150_000 * 0.1 + 100_000 * 0.01 + 50_000 * 0.125) * 2 + 1000 * 0.75) / 1e6) < 1e-15);
+  assert.equal(price(272_000, 0, 0, 'gpt-6-luna'), 272_000 * 0.1 / 1e6);
+  // The budget reserves the dearest case, every prompt token written to the cache.
+  assert.equal(reservedCost(direct, 1000, 8192), (1000 * 0.125 + 8192 * 0.5) / 1e6);
+  const unknown = persist(repository(t));
+  await runClaimReviewAsResult(unknown, direct, undefined, replying({}));
+  assert.deepEqual(JSON.parse(readFileSync(join(unknown, 'receipt.json'), 'utf8')).calls.map(call => call.meteredUsd), [null, null]);
+  assert.equal(meteredCost(direct, { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 800, cacheWriteTokens: 300 }), null);
 });
 
 // 128 KB refused 29% of mason-v1's merged PRs. A diff up to 512 KB is reviewed; past that
@@ -171,6 +229,21 @@ test('a push is reviewed incrementally and earlier findings are re-checked, not 
   assert.equal(JSON.parse(readFileSync(join(second, 'carried-claims.json'), 'utf8')).length, 1);
   // A third push carries the finding again, from the carried record this time.
   assert.equal(previousReview(second).claims.length, 1);
+});
+
+// The worker deletes a run's repository copy once the run ends, so a push review must be
+// able to build on the earlier run from its JSON records alone.
+test('a push review builds on an earlier run whose repository copy was deleted', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const first = persist(fixture);
+  await runClaimReviewAsResult(first, profile, undefined, model([action('record_claim', claim('P1')), done()]));
+  rmSync(join(first, 'source.git'), { recursive: true });
+  const second = secondPush(t, fixture);
+  writeFileSync(join(second, 'previous.json'), JSON.stringify(previousReview(first)));
+  await runClaimReviewAsResult(second, profile, undefined, model([done()]));
+  const { result } = loadReview(second);
+  assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
 });
 
 // Measured 2026-09-24 on a real push: the fix added a guard that none of the claim's recorded

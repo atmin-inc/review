@@ -38,6 +38,7 @@ export function openAIModel(profile: Profile, apiKey = process.env.OPENAI_API_KE
         responseId: response.id,
         outputTokens: response.usage?.output_tokens ?? NaN,
         cachedInputTokens: response.usage?.input_tokens_details.cached_tokens ?? NaN,
+        cacheWriteTokens: response.usage?.input_tokens_details.cache_write_tokens ?? NaN,
         status: response.status ?? 'unknown', continuation: response.output,
         calls: response.output.filter(item => item.type === 'function_call')
           .map(item => ({ id: item.call_id, name: item.name, arguments: item.arguments })),
