@@ -109,6 +109,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
       finishReason: focus.telemetry.finishReason ?? main.telemetry.finishReason,
       failure: main.telemetry.failure ?? focus.telemetry.failure,
       reads: [...main.telemetry.reads, ...focus.telemetry.reads],
+      retries: [...main.telemetry.retries, ...focus.telemetry.retries],
       failurePathClaimIds: focus.claims.map(claim => claim.claimId),
       failurePathSpentUsd: focus.spentUsd,
       failurePathTurns: focus.telemetry.turns,
@@ -120,7 +121,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
 
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
-    finishReason: null, failure: null, reads: [] } });
+    finishReason: null, failure: null, reads: [], retries: [] } });
 
 // Reservations use the rate card at its dearest; settlement uses what the call cost.
 export function charges(profile: Profile) {

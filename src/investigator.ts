@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { Ajv } from 'ajv';
 import { assignClaimIds, claimRejection, parseLocation, CLAIM_TYPES, type Claim, type ClaimDraft } from './claim.js';
 import { PRIORITIES, ReviewInputError, text as str } from './contracts.js';
@@ -139,6 +140,8 @@ export interface ClaimLimits {
   requireCorrection?: boolean;
   // Runs the pass on failure paths only; see failurePathInstruction.
   focus?: 'failure_paths';
+  // Waits before each retry of a failed request; its length is the number of retries.
+  retryDelaysMs?: number[];
 }
 // Everything here is controller-owned: counts, an allowlisted finish reason, and the
 // structured `ProviderFailure`, which exists precisely because it is safe to persist.
@@ -164,6 +167,9 @@ export interface ClaimTelemetry {
   // run missed a defect took a paid rerun with the transcript on (mason-v1 #4590,
   // 2026-09-24): the answer was that it never opened the file the defect was in.
   reads: { side: 'head' | 'base'; path: string; startLine: number; count: number }[];
+  // Each request that was sent again, and why: an interrupted reply, or a rate limit or
+  // outage with no reply. A retry that also fails leaves its reason in `failure`.
+  retries: { turn: number; reason: 'interrupted' | 'rate-limit' | 'unavailable'; status: number | null }[];
   // The ids of claims the failure-path pass recorded, including any the main pass also
   // recorded, so what that pass adds can be measured on its own. Combined record only.
   failurePathClaimIds?: string[];
@@ -197,7 +203,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const calling = Array.isArray((context as { calledCode?: unknown }).calledCode);
   const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0, unsettledCalls: 0,
     telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
-      finishReason: null, failure: null, reads: [] } };
+      finishReason: null, failure: null, reads: [], retries: [] } };
   const transcript: unknown[] = [...(limits.priorTranscript ?? [])];
   // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
   // time rather than mid-exchange. Kept in step with `transcript` by the splice below.
@@ -210,6 +216,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   let done = false;
   let settled = 0;
   let reservation = 0;
+  const delays = limits.retryDelaysMs ?? [10_000, 30_000];
   try {
     for (let turn = 0; turn < limits.maxTurns && !done; turn++) {
       outcome.telemetry.turns = turn + 1;
@@ -266,20 +273,44 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // is unknown stays charged at its reservation, so an unknown spend is never
       // mistaken for zero.
       const next = limits.costOf(inputTokens, limits.maxOutputTokens);
-      if (settled + next > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
-      reservation = next;
-      outcome.spentUsd = settled + reservation;
-      const reply = await model.respond(input, limits.maxOutputTokens, signal);
-      const charge = limits.charged(reply);
-      if (charge === null) outcome.unsettledCalls++;
-      settled += charge ?? reservation;
-      reservation = 0;
-      signal.throwIfAborted();
-      outcome.telemetry.inputTokens += reply.inputTokens;
-      outcome.telemetry.cachedInputTokens += reply.cachedInputTokens;
-      outcome.telemetry.outputTokens += reply.outputTokens;
-      outcome.telemetry.finishReason = reply.status;
-      outcome.spentUsd = settled;
+      // A stream that dies, a rate limit or an outage used to end the whole review on one
+      // request: on 2026-09-25 single refused calls ended 6 of 8 test reviews. The same
+      // request is sent again after a wait. Funding, authentication and rejected requests
+      // are not retried, since sending again cannot fix them.
+      let reply: ModelReply;
+      for (let attempt = 0; ; attempt++) {
+        if (settled + next > limits.maxUsd) throw new Error('Budget cannot reserve the next request');
+        reservation = next;
+        outcome.spentUsd = settled + reservation;
+        const retry = async (reason: ClaimTelemetry['retries'][number]['reason'], status: number | null) => {
+          outcome.telemetry.retries.push({ turn: turn + 1, reason, status });
+          await sleep(delays[attempt]!, undefined, { signal });
+        };
+        try {
+          reply = await model.respond(input, limits.maxOutputTokens, signal);
+        } catch (error) {
+          const kind = error instanceof ProviderRequestError ? error.failure.kind : null;
+          if (signal.aborted || attempt >= delays.length || (kind !== 'rate-limit' && kind !== 'unavailable')) throw error;
+          // Sent but unanswered, so it may still be billed: its reservation stays spent.
+          outcome.unsettledCalls++;
+          settled += reservation;
+          reservation = 0;
+          await retry(kind, (error as ProviderRequestError).failure.status);
+          continue;
+        }
+        const charge = limits.charged(reply);
+        if (charge === null) outcome.unsettledCalls++;
+        settled += charge ?? reservation;
+        reservation = 0;
+        signal.throwIfAborted();
+        outcome.telemetry.inputTokens += reply.inputTokens;
+        outcome.telemetry.cachedInputTokens += reply.cachedInputTokens;
+        outcome.telemetry.outputTokens += reply.outputTokens;
+        outcome.telemetry.finishReason = reply.status;
+        outcome.spentUsd = settled;
+        if (reply.status !== 'interrupted' || attempt >= delays.length) break;
+        await retry('interrupted', null);
+      }
       // 'interrupted' is a stream that died or a provider-side error; 'incomplete' is the
       // model running into `maxOutputTokens` or a content filter. They have different
       // fixes -- one is worth retrying, the other needs a larger output budget or a
