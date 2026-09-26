@@ -7,6 +7,7 @@ import { verifyClaims } from '../dist/lifecycle.js';
 import { BALANCED } from '../dist/policy.js';
 import { sourceText } from '../dist/snapshot.js';
 import { ProviderRequestError } from '../dist/provider-error.js';
+import { titleClaims } from '../dist/titles.js';
 
 const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxInputTokens: 50000, maxOutputTokens: 4096,
   maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000,
@@ -272,6 +273,41 @@ test('a dropped reply or an outage is sent again, and the review carries on', as
   // The unanswered request may still be billed, so its reservation stays in the spend.
   assert.equal(emitted.unsettledCalls, 1);
   assert.ok(emitted.spentUsd > 3 * LIMITS.charged({ inputTokens: 1000, outputTokens: 50 }));
+});
+
+// Each request is reserved at the dearest listed rate, and the budget holds only while no
+// bill exceeds its reservation. Since reviews settle at what OpenRouter reports, a bill can:
+// a stale rate card or an undercounted input would then spend past the review's ceiling one
+// request at a time. The bill is kept as billed, so spend is never understated, and the run
+// stops saying why instead of sending more.
+test('a bill above its reservation is recorded as billed and ends the claim pass', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const fake = model([action('record_claim', GUARD_CLAIM), action('record_claim', { ...GUARD_CLAIM, location: 'update.ts:1' }), end()]);
+  const reserved = LIMITS.costOf(1000, LIMITS.maxOutputTokens);
+  let bills = 0;
+  const emitted = await investigateClaims(revisions, sourceOf, {}, fake,
+    { ...LIMITS, charged: () => (++bills === 2 ? reserved * 3 : 0.001) });
+  assert.equal(fake.inputs.length, 2, 'no request is sent after the overbilled one');
+  assert.equal(emitted.stopReason, 'Provider response cost more than its reservation; recorded claims preserved');
+  assert.equal(emitted.claims.length, 1, 'the claim recorded before the overbilled reply is kept');
+  assert.ok(Math.abs(emitted.spentUsd - (0.001 + reserved * 3)) < 1e-12);
+  assert.equal(emitted.unsettledCalls, 0);
+});
+
+test('titles from a call billed above its reservation are not used, and the spend is what was billed', async () => {
+  const claims = [{ claimId: 'claim-1', type: 'auth_bypass', location: 'update.ts:2', description: GUARD_CLAIM.description,
+    suspectedCondition: GUARD_CLAIM.suspectedCondition }];
+  const reply = { model: 'stub', inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0, status: 'completed', continuation: [],
+    calls: [action('record_titles', { titles: [{ claimId: 'claim-1', title: 'Update skips the ownership check' }] })] };
+  const titler = { async count() { return 1000; }, async respond() { return reply; }, toolOutput: (id, value) => ({ id, value }) };
+  const costOf = (input, output) => (input + output) / 1_000_000;
+  const fair = await titleClaims(claims, titler, costOf, () => costOf(1000, 50), 1, new AbortController().signal);
+  assert.deepEqual(fair.titles, { 'claim-1': 'Update skips the ownership check' });
+  const over = await titleClaims(claims, titler, costOf, () => 0.5, 1, new AbortController().signal);
+  assert.deepEqual(over.titles, {});
+  assert.equal(over.failure, 'over-reservation');
+  assert.equal(over.spentUsd, 0.5);
+  assert.equal(over.unsettled, false);
 });
 
 test('a claim carrying a check outside the catalogue is rejected by the schema', async t => {

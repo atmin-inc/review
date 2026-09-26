@@ -129,13 +129,14 @@ test('OpenRouter spend is what OpenRouter billed for each call, and an unconfirm
     const made = { calls: 0 };
     return { made, model: { ...script, async respond(input) { made.calls++; return { ...(await script.respond(input)), model: luna.model, reportedCostUsd: cost }; } } };
   };
-  const paid = persist(repository(t)), run = billed(0.0125);
+  // What Luna bills for 1000 uncached input and 50 output tokens, above its listed 0.000125.
+  const paid = persist(repository(t)), run = billed(0.00015);
   await runClaimReviewAsResult(paid, luna, undefined, run.model);
   const receipt = JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8'));
-  assert.equal(receipt.calls.at(-1).purpose, 'titles'); assert.equal(receipt.calls.at(-1).meteredUsd, 0.0125);
-  assert.ok(Math.abs(receipt.calls[0].meteredUsd - 0.0125 * (run.made.calls - 1)) < 1e-12);
+  assert.equal(receipt.calls.at(-1).purpose, 'titles'); assert.equal(receipt.calls.at(-1).meteredUsd, 0.00015);
+  assert.ok(Math.abs(receipt.calls[0].meteredUsd - 0.00015 * (run.made.calls - 1)) < 1e-12);
   const view = runView({ repository: 'o/r' }, { id: 'j', pr: 1, state: 'completed', created: 0, started: 1, report: null, artifact: paid });
-  assert.ok(Math.abs(view.usage.totalUsd - 0.0125 * run.made.calls) < 1e-12);
+  assert.ok(Math.abs(view.usage.totalUsd - 0.00015 * run.made.calls) < 1e-12);
   // No reported charge: the spend is unknown, so the dashboard and billing count it as unsettled.
   const unknown = persist(repository(t));
   await runClaimReviewAsResult(unknown, luna, undefined, billed(undefined).model);
