@@ -10,7 +10,7 @@ import { ProviderRequestError } from '../dist/provider-error.js';
 
 const LIMITS = { maxTurns: 6, maxToolCalls: 20, maxInputTokens: 50000, maxOutputTokens: 4096,
   maxUsd: 1, costOf: (input, output) => (input * 2.5 + output * 15) / 1_000_000,
-  charged: reply => (reply.inputTokens * 2.5 + reply.outputTokens * 15) / 1_000_000 };
+  charged: reply => (reply.inputTokens * 2.5 + reply.outputTokens * 15) / 1_000_000, retryDelaysMs: [0, 0] };
 const action = (name, args) => ({ id: `${name}-${Math.random()}`, name, arguments: JSON.stringify(args) });
 const end = (complete = true, limitations = []) => action('end_investigation', { complete, limitations });
 
@@ -192,6 +192,7 @@ test('a cut reply says whether it was interrupted or truncated', async t => {
   const interrupted = await investigateClaims(revisions, sourceOf, {}, cut('interrupted'), LIMITS);
   assert.match(interrupted.stopReason, /Provider response interrupted/);
   assert.equal(interrupted.telemetry.finishReason, 'interrupted');
+  assert.equal(interrupted.telemetry.retries.length, 2, 'an interrupted reply is sent twice more before the run stops');
   const truncated = await investigateClaims(revisions, sourceOf, {}, cut('incomplete'), LIMITS);
   assert.match(truncated.stopReason, /Provider response incomplete/);
   assert.equal(truncated.telemetry.finishReason, 'incomplete');
@@ -234,14 +235,43 @@ test('an unexpected failure is reported without its message', async t => {
 // measurement rounds on 2026-09-21, where "Investigation failed" was an empty account.
 test('a provider failure keeps its kind instead of becoming the generic message', async t => {
   const { revisions, sourceOf } = corpus(t);
+  let sent = 0;
   const broke = {
     async count() { return 1000; },
-    async respond() { throw new ProviderRequestError('inference', 402, 'insufficient_quota'); },
+    async respond() { sent++; throw new ProviderRequestError('inference', 402, 'insufficient_quota'); },
     toolOutput: () => ({}),
   };
   const emitted = await investigateClaims(revisions, sourceOf, {}, broke, LIMITS);
   assert.match(emitted.stopReason, /funding/i);
   assert.deepEqual(emitted.telemetry.failure, { kind: 'funding', stage: 'inference', status: 402, code: 'insufficient_quota' });
+  assert.equal(sent, 1, 'an empty account is not asked again: sending again cannot fix it');
+  assert.deepEqual(emitted.telemetry.retries, []);
+});
+
+// One dropped stream or one refused request used to end the whole review: on 2026-09-25
+// single refused calls ended 6 of 8 test reviews, and every claim the run would have
+// recorded after that point was lost. The request is sent again after a wait instead,
+// and the run record says which requests needed it and why.
+test('a dropped reply or an outage is sent again, and the review carries on', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const script = model([action('record_claim', GUARD_CLAIM), end()]);
+  let sent = 0;
+  const shaky = { ...script, async respond(input) {
+    sent++;
+    if (sent === 1) return { model: 'stub', inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0, status: 'interrupted', continuation: [], calls: [] };
+    if (sent === 2) throw new ProviderRequestError('inference', 503);
+    return script.respond(input);
+  } };
+  const emitted = await investigateClaims(revisions, sourceOf, {}, shaky, LIMITS);
+  assert.equal(emitted.stopReason, 'finished');
+  assert.equal(emitted.claims.length, 1);
+  assert.deepEqual(emitted.telemetry.retries, [
+    { turn: 1, reason: 'interrupted', status: null },
+    { turn: 1, reason: 'unavailable', status: 503 },
+  ]);
+  // The unanswered request may still be billed, so its reservation stays in the spend.
+  assert.equal(emitted.unsettledCalls, 1);
+  assert.ok(emitted.spentUsd > 3 * LIMITS.charged({ inputTokens: 1000, outputTokens: 50 }));
 });
 
 test('a claim carrying a check outside the catalogue is rejected by the schema', async t => {
