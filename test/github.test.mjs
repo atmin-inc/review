@@ -692,6 +692,23 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
 });
 
 
+test('an organization past its monthly plan gets the reason on its PR and no model run', async t => {
+  const { Repositories } = await import('../dist/github/repositories.js');
+  const { readProfile } = await import('../dist/run.js');
+  const h = await harness(t);
+  h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
+  const repositories = new Repositories(h.config, h.store, [{ id: 'default', label: 'Free', profile: readProfile(h.config.profile) }], 'owner');
+  t.after(() => repositories.close());
+  repositories.setPlan(21, { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: .05 }, 8);
+  const entry = repositories.entries.get(42);
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', entry.settings, (job, limit) => repositories.reserve(entry, job, 'owner', limit));
+  h.store.enqueue('within-plan', 1); await worker.tick();
+  h.store.enqueue('past-plan', 1); await worker.tick();
+  assert.equal(h.counts.runs, 1);
+  assert.match(h.comment.body, /review not run\n\nThis organization reached its limit of 1 reviews for/);
+  assert.equal(h.checks.at(-1).conclusion, 'failure');
+});
+
 test('local execution is scoped by repository and cannot replace trusted CI names', async t => {
   const { readConfig } = await import('../dist/github/config.js');
   const h = state(t), path = join(h.root, 'config.json');

@@ -7,6 +7,7 @@ import { assess, reviewSummary, unverified, type ValidationCheck } from '../asse
 import { compareCurrent } from '../snapshot.js';
 import type { PilotConfig } from './config.js';
 import type { Store, Job } from './store.js';
+import { month, type Repositories } from './repositories.js';
 
 // Only this review-owned projection reads worker state. Raw provider responses,
 // artifact paths, access tokens and operator errors never cross the HTTP boundary.
@@ -36,6 +37,26 @@ export function runView(config: PilotConfig, job: Job) {
   } catch { /* Unknown is not zero, including interrupted receipt writes. */ }
   return { id: job.id, pr: job.pr, state: job.state, createdAt: new Date(job.created).toISOString(), started: job.started !== null,
     head, verdict, usage, url: `https://github.com/${config.repository}/pull/${job.pr}` };
+}
+
+// Reviews that started this UTC month count against the plan, failed ones included. Each beyond
+// the free allowance is estimated at max(recorded cost x multiplier, minimum); recorded cost runs
+// below the provider's bill, and a review whose cost is not settled is counted, not guessed.
+export function monthlyUsage(repositories: Repositories, installation: number, now = Date.now()) {
+  const { plan } = repositories.plan(installation), period = month(now);
+  const started = repositories.started(installation, period.start), perRepository = new Map<number, number>();
+  let knownUsd = 0, estimatedUsd = 0, unknownCostReviews = 0;
+  started.forEach(({ entry, job }, index) => {
+    perRepository.set(entry.config.repositoryId, (perRepository.get(entry.config.repositoryId) ?? 0) + 1);
+    const usage = runView(entry.config, job).usage;
+    knownUsd += usage?.knownUsd ?? 0;
+    if (index < plan.freeReviews) return;
+    if (usage?.totalUsd === null || usage?.totalUsd === undefined) unknownCostReviews++;
+    else estimatedUsd += Math.max(usage.totalUsd * plan.multiplier, plan.minimumUsd);
+  });
+  const usd = (n: number) => Math.round(n * 1e6) / 1e6;
+  return { month: period.name, resetsAt: new Date(period.end).toISOString(), reviews: started.length,
+    remaining: Math.max(0, plan.monthlyReviews - started.length), knownUsd: usd(knownUsd), estimatedUsd: usd(estimatedUsd), unknownCostReviews, perRepository };
 }
 
 export function history(config: PilotConfig, store: Store, pr?: number) {

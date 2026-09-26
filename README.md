@@ -190,15 +190,26 @@ cancels active work. Failed and cancelled starts count toward the rolling daily
 limit. Stop the service before backups; retain the database and spending receipts.
 Provide snapshot retention and disk limits before widening access. Capture
 fetches repository history, so large repositories can exceed the pilot's capacity.
-No hosted signup, billing, or repository execution is included.
+No billing or repository execution is included.
 
 With `REVIEW_DASHBOARD_CONFIG` pointing at a JSON file (`origin`, `clientId`, `models`,
 and optionally `operators` and `appSlug`) and `GITHUB_OAUTH_CLIENT_SECRET` set, `serve`
-also hosts the dashboard API. Repository administrators sign in with GitHub, connect
-up to ten repositories in total, and pause or configure each one. `operators` lists
-GitHub user IDs, not logins, because a login can be renamed and taken by someone else.
-An operator sees every installation of the App they can access and approves one by
-connecting its first repository. Everyone else sees only approved installations. With
+also hosts the dashboard: the API, and the pages built into `web/dist` by
+`npm run build:web` (pages answer 503 until that build exists). Anyone can install the
+App and sign in with GitHub. Repository administrators connect up to ten repositories
+per installation and pause or configure each one. Each installation is held to a
+monthly plan: 20 reviews per UTC calendar month by default, all free. A review counts
+once inference starts, failed runs included. Past the limit the PR gets a "review not
+run" comment with the reason and no model call is made. The daily `maxReviewsPerDay`
+cap still applies to every installation together.
+
+`operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
+by someone else. Operators get `/admin`, which lists every installation of the App (read
+with the App's credentials) with its repositories, reviews this month, recorded model
+cost and estimated charges, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
+reviews off), `multiplier` and `minimumUsd`. Charges are estimated for each review past
+the free ones as the larger of recorded cost times the multiplier and the minimum.
+Recorded cost runs below the provider's bill, and no billing is included. With
 `appSlug` set, the dashboard offers the App's install link; set the App's Setup URL to
 the dashboard origin so GitHub returns people there after installing.
 
