@@ -254,7 +254,8 @@ test('sign-in returns to the exact review without allowing redirects or changing
   const f = await setup(t);
   const { response } = await f.finish(await f.begin('?repository=42&review=abc-123'));
   assert.equal(response.headers.get('location'), '/?repository=42#review/abc-123');
-  for (const query of ['?repository=42&review=https://evil.test', '?repository=42&review=abc&review=def', '?repository=42%0D%0A&review=abc', '?returnTo=https://evil.test']) {
+  assert.equal((await f.finish(await f.begin('?repository=42'))).response.headers.get('location'), '/?repository=42');
+  for (const query of ['?repository=42&review=https://evil.test', '?repository=42&review=abc&review=def', '?repository=42%0D%0A&review=abc', '?returnTo=https://evil.test', '?repository=42&repository=43', '?repository=0']) {
     assert.equal((await f.finish(await f.begin(query))).response.headers.get('location'), '/');
   }
   const { cookie } = await f.finish(await f.begin('?repository=999&review=abc'));

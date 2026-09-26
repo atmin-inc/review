@@ -142,9 +142,9 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         if (flows.size >= 1000) { json(response, 429, { error: 'Sign-in is busy. Try again shortly.' }); return true; }
         const state = random(), verifier = random();
         const repository = url.searchParams.get('repository') ?? '', review = url.searchParams.get('review') ?? '';
-        const returnTo = url.searchParams.getAll('repository').length === 1 && url.searchParams.getAll('review').length === 1
-          && /^[1-9][0-9]{0,15}$/.test(repository) && /^[a-zA-Z0-9-]{1,100}$/.test(review)
-          ? `/?repository=${repository}#review/${review}` : '/';
+        const repositories = url.searchParams.getAll('repository').length, reviews = url.searchParams.getAll('review').length;
+        const returnTo = repositories !== 1 || reviews > 1 || !/^[1-9][0-9]{0,15}$/.test(repository) ? '/'
+          : !reviews ? `/?repository=${repository}` : /^[a-zA-Z0-9-]{1,100}$/.test(review) ? `/?repository=${repository}#review/${review}` : '/';
         flows.set(hash(state), { verifier, expires: Date.now() + 600_000, returnTo });
         response.setHeader('Set-Cookie', cookie(flowCookie, state, 600));
         const query = new URLSearchParams({ client_id: options.clientId, redirect_uri: callback, state,
