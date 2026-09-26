@@ -7,7 +7,7 @@ import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptio
 import { contributionOf, recordedRung, type RungContribution } from './ablation.js';
 import { askJev } from './jev.js';
 import { BALANCED } from './policy.js';
-import { price, subscription, type Model, type ModelReply, type Profile } from './investigation.js';
+import { meteredCost, reservedCost, subscription, type Model, type ModelReply, type Profile } from './investigation.js';
 import { openAIModel } from './openai-model.js';
 import { openRouterModel } from './openrouter-model.js';
 import { parseLocation, type Claim } from './claim.js';
@@ -121,17 +121,11 @@ const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitation
   spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null, reads: [] } });
 
-// Reservations use the rate card; settlement uses what the call cost. OpenRouter reports
-// what it billed for each call, and that is the figure: it charges uncached input at its
-// cache-write price, 25% over the listed input rate, which the rate card cannot know
-// (billing ran 15-20% over the rate card on 2026-09-25). Other providers are priced from
-// the rate card with cached input counted.
+// Reservations use the rate card at its dearest; settlement uses what the call cost.
 export function charges(profile: Profile) {
   return {
-    costOf: (input: number, output: number) => subscription(profile) ? 0 : price(input, output, 0, profile.model),
-    charged: (reply: ModelReply): number | null => subscription(profile) ? 0 : profile.provider !== 'openrouter'
-      ? price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model)
-      : typeof reply.reportedCostUsd === 'number' && Number.isFinite(reply.reportedCostUsd) && reply.reportedCostUsd >= 0 ? reply.reportedCostUsd : null,
+    costOf: (input: number, output: number) => reservedCost(profile, input, output),
+    charged: (reply: ModelReply): number | null => meteredCost(profile, reply),
   };
 }
 

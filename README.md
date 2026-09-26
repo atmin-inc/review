@@ -58,6 +58,10 @@ below, the same run the GitHub worker publishes. Use `profiles/review-luna-openr
 PRs). It is the measured `martian-luna-openrouter.json` with a larger input cap, so diffs up
 to 512 KB fit with room to read; the benchmark profile keeps the cap it was measured with. Set `TYPESAFE_API_KEY` as well to turn on
 the Jev rung, which is how it was measured; without it the report says the rung was off.
+`profiles/review-luna-openai.json` runs the same model directly on OpenAI with
+`OPENAI_API_KEY`. It has not been measured on a real review yet. Its cost is priced from
+OpenAI's usage, including prompt tokens written to the cache (1.25x input) and the higher
+rate for prompts over 272K tokens.
 Confirmed findings the reviewer rated P3 are listed by location, not shown.
 
 Each run captures immutable commits, reads changed files and relevant callers,
@@ -210,8 +214,9 @@ billing and margin, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
 reviews off), `multiplier` and `minimumUsd`. Billing for each review past the free ones
 is the larger of its cost times the multiplier and the minimum; no payment is collected.
 On OpenRouter, cost is the amount OpenRouter reports billing for each call, not a rate
-card estimate; a call whose charge is not reported stays unsettled and is left out of
-billing. OpenRouter's fee on credit purchases is not included. With
+card estimate; on OpenAI directly, it is priced from the call's usage, cache writes
+included. A call whose charge or cache writes are not reported stays unsettled and is left
+out of billing. OpenRouter's fee on credit purchases is not included. With
 `appSlug` set, the dashboard offers the App's install link; set the App's Setup URL to
 the dashboard origin so GitHub returns people there after installing.
 
