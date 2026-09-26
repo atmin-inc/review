@@ -285,11 +285,12 @@ test('spending is settled against what the provider actually reported', async t 
 // oldest turns can go instead.
 test('a transcript that outgrows the window is trimmed, not fatal', async t => {
   const { revisions, sourceOf } = corpus(t);
-  // Each turn adds one continuation entry and one tool result, and the count is charged
-  // per transcript entry, so the window is exceeded from the third turn on.
+  // Each turn adds a short budget message, one continuation entry and one tool result. The
+  // count is charged per continuation and tool result, so the window is exceeded from the
+  // third turn on.
   let turns = 0;
   const counting = {
-    async count(input) { return 100 + input.transcript.length * 1000; },
+    async count(input) { return 100 + input.transcript.filter(entry => entry.role !== 'user').length * 1000; },
     async respond() {
       const step = ++turns >= 5 ? end() : action('search_repository', { side: 'head', query: 'update' });
       return { model: 'stub', inputTokens: 100, outputTokens: 50, cachedInputTokens: 0,
@@ -312,7 +313,7 @@ test('a recorded transcript survives trimming, and a prior one is sent first', a
   const { revisions, sourceOf } = corpus(t);
   let turns = 0;
   const counting = {
-    async count(input) { return 100 + input.transcript.length * 1000; },
+    async count(input) { return 100 + input.transcript.filter(entry => entry.role !== 'user').length * 1000; },
     async respond() {
       const step = ++turns >= 5 ? end() : action('search_repository', { side: 'head', query: 'update' });
       return { model: 'stub', inputTokens: 100, outputTokens: 50, cachedInputTokens: 0,
@@ -332,7 +333,34 @@ test('a recorded transcript survives trimming, and a prior one is sent first', a
   const prior = [{ role: 'assistant', content: 'read before' }];
   const resumed = model([end()]);
   await investigateClaims(revisions, sourceOf, {}, resumed, { ...LIMITS, priorTranscript: prior });
-  assert.deepEqual(resumed.inputs[0].transcript, prior);
+  assert.deepEqual(resumed.inputs[0].transcript.slice(0, prior.length), prior);
+});
+
+// A provider reuses a prompt from its cache only when the earlier call's prompt is an exact
+// prefix of the new one. With the turn budget inside the context, nothing after the system
+// prompt was ever reused, and each review paid full price for its whole history on every
+// call (mason-v1 #4420, 2026-09-26). A budget message on every turn fixed the cache but made
+// the model read 2-3x longer, so a message is added only on the last turn.
+test('each call repeats the previous call unchanged and adds to it, so the provider can reuse it from cache', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const search = () => action('search_repository', { side: 'head', query: 'update' });
+  const fake = model([search(), search(), end()], { reply: { cachedInputTokens: 400 } });
+  const outcome = await investigateClaims(revisions, sourceOf, { change: 'fixture' }, fake, { ...LIMITS, maxTurns: 3 });
+  assert.equal(fake.inputs.length, 3);
+  for (let call = 1; call < fake.inputs.length; call++) {
+    const before = fake.inputs[call - 1], after = fake.inputs[call];
+    assert.equal(after.instructions, before.instructions);
+    assert.equal(after.context, before.context);
+    assert.deepEqual(after.transcript.slice(0, before.transcript.length), before.transcript);
+  }
+  // No turn counter reaches the model until the last turn, which says to close out.
+  const messages = fake.inputs.map(input => input.transcript.filter(entry => entry.role === 'user'));
+  assert.deepEqual(messages.slice(0, 2).map(found => found.length), [0, 0]);
+  assert.match(messages[2].at(-1).content, /Call end_investigation now/);
+  assert.equal(fake.inputs[2].transcript.at(-1), messages[2].at(-1));
+  assert.doesNotMatch(fake.inputs[0].context, /remainingTurns/);
+  // Telemetry carries the cache reads, so a cold cache shows up without a paid rerun.
+  assert.equal(outcome.telemetry.cachedInputTokens, 1200);
 });
 
 // The cap still stops a single turn that cannot fit, since there is no older turn to drop

@@ -154,6 +154,9 @@ export interface ClaimTelemetry {
   toolCallsByName: Record<string, number>;
   droppedTurns: number;
   inputTokens: number;
+  // Input tokens read from the provider's cache, at a tenth of the input price. A low share
+  // means the prompt changed before the cache could be reused.
+  cachedInputTokens: number;
   outputTokens: number;
   finishReason: string | null;
   failure: ProviderFailure | null;
@@ -193,7 +196,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const guided = Array.isArray((context as { targetGuidance?: unknown }).targetGuidance);
   const calling = Array.isArray((context as { calledCode?: unknown }).calledCode);
   const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0, unsettledCalls: 0,
-    telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
+    telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
       finishReason: null, failure: null, reads: [] } };
   const transcript: unknown[] = [...(limits.priorTranscript ?? [])];
   // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
@@ -215,15 +218,21 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // looking and close out honestly, rather than being cut off mid-investigation.
       const closing = turn === limits.maxTurns - 1 || toolCalls >= limits.maxToolCalls - 1;
       const tools = claimToolDefinitions.filter(tool => closing ? tool.name === 'end_investigation' : true);
-      const contextFor = (dropped: number) => JSON.stringify({ ...(context as object), controllerBudget: {
-        remainingTurns: limits.maxTurns - turn, recordedClaims: drafts.length,
+      // The context is the same on every call, so a provider can read the whole earlier
+      // conversation from its cache. With a turn budget inside it, every call on mason-v1
+      // re-read all but the ~2K-token system prompt at full price (2026-09-26). A message
+      // follows the transcript only when there is news: the last turn, or dropped turns.
+      // A budget message on every turn made the model read 2-3x longer and ship 2-4x more
+      // findings, some of them harmful (three mason-v1 PRs, 2026-09-26).
+      const statusFor = (dropped: number) => !dropped && !closing ? null : ({ role: 'user', content: JSON.stringify({ controllerBudget: {
         ...(dropped ? { droppedEarlierTurns: dropped,
           note: 'The oldest turns were dropped to fit the context window. Recorded claims are kept; re-read anything you still need.' } : {}),
-        instruction: closing
-          ? 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.'
-          : 'Read the change and its dependencies, then emit every claim you can support with propositions.',
-      } });
-      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: contextFor(0), transcript, tools };
+        ...(closing ? { instruction: 'Source tools are now unavailable. Call end_investigation now and disclose unresolved work with complete=false.' } : {}),
+      } }) });
+      roundStart.push(transcript.length);
+      let status = statusFor(0);
+      if (status) append(status);
+      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: JSON.stringify({ ...(context as object), controllerBudget: { instruction: 'Read the change and its dependencies, then emit every claim you can support with propositions.' } }), transcript, tools };
       let inputTokens = await model.count(input, signal);
       signal.throwIfAborted();
       // A long investigation on a real PR outgrows the window: measured 2026-09-21 over
@@ -236,13 +245,15 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // model can redo and loses no finding. A turn is dropped whole, because a tool call
       // separated from its result is not a conversation any provider will accept.
       let dropped = 0;
-      while (Number.isSafeInteger(inputTokens) && inputTokens > limits.maxInputTokens && roundStart.length > 1) {
+      while (Number.isSafeInteger(inputTokens) && inputTokens > limits.maxInputTokens && roundStart.length > 2) {
         const cut = roundStart[1]!;
         transcript.splice(0, cut);
         roundStart.shift();
         for (let index = 0; index < roundStart.length; index++) roundStart[index]! -= cut;
         dropped++;
-        input.context = contextFor(dropped);
+        const next = statusFor(dropped)!;
+        if (status) { transcript[transcript.length - 1] = next; if (recorded) recorded[recorded.length - 1] = next; } else append(next);
+        status = next;
         inputTokens = await model.count(input, signal);
         signal.throwIfAborted();
       }
@@ -265,6 +276,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       reservation = 0;
       signal.throwIfAborted();
       outcome.telemetry.inputTokens += reply.inputTokens;
+      outcome.telemetry.cachedInputTokens += reply.cachedInputTokens;
       outcome.telemetry.outputTokens += reply.outputTokens;
       outcome.telemetry.finishReason = reply.status;
       outcome.spentUsd = settled;
@@ -276,7 +288,6 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       if (reply.status !== 'completed') {
         throw new Error(`Provider response ${reply.status === 'interrupted' ? 'interrupted' : 'incomplete'}; recorded claims preserved`);
       }
-      roundStart.push(transcript.length);
       append(...reply.continuation);
       if (!reply.calls.length) {
         append({ role: 'user', content: 'Use the supplied tools. Prose alone emits no claim.' });

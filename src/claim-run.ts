@@ -104,6 +104,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
       toolCallsByName: byName,
       droppedTurns: main.telemetry.droppedTurns + focus.telemetry.droppedTurns,
       inputTokens: main.telemetry.inputTokens + focus.telemetry.inputTokens,
+      cachedInputTokens: main.telemetry.cachedInputTokens + focus.telemetry.cachedInputTokens,
       outputTokens: main.telemetry.outputTokens + focus.telemetry.outputTokens,
       finishReason: focus.telemetry.finishReason ?? main.telemetry.finishReason,
       failure: main.telemetry.failure ?? focus.telemetry.failure,
@@ -118,7 +119,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
 }
 
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
-  spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, outputTokens: 0,
+  spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null, reads: [] } });
 
 // Reservations use the rate card at its dearest; settlement uses what the call cost.
