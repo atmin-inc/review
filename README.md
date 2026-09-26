@@ -192,8 +192,9 @@ npx atmin-review-github pause ./pilot.json
 Reconciliation refreshes the saved report and CI without new inference. Pausing
 cancels active work. Failed and cancelled starts count toward the rolling daily
 limit. Stop the service before backups; retain the database and spending receipts.
-Provide snapshot retention and disk limits before widening access. Capture
-fetches repository history, so large repositories can exceed the pilot's capacity.
+Capture fetches repository history into the run directory, and the worker deletes that
+copy when the run ends, keeping the JSON records. Disk limits per account are still
+needed before widening access.
 No billing or repository execution is included.
 
 With `REVIEW_DASHBOARD_CONFIG` pointing at a JSON file (`origin`, `clientId`, `models`,
