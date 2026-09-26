@@ -12,7 +12,7 @@ interface Limits {
   maxUsd: number;
   maxTurns: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number; deadlineMs: number;
 }
-export type Profile = Limits & ({ provider: 'openai'; model: 'gpt-5.4-2026-03-05' }
+export type Profile = Limits & ({ provider: 'openai'; model: 'gpt-5.4-2026-03-05' | 'gpt-6-luna' }
   | { provider: 'codex-local'; model: 'gpt-5.6-sol' }
   | { provider: 'claude-local'; model: ClaudeModel }
   | { provider: 'openrouter'; model: 'cohere/north-mini-code:free' | 'deepseek/deepseek-v3.2' | 'anthropic/claude-sonnet-5' | 'openai/gpt-6-luna' });
@@ -31,7 +31,8 @@ const limitsSchema = {
 };
 const profileValidator = ajv.compile<Profile>({ oneOf: [obj({ ...limitsSchema,
   provider: { const: 'openai' }, model: { const: 'gpt-5.4-2026-03-05' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 },
-}), obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'cohere/north-mini-code:free' }, maxUsd: { const: 0 } }),
+}), obj({ ...limitsSchema, provider: { const: 'openai' }, model: { const: 'gpt-6-luna' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
+obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'cohere/north-mini-code:free' }, maxUsd: { const: 0 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'deepseek/deepseek-v3.2' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'anthropic/claude-sonnet-5' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 5 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'openai/gpt-6-luna' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
@@ -88,6 +89,8 @@ export interface ModelReply {
   status: string; continuation: unknown[];
   calls: { id: string; name: string; arguments: string }[];
   reportedCostUsd?: number;
+  // Prompt tokens written to the provider's cache, which OpenAI bills above the input rate.
+  cacheWriteTokens?: number;
   responseId?: string;
 }
 export interface Model {
@@ -102,7 +105,7 @@ export interface Receipt {
   discovery: { complete: boolean; limitations: string[]; finishedAt: string } | null;
   inputCountKind: 'exact' | 'conservative-estimate';
   providerFailure: ProviderFailure | null;
-  rateCard: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; outputPerMillionUsd: number; checkedAt: string; source: string; providerRoute?: string; billing?: 'subscription' };
+  rateCard: { inputPerMillionUsd: number; cachedInputPerMillionUsd: number; cacheWritePerMillionUsd?: number; outputPerMillionUsd: number; checkedAt: string; source: string; providerRoute?: string; billing?: 'subscription' };
   startedAt: string; finishedAt: string | null; stopReason: string | null;
   // Reservation is retained if usage is unavailable; do not mistake unknown spend for zero.
   calls: { inputTokens: number; outputTokens: number | null; cachedInputTokens: number | null;
@@ -110,10 +113,33 @@ export interface Receipt {
   toolCalls: number;
   toolErrors: { tool: string; reason: string }[];
 }
-export const price = (input: number, output: number, cached = 0, model: Profile['model'] = 'gpt-5.4-2026-03-05'): number =>
+// Luna at OpenAI's standard rates, direct or on OpenRouter's pinned openai route. Prompt
+// tokens written to the cache cost 1.25x input; a prompt over 272K tokens costs 2x input and
+// cache rates and 1.5x output for the whole request (developers.openai.com, 2026-09-26).
+const luna = (input: number, output: number, cached: number, writes: number) => {
+  const long = input > 272_000;
+  return (((input - cached - writes) * 0.1 + cached * 0.01 + writes * 0.125) * (long ? 2 : 1) + output * 0.5 * (long ? 1.5 : 1)) / 1_000_000;
+};
+export const price = (input: number, output: number, cached = 0, model: Profile['model'] = 'gpt-5.4-2026-03-05', cacheWrites = 0): number =>
   model === 'cohere/north-mini-code:free' ? 0 : model === 'deepseek/deepseek-v3.2' ? ((input - cached) * 0.269 + cached * 0.1345 + output * 0.4) / 1_000_000
   : model === 'anthropic/claude-sonnet-5' ? ((input - cached) * 2 + cached * 0.2 + output * 10) / 1_000_000
-  : model === 'openai/gpt-6-luna' ? ((input - cached) * 0.1 + cached * 0.01 + output * 0.5) / 1_000_000 : ((input - cached) * 2.5 + cached * 0.25 + output * 15) / 1_000_000;
+  : model === 'openai/gpt-6-luna' || model === 'gpt-6-luna' ? luna(input, output, cached, cacheWrites) : ((input - cached) * 2.5 + cached * 0.25 + output * 15) / 1_000_000;
+// A reservation assumes every prompt token is written to the cache, the dearest case.
+export const reservedCost = (profile: Profile, input: number, output: number): number =>
+  subscription(profile) ? 0 : price(input, output, 0, profile.model, input);
+// What one call cost, or null when that is not known. OpenRouter reports what it billed, and
+// that is the figure. Luna direct is priced from usage, which must count its cache writes.
+export function meteredCost(profile: Profile, reply: ModelReply): number | null {
+  if (subscription(profile)) return 0;
+  if (profile.provider === 'openrouter') {
+    const cost = reply.reportedCostUsd;
+    return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null;
+  }
+  if (profile.model !== 'gpt-6-luna') return price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model);
+  const writes = reply.cacheWriteTokens;
+  return typeof writes === 'number' && Number.isSafeInteger(writes) && writes >= 0 && reply.cachedInputTokens + writes <= reply.inputTokens
+    ? price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model, writes) : null;
+}
 export const accountedUsd = (receipt: Receipt): number => receipt.calls.reduce((sum, call) => sum + (call.meteredUsd ?? call.reservedUsd), 0);
 
 export function investigate(directory: string, packet: Packet, profileInput: Profile, model: Model,
@@ -140,6 +166,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
         checkedAt: '2026-09-23', source: 'https://code.claude.com/docs/en/cli-reference' }
       : profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' }
       : profile.model === 'anthropic/claude-sonnet-5' ? { providerRoute: 'anthropic', inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 10, checkedAt: '2026-09-23', source: 'https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints' }
+      : profile.model === 'gpt-6-luna' ? { inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, cacheWritePerMillionUsd: 0.125, outputPerMillionUsd: 0.5, checkedAt: '2026-09-26', source: 'https://developers.openai.com/api/docs/models/gpt-6-luna' }
       : profile.model === 'openai/gpt-6-luna' ? { providerRoute: 'openai', inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, outputPerMillionUsd: 0.5, checkedAt: '2026-09-23', source: 'https://openrouter.ai/api/v1/models/openai/gpt-6-luna/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
       : { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 0.25, outputPerMillionUsd: 15,
@@ -246,7 +273,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
       const inputTokens = await traceOperation('provider.count', { request }, () => model.count(input, signal), 2);
       guard();
       if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > profile.maxInputTokens) throw new Error('Input token count unavailable or exceeds profile limit');
-      const reservedUsd = subscription(profile) ? 0 : price(inputTokens, profile.maxOutputTokens, 0, profile.model);
+      const reservedUsd = reservedCost(profile, inputTokens, profile.maxOutputTokens);
       if (accountedUsd(receipt) + reservedUsd > profile.maxUsd) throw new Error('Budget cannot reserve the next request');
       const call: Receipt['calls'][number] = { inputTokens, outputTokens: null, cachedInputTokens: null, reservedUsd, meteredUsd: null, model: null };
       receipt.calls.push(call); save(); // Every request, including a retry, needs its own reservation.
@@ -257,9 +284,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
         || reply.cachedInputTokens > reply.inputTokens) throw new Error('Provider usage is missing or malformed; reservation retained');
       Object.assign(call, { inputTokens: reply.inputTokens, outputTokens: reply.outputTokens, cachedInputTokens: reply.cachedInputTokens,
         status: reply.status === 'completed' || reply.status === 'interrupted' ? reply.status : 'incomplete',
-        meteredUsd: subscription(profile) ? 0 : profile.provider === 'openrouter'
-          ? typeof reply.reportedCostUsd === 'number' && Number.isFinite(reply.reportedCostUsd) && reply.reportedCostUsd >= 0 ? reply.reportedCostUsd : null
-          : price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model), model: reply.model,
+        meteredUsd: meteredCost(profile, reply), model: reply.model,
         ...(reply.reportedCostUsd !== undefined ? { reportedCostUsd: reply.reportedCostUsd } : {}),
         ...(reply.responseId !== undefined ? { responseId: reply.responseId } : {}) });
       save(); guard();
@@ -268,7 +293,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
         returnedTools: reply.calls.map(tool => validators.has(tool.name) ? tool.name : 'unknown').slice(0, 100),
         returnedToolCount: reply.calls.length, duplicateToolIds: reply.calls.length - new Set(reply.calls.map(tool => tool.id)).size,
         status: call.status ?? 'unknown' });
-      if (profile.provider === 'openrouter' && call.meteredUsd === null) throw new Error('Provider cost confirmation missing; reservation retained');
+      if (call.meteredUsd === null) throw new Error('Provider cost confirmation missing; reservation retained');
       if (profile.model === 'cohere/north-mini-code:free' && reply.reportedCostUsd !== 0) throw new Error('Provider free-only cost confirmation missing or nonzero');
       if (reply.model !== profile.model) throw new Error('Provider returned a different model; no fallback accepted');
       if (reply.inputTokens > inputTokens || reply.outputTokens > profile.maxOutputTokens || accountedUsd(receipt) > profile.maxUsd || (call.meteredUsd ?? 0) > reservedUsd + 1e-9) throw new Error('Provider exceeded reserved token or cost bounds');

@@ -10,6 +10,7 @@ import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
 import { readVerification } from '../dist/verification.js';
 import { runView } from '../dist/github/dashboard-view.js';
+import { meteredCost, price, reservedCost } from '../dist/investigation.js';
 
 // The GitHub worker and the `review` command publish from result.json. These tests hold
 // the bridge to what the worker needs: a confirmed claim becomes a finding the existing
@@ -141,6 +142,31 @@ test('OpenRouter spend is what OpenRouter billed for each call, and an unconfirm
   const unconfirmed = JSON.parse(readFileSync(join(unknown, 'receipt.json'), 'utf8'));
   assert.deepEqual(unconfirmed.calls.map(call => call.meteredUsd), [null, null]);
   assert.equal(runView({ repository: 'o/r' }, { id: 'j', pr: 1, state: 'completed', created: 0, started: 1, report: null, artifact: unknown }).usage.totalUsd, null);
+});
+
+test('Luna direct from OpenAI is priced with its cache writes and long-prompt rate, and usage without cache writes is never shown as a cost', async t => {
+  // Customers are billed from this figure. OpenAI bills prompt tokens written to its cache at
+  // 1.25x input, and a prompt over 272K tokens at 2x input and cache rates and 1.5x output.
+  // Pricing either at the plain input rate undercounts, as the OpenRouter rate card did.
+  withoutJev(t);
+  const direct = { ...profile, model: 'gpt-6-luna' };
+  const replying = (usage) => {
+    const script = model([action('record_claim', claim('P1')), done(), titled]);
+    return { ...script, async respond(input) { return { ...(await script.respond(input)), model: direct.model, ...usage }; } };
+  };
+  const paid = persist(repository(t));
+  await runClaimReviewAsResult(paid, direct, undefined, replying({ cachedInputTokens: 600, cacheWriteTokens: 300 }));
+  // 1,000 prompt tokens: 600 read from the cache, 300 written to it, 100 plain; 50 output.
+  assert.ok(Math.abs(JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8')).calls.at(-1).meteredUsd
+    - (100 * 0.1 + 600 * 0.01 + 300 * 0.125 + 50 * 0.5) / 1e6) < 1e-15);
+  assert.ok(Math.abs(price(300_000, 1000, 100_000, 'gpt-6-luna', 50_000) - ((150_000 * 0.1 + 100_000 * 0.01 + 50_000 * 0.125) * 2 + 1000 * 0.75) / 1e6) < 1e-15);
+  assert.equal(price(272_000, 0, 0, 'gpt-6-luna'), 272_000 * 0.1 / 1e6);
+  // The budget reserves the dearest case, every prompt token written to the cache.
+  assert.equal(reservedCost(direct, 1000, 8192), (1000 * 0.125 + 8192 * 0.5) / 1e6);
+  const unknown = persist(repository(t));
+  await runClaimReviewAsResult(unknown, direct, undefined, replying({}));
+  assert.deepEqual(JSON.parse(readFileSync(join(unknown, 'receipt.json'), 'utf8')).calls.map(call => call.meteredUsd), [null, null]);
+  assert.equal(meteredCost(direct, { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 800, cacheWriteTokens: 300 }), null);
 });
 
 // 128 KB refused 29% of mason-v1's merged PRs. A diff up to 512 KB is reviewed; past that
