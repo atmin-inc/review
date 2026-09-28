@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { assess, reviewSummary } from '../dist/assessment.js';
 import { initialResult, defaultPolicy, parsePolicy, parseResult } from '../dist/contracts.js';
 import { renderMarkdown } from '../dist/render.js';
+import { capture } from '../dist/snapshot.js';
 import { repository, completed, finding, current } from './helpers.mjs';
 
 test('not-started capture cannot be a clean review', t => {
@@ -89,6 +90,40 @@ test('a clean headline is impossible across incomplete, failing and stale combin
       }
     }
   }
+});
+
+// A model reads text, so counting an added icon or font as unfinished work meant such a PR
+// could never be rated: atmin-inc/review PR 12 had 0 findings and stayed red over six brand
+// assets, and 13 of 304 mason-v1 main commits in 30 days touch a binary file. Lors chose on
+// 2026-09-28 that binary files are listed as not reviewed and the rating comes from the text
+// files. A change made only of binary files had nothing reviewed, so it is still not clean.
+test('binary files are listed as not reviewed without holding the rating open', t => {
+  const f = repository(t);
+  f.write('icon.png', Buffer.from([0, 255]));
+  f.state.headSha = f.commit('icon');
+  Object.assign(f, capture(f.source, f.state));
+  const text = f.packet.changedFiles.filter(file => file.kind === 'text').length;
+  assert.ok(text > 0);
+  const result = completed(f.packet);
+  const index = f.packet.changedFiles.findIndex(file => file.path === 'icon.png');
+  result.coverage[index] = { path: 'icon.png', status: 'unreviewed', evidenceIds: [] };
+  result.evidence = result.evidence.filter(item => item.anchors[0].path !== 'icon.png');
+  const a = assess(f.packet, result, current());
+  assert.equal(a.scope, 'complete');
+  assert.equal(a.outcome, 'No issues found');
+  assert.notEqual(a.rating.score, null);
+  assert.ok(renderMarkdown(f.packet, result, a).includes(`**${text}/${text} files reviewed** · 1 binary file not reviewed`));
+  // An unread text file still holds the rating open.
+  const unread = structuredClone(result);
+  const other = unread.coverage.findIndex(c => c.path !== 'icon.png');
+  unread.coverage[other] = { ...unread.coverage[other], status: 'unreviewed', evidenceIds: [] };
+  assert.equal(assess(f.packet, unread, current()).scope, 'partial');
+
+  const only = { ...f.packet, changedFiles: f.packet.changedFiles.filter(file => file.kind === 'binary') };
+  const bare = { ...result, coverage: [{ path: 'icon.png', status: 'unreviewed', evidenceIds: [] }], evidence: [] };
+  const alone = assess(only, bare, current());
+  assert.equal(alone.scope, 'partial');
+  assert.equal(alone.outcome, 'Review incomplete');
 });
 
 test('found defects remain visible on partial and superseded results', t => {

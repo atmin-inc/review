@@ -110,8 +110,14 @@ export function validateEvidence(packet: Packet, result: Result): void {
 
 export function assess(packet: Packet, result: Result, freshness: Freshness = unverified(), ci: ValidationCheck[] = []): Assessment {
   validateEvidence(packet, result);
+  // Binary files are listed as not reviewed but do not hold the scope open: the model reads
+  // text, so a PR adding an icon or a font could never be rated (Lors chose this on
+  // 2026-09-28). A change made only of binary files had nothing reviewed, so it stays partial.
+  const kinds = new Map(packet.changedFiles.map(file => [file.path, file.kind]));
+  const readable = result.coverage.filter(c => kinds.get(c.path) !== 'binary');
   const scope = result.status === 'not-started' ? 'unavailable'
-    : result.status === 'completed' && result.coverage.every(c => c.status === 'reviewed') ? 'complete' : 'partial';
+    : result.status === 'completed' && readable.every(c => c.status === 'reviewed')
+      && (readable.length > 0 || result.coverage.length === 0) ? 'complete' : 'partial';
   unique(ci.map(c => c.name), 'CI check name');
   const checks = packet.policy.requiredChecks.map(name => ci.find(c => c.name === name)
     ?? result.validation.find(c => c.name === name)

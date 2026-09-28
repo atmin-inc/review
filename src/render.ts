@@ -49,12 +49,13 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   const status = score === null ? 'unscored' : score <= 2 ? '1'
     : score === 5 && ['passed', 'not-applicable'].includes(assessment.validation) ? '5' : '3';
   const reviewed = result.coverage.filter(c => c.status === 'reviewed').length;
+  const binary = packet.changedFiles.filter(file => file.kind === 'binary').length;
   const validation = { passed: 'Required checks passed', failed: 'Required checks failed', missing: 'Required checks not verified', 'not-applicable': 'No required checks apply' }[assessment.validation];
   const lines = [
     `## ${icon(status, 24)} ${assessment.rating.score === null ? 'Not rated' : `${assessment.rating.score}/5`} — ${headline}`, '',
     '| P0 | P1 | P2 | P3 | P4 |', '| :---: | :---: | :---: | :---: | :---: |',
     `| ${PRIORITIES.map(p => { const n = assessment.findings.filter(f => f.priority === p).length; return n ? `**${n}**` : '0'; }).join(' | ')} |`, '',
-    `**${reviewed}/${packet.changedFiles.length} files reviewed** · ${validation}.`, '',
+    `**${reviewed}/${packet.changedFiles.length - binary} files reviewed**${binary ? ` · ${binary} binary ${binary === 1 ? 'file' : 'files'} not reviewed` : ''} · ${validation}.`, '',
     `**${e(assessment.rating.policy.label)}** · ${e(assessment.rating.reasons.at(-1)!)}`, '',
   ];
   if (assessment.freshness.status !== 'current') lines.push(`**${assessment.freshness.status === 'superseded' ? 'Historical result' : 'Freshness unverified'}:** ${e(assessment.freshness.reason)}`, '');
@@ -72,7 +73,7 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   lines.push('<details><summary>Rating policy and rationale</summary>', '',
     `Preset: **${e(assessment.rating.policy.label)}**. Scores are subjective assessments, not a probability of correctness or merge approval.`, '',
     ...assessment.rating.reasons.map(reason => `- ${e(reason)}`), '',
-    'A perfect score requires no P0–P2 findings, a complete review of the changed files, and current commits.', '');
+    'A perfect score requires no P0–P2 findings, a complete review of the changed text files, and current commits.', '');
   for (const [key, required] of Object.entries(assessment.rating.policy.perfectRequires)) {
     if (required) lines.push(`- ${key === 'passingChecks' ? 'Required checks pass or are not applicable' : key === 'noP3' ? 'No P3 findings' : criterionLabels[key as keyof typeof criterionLabels]}`);
   }
