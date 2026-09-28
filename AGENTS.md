@@ -7,7 +7,7 @@ being true, fix it rather than adding a second one.
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
   while `package.json` asks for 24; both build and suite pass anyway.
-- Suite is 384 tests: 382 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
+- Suite is 386 tests: 384 pass, 2 skip by design behind `ATMIN_REVIEW_VERIFY_LINUX`.
 - **Check credit, not just reachability.** As of 2026-09-20 `OPENAI_API_KEY` reaches the
   API but has no credits — every call is 429 `insufficient_quota`, which surfaces only
   as "Investigation failed; provider or source operation unavailable", and the reported
@@ -115,6 +115,11 @@ across the five. $0.37 for all five.
   before the `const reason =` line, run one case, restore the copy. On 2026-09-21 that
   turned "must be my profile" into `ProviderRequestError: Provider funding unavailable`
   in one run.
+- **A failed worker job names its cause.** The job's `error` in `pilot.sqlite` reads
+  `service-or-github-failure (<cause>)`, and the worker logs `atmin review: review <id> of
+  PR <n> failed: <cause>`. A GitHub cause is `GitHub <status | no response in 8 s |
+  unreadable response> on <METHOD path>`, never the response. Added 2026-09-28, after a
+  finished 5/5 review's check turned "Review failed" and nothing said why.
 - **Check the funding numbers, not just that a call works.** A tiny request can succeed
   while every real one fails: the investigation reserves
   `price(inputTokens, maxOutputTokens)` up front, so with `maxOutputTokens` at 8192 an
