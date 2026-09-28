@@ -6,7 +6,7 @@ import { compareCurrent } from '../snapshot.js';
 import { readVerification, type Verification } from '../verification.js';
 import { renderMarkdown } from '../render.js';
 import type { PilotConfig } from './config.js';
-import type { GitHub, LivePull } from './api.js';
+import { GitHubError, type GitHub, type LivePull } from './api.js';
 import type { Runner } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
@@ -15,6 +15,13 @@ import type { ReviewSettings } from './settings.js';
 import { dailyLimitReached } from './repositories.js';
 import { InlineReviews } from './inline.js';
 
+// Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
+// check turned "Review failed" after its comment was posted, and nothing said which step
+// broke. A GitHub failure names its request; anything else is thrown by this code.
+export function failureCause(error: unknown): string {
+  if (error instanceof GitHubError) return `GitHub ${error.status || error.detail} on ${error.request}`;
+  return error instanceof Error ? `${error.name}: ${error.message.slice(0, 200)}` : 'non-error thrown';
+}
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
@@ -31,8 +38,10 @@ export class Worker {
     this.abort = new AbortController();
     const monitor = setInterval(() => { if (!this.store.current(job, this.owner)) this.abort?.abort(); }, 250);
     try { await this.work(job, this.abort.signal); }
-    catch {
-      if (this.store.current(job, this.owner)) this.store.update(job.id, { state: 'failed', error: 'service-or-github-failure; inspect private artifacts, rerun explicitly' });
+    catch (error) {
+      const cause = failureCause(error);
+      process.stderr.write(`atmin review: review ${job.id} of PR ${job.pr} failed: ${cause}\n`);
+      if (this.store.current(job, this.owner)) this.store.update(job.id, { state: 'failed', error: `service-or-github-failure (${cause}); inspect private artifacts, rerun explicitly` });
       if (this.store.owns(this.owner)) await this.checks.stop(job, 'failure', 'Review failed').catch(() => {});
     } finally {
       clearInterval(monitor); this.abort = undefined;
