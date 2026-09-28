@@ -13,8 +13,8 @@ import { webhook, validSignature } from '../dist/github/webhook.js';
 import { assessmentCheck } from '../dist/github/checks.js';
 import { assess } from '../dist/assessment.js';
 import { capture } from '../dist/snapshot.js';
-import { Worker, markerFor } from '../dist/github/worker.js';
-import { AppGitHub, appJwt } from '../dist/github/api.js';
+import { Worker, markerFor, failureCause } from '../dist/github/worker.js';
+import { AppGitHub, GitHubError, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
 import { childEnvironment, engineRunner } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
@@ -425,6 +425,47 @@ test('a repository without a policy file requires no CI, so a clean review passe
   assert.equal(check.status, 'completed'); assert.equal(check.conclusion, 'success');
   const result = completed(packet); result.findings = [finding('P2')];
   assert.equal(assessmentCheck(assess(packet, result, current())).conclusion, 'failure');
+});
+
+// On 2026-09-28 a finished 5/5 review's check turned "Review failed" after its comment was
+// posted, and the job said only "service-or-github-failure": nothing recorded which step or
+// request broke, so the cause could not be found. The job and the log now name it.
+test('a review that fails after publishing records which GitHub request failed', async t => {
+  const h = await harness(t), update = h.github.updateCheck;
+  h.github.updateCheck = async (id, output) => {
+    if (output.conclusion === 'success') throw new GitHubError(502, 'PATCH /repos/test/review-fixture/check-runs/1');
+    return update(id, output);
+  };
+  const logged = [];
+  t.mock.method(process.stderr, 'write', line => { logged.push(String(line)); return true; });
+  const id = h.store.enqueue('late', 1); await h.worker.tick();
+  t.mock.restoreAll();
+  assert.match(h.comment.body, /5\/5/);
+  assert.equal(h.store.get(id).state, 'failed');
+  assert.match(h.store.get(id).error, /\(GitHub 502 on PATCH \/repos\/test\/review-fixture\/check-runs\/1\)/);
+  assert.ok(logged.some(line => line.includes(`review ${id} of PR 1 failed: GitHub 502 on PATCH /repos/test/review-fixture/check-runs/1`)));
+  assert.equal(h.checks[0].output.title, 'Review failed');
+});
+
+test('a failed GitHub request names its method and path, never its response', async () => {
+  const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ format: 'pem', type: 'pkcs8' });
+  let mode = 'status';
+  const api = new AppGitHub({ repository: 'test/review-fixture', repositoryId: 42, installationId: 21 }, '123', key, async url => {
+    if (url.endsWith('/access_tokens')) return Response.json({ token: 'token', expires_at: new Date(Date.now() + 3600_000).toISOString() });
+    if (mode === 'status') return new Response('{"message":"secret response body"}', { status: 502 });
+    if (mode === 'timeout') throw new DOMException('timed out', 'TimeoutError');
+    return new Response('not json');
+  });
+  const failure = async call => { try { await call(); } catch (error) { return error; } assert.fail('the request should fail'); };
+  const check = () => api.updateCheck(5, { status: 'completed' });
+  const status = await failure(check);
+  assert.equal(failureCause(status), 'GitHub 502 on PATCH /repos/test/review-fixture/check-runs/5');
+  assert.doesNotMatch(JSON.stringify({ ...status, message: status.message }), /secret response body/);
+  assert.equal(failureCause(await failure(() => api.findCheck('abc', 'job'))), 'GitHub 502 on GET /repos/test/review-fixture/commits/abc/check-runs');
+  mode = 'timeout';
+  assert.equal(failureCause(await failure(check)), 'GitHub no response in 8 s on PATCH /repos/test/review-fixture/check-runs/5');
+  mode = 'text';
+  assert.equal(failureCause(await failure(check)), 'GitHub unreadable response on PATCH /repos/test/review-fixture/check-runs/5');
 });
 
 test('lost check creation response reconciles without duplicate checks or inference', async t => {

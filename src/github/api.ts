@@ -24,7 +24,9 @@ export interface GitHub {
   updateCheck(id: number, output: CheckOutput): Promise<void>;
 }
 export class GitHubError extends Error {
-  constructor(readonly status: number) { super(`GitHub request failed (${status})`); }
+  // `request` is the method and path and `detail` says why no status came back; neither holds
+  // any of the response, which can carry tokens or PR text.
+  constructor(readonly status: number, readonly request = '', readonly detail = '') { super(`GitHub request failed (${status})`); }
 }
 export function appJwt(appId: string, key: string, now = Date.now()): string {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -36,14 +38,15 @@ export class AppGitHub implements GitHub {
   private login: string | undefined;
   constructor(private config: PilotConfig, private appId: string, private key: string, private transport: typeof fetch = fetch) {}
   private async request(path: string, token: string, method = 'GET', body?: unknown): Promise<any> {
+    const call = `${method} ${path.split('?')[0]}`;
     const response = await this.transport(`https://api.github.com${path}`, {
       method, redirect: 'error', signal: AbortSignal.timeout(8000),
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'atmin-review-pilot', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }).catch(() => { throw new GitHubError(0); });
-    if (!response.ok) throw new GitHubError(response.status);
+    }).catch(error => { throw new GitHubError(0, call, error?.name === 'TimeoutError' ? 'no response in 8 s' : 'no response'); });
+    if (!response.ok) throw new GitHubError(response.status, call);
     // API response bodies/errors never enter logs, especially access-token responses.
-    try { return await response.json(); } catch { throw new GitHubError(0); }
+    try { return await response.json(); } catch { throw new GitHubError(0, call, 'unreadable response'); }
   }
   private async token(write: boolean | 'checks'): Promise<string> {
     const scope = write === 'checks' ? 'checks' : write ? 'write' : 'read';
