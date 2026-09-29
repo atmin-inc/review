@@ -14,10 +14,12 @@ export interface PilotConfig {
   maxReviewsPerDay: number;
   localChecks?: LocalCheck[];
   trustedChecks?: { name: string; appId: number }[];
+  // No review starts while the state directory's disk has less free space than this.
+  minFreeDiskMb?: number;
 }
 export function readConfig(path: string): PilotConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8'));
-  const keys = ['repository', 'repositoryId', 'installationId', 'profile', 'stateDirectory', 'host', 'port', 'maxReviewsPerDay', 'trustedChecks', 'localChecks'];
+  const keys = ['repository', 'repositoryId', 'installationId', 'profile', 'stateDirectory', 'host', 'port', 'maxReviewsPerDay', 'trustedChecks', 'localChecks', 'minFreeDiskMb'];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some(k => !keys.includes(k))) throw new Error('Invalid pilot configuration');
   if (typeof raw.repository !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(raw.repository)) throw new Error('Invalid pilot repository');
   for (const key of ['repositoryId', 'installationId', 'port', 'maxReviewsPerDay']) {
@@ -25,6 +27,7 @@ export function readConfig(path: string): PilotConfig {
   }
   if (raw.port > 65535 || raw.maxReviewsPerDay > 100) throw new Error('Pilot port or daily review limit out of range');
   if (!['127.0.0.1', '0.0.0.0', '::1'].includes(raw.host)) throw new Error('Unsupported listen address');
+  if (raw.minFreeDiskMb !== undefined && (!Number.isSafeInteger(raw.minFreeDiskMb) || raw.minFreeDiskMb < 0 || raw.minFreeDiskMb > 1_000_000)) throw new Error('Set minFreeDiskMb from 0 to 1000000');
   for (const key of ['profile', 'stateDirectory']) if (typeof raw[key] !== 'string' || !raw[key]) throw new Error(`Set ${key}`);
   if (raw.trustedChecks !== undefined) {
     if (!Array.isArray(raw.trustedChecks) || raw.trustedChecks.length > 20

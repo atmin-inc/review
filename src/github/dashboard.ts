@@ -10,6 +10,7 @@ import { history, pullViews, readReview, livePulls, latestJobs, verifiedReposito
 export { history } from './dashboard-view.js';
 
 const version = 'atmin.review.v1';
+const maxRepositoryKb = 2 * 1024 * 1024;
 const sessionCookie = '__Host-atmin-review';
 const flowCookie = '__Host-atmin-review-oauth';
 const random = () => randomBytes(32).toString('base64url');
@@ -96,6 +97,7 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     const repo = await api(`/repos/${target.repository}`, token, target.repositoryId);
     if (repo.id !== target.repositoryId || repo.full_name !== target.repository || repo.permissions?.admin !== true) throw new Denied();
     if (!(await available(token)).repositories.some(r => r.id === target.repositoryId && r.full_name === target.repository && r.installationId === target.installationId)) throw new Denied();
+    return repo as { size?: unknown };
   };
   // Every installation of the App, read with the App's own credentials for operators.
   const appInstallations = async () => {
@@ -237,7 +239,12 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         if (request.method === 'POST' && url.pathname === '/api/review/v1/connect') {
           const candidate = visible.find(repo => repo.id === Number(selected));
           if (!candidate) throw new Denied();
-          await authorize(session.token, { ...config, repositoryId: candidate.id, repository: candidate.full_name, installationId: candidate.installationId });
+          const repo = await authorize(session.token, { ...config, repositoryId: candidate.id, repository: candidate.full_name, installationId: candidate.installationId });
+          // Each review fetches the repository's full history onto a disk every customer shares.
+          if (!repositories.entries.has(candidate.id) && (!Number.isSafeInteger(repo.size) || (repo.size as number) > maxRepositoryKb)) {
+            process.stderr.write(`atmin review: repository ${candidate.id} not connected: GitHub size ${String(repo.size)} KB, limit ${maxRepositoryKb} KB\n`);
+            json(response, 409, { error: `atmin reviews repositories up to 2 GB, and ${candidate.full_name} is larger. Contact atmin.` }); return true;
+          }
           if (!repositories.entries.has(candidate.id) && repositories.of(candidate.installationId).length >= perInstallation) { json(response, 409, { error: `An organization can connect up to ${perInstallation} repositories.` }); return true; }
           if (!repositories.entries.has(candidate.id) && repositories.entries.size >= maxRepositories) { json(response, 409, { error: 'atmin cannot connect more repositories right now. Contact atmin.' }); return true; }
           const entry = repositories.connect(candidate.id, candidate.full_name, candidate.installationId);
