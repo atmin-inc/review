@@ -5,6 +5,7 @@ import { parseProfile } from '../investigation.js';
 import { parsePacket, parseResult } from '../contracts.js';
 import { assess, reviewSummary, unverified, type ValidationCheck } from '../assessment.js';
 import { compareCurrent } from '../snapshot.js';
+import type { ReviewPrice } from '../render.js';
 import type { PilotConfig } from './config.js';
 import type { Store, Job } from './store.js';
 import { month, type Repositories } from './repositories.js';
@@ -39,21 +40,35 @@ export function runView(config: PilotConfig, job: Job) {
     head, verdict, usage, url: `https://github.com/${config.repository}/pull/${job.pr}` };
 }
 
+// What one started review costs the organization: free while it is within the month's free
+// allowance, then max(recorded cost x multiplier, minimum). `usd` is null while the review's
+// provider cost is not settled; that is unknown, not zero.
+function priced(repositories: Repositories, installation: number, now: number) {
+  const { plan } = repositories.plan(installation), period = month(now);
+  return repositories.started(installation, period.start).map(({ entry, job }, index) => {
+    const usage = runView(entry.config, job).usage, free = index < plan.freeReviews;
+    const usd = free ? 0 : usage?.totalUsd === null || usage?.totalUsd === undefined ? null : Math.max(usage.totalUsd * plan.multiplier, plan.minimumUsd);
+    return { entry, job, usage, price: { month: period.name, index, freeReviews: plan.freeReviews, free, usd } as ReviewPrice };
+  });
+}
+// The price of one review, in the month it started; null when it never started inference.
+export function reviewPrice(repositories: Repositories, installation: number, job: Job): ReviewPrice | null {
+  if (job.started === null) return null;
+  return priced(repositories, installation, job.started).find(row => row.job.id === job.id)?.price ?? null;
+}
 // Reviews that started this UTC month count against the plan, failed ones included. Each beyond
 // the free allowance is estimated at max(recorded cost x multiplier, minimum); recorded cost runs
 // below the provider's bill, and a review whose cost is not settled is counted, not guessed.
 export function monthlyUsage(repositories: Repositories, installation: number, now = Date.now()) {
-  const { plan } = repositories.plan(installation), period = month(now);
-  const started = repositories.started(installation, period.start), perRepository = new Map<number, number>();
+  const { plan } = repositories.plan(installation), period = month(now), started = priced(repositories, installation, now), perRepository = new Map<number, number>();
   let knownUsd = 0, estimatedUsd = 0, unknownCostReviews = 0;
-  started.forEach(({ entry, job }, index) => {
+  for (const { entry, usage, price } of started) {
     perRepository.set(entry.config.repositoryId, (perRepository.get(entry.config.repositoryId) ?? 0) + 1);
-    const usage = runView(entry.config, job).usage;
     knownUsd += usage?.knownUsd ?? 0;
-    if (index < plan.freeReviews) return;
-    if (usage?.totalUsd === null || usage?.totalUsd === undefined) unknownCostReviews++;
-    else estimatedUsd += Math.max(usage.totalUsd * plan.multiplier, plan.minimumUsd);
-  });
+    if (price.free) continue;
+    if (price.usd === null) unknownCostReviews++;
+    else estimatedUsd += price.usd;
+  }
   const usd = (n: number) => Math.round(n * 1e6) / 1e6;
   return { month: period.name, resetsAt: new Date(period.end).toISOString(), reviews: started.length,
     remaining: Math.max(0, plan.monthlyReviews - started.length), knownUsd: usd(knownUsd), estimatedUsd: usd(estimatedUsd), unknownCostReviews, perRepository };

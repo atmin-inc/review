@@ -4,7 +4,7 @@ import { parsePacket, parseResult, type Packet, type Finding } from '../contract
 import { assess } from '../assessment.js';
 import { compareCurrent } from '../snapshot.js';
 import { readVerification, type Verification } from '../verification.js';
-import { renderMarkdown } from '../render.js';
+import { renderMarkdown, type ReviewPrice } from '../render.js';
 import type { PilotConfig } from './config.js';
 import { GitHubError, type GitHub, type LivePull } from './api.js';
 import type { Runner } from './runner.js';
@@ -28,7 +28,8 @@ export class Worker {
   private checks: Checks;
   private inline: InlineReviews;
   private abort: AbortController | undefined;
-  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string) {
+  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string,
+    private price?: (job: Job) => ReviewPrice | null) {
     this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github);
   }
   stop(): void { this.abort?.abort(); }
@@ -149,7 +150,7 @@ export class Worker {
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       writeFileSync(join(job.artifact, 'validation.json'), JSON.stringify({ headSha: packet.headSha, baseSha: packet.baseSha,
         checkedAt: new Date().toISOString(), checks: [...ci, ...verification.checks] }, null, 2), { mode: 0o600 });
-      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification)}\nRun: \`${job.id}\`\n`;
+      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification, this.price?.(job) ?? undefined)}\nRun: \`${job.id}\`\n`;
       saved.check = assessmentCheck(assessment);
       this.store.update(job.id, { report: JSON.stringify(saved) });
     }
