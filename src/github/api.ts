@@ -3,7 +3,8 @@ import type { ValidationCheck } from '../assessment.js';
 import type { PilotConfig } from './config.js';
 import type { PullState } from '../snapshot.js';
 
-export interface LivePull extends PullState { draft: boolean; }
+// `author` is the PR's author: the id counts toward a per-author limit, since logins can change.
+export interface LivePull extends PullState { draft: boolean; author: { id: number; login: string }; }
 export interface Comment { id: number; body: string; user: { login: string; type: string }; }
 export interface PullFile { filename: string; previous_filename?: string; patch?: string; }
 export interface InlineComment { path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; start_line?: number; start_side?: 'RIGHT'; }
@@ -74,8 +75,10 @@ export class AppGitHub implements GitHub {
     const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}`, token);
     if (data.base?.repo?.id !== this.config.repositoryId || data.base?.repo?.full_name !== this.config.repository || data.number !== pr) throw new Error('PR repository identity mismatch');
     const ref = await this.request(`/repos/${this.config.repository}/git/ref/heads/${encodeURIComponent(data.base.ref)}`, token);
-    if (![data.head?.sha, ref.object?.sha].every(sha => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha)) || typeof data.base.ref !== 'string' || !['open', 'closed'].includes(data.state) || typeof data.draft !== 'boolean') throw new Error('Invalid live PR state');
-    return { repository: this.config.repository, pr, headSha: data.head.sha, baseSha: ref.object.sha, baseRef: data.base.ref, state: data.state, draft: data.draft };
+    if (![data.head?.sha, ref.object?.sha].every(sha => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha)) || typeof data.base.ref !== 'string' || !['open', 'closed'].includes(data.state) || typeof data.draft !== 'boolean'
+      || !Number.isSafeInteger(data.user?.id) || data.user.id < 1 || typeof data.user.login !== 'string' || !/^[a-zA-Z0-9-]{1,39}(?:\[bot\])?$/.test(data.user.login)) throw new Error('Invalid live PR state');
+    return { repository: this.config.repository, pr, headSha: data.head.sha, baseSha: ref.object.sha, baseRef: data.base.ref, state: data.state, draft: data.draft,
+      author: { id: data.user.id, login: data.user.login } };
   }
   async canReview(login: string): Promise<boolean> {
     if (!/^[a-z\d](?:[a-z\d-]{0,38})$/i.test(login)) return false;

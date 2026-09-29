@@ -23,6 +23,12 @@ export function parsePlan(value: unknown): Plan {
     || !count(p.freeReviews) || !count(p.monthlyReviews) || !usd(p.multiplier) || !usd(p.minimumUsd)) throw new Error('Invalid plan');
   return { freeReviews: p.freeReviews, monthlyReviews: p.monthlyReviews, multiplier: p.multiplier, minimumUsd: p.minimumUsd };
 }
+// No `@`: the refusal is posted on the PR and must not notify the author.
+export function authorLimitReached(login: string, limit: number, now: number): string {
+  const { start, end } = month(now);
+  const name = new Date(start).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return `PRs by \`${login}\` reached this repository's limit of ${limit} ${limit === 1 ? 'review' : 'reviews'} per author for ${name}. Reviews resume on ${new Date(end).toISOString().slice(0, 10)}, or sooner if a repository admin raises the limit on the atmin dashboard. No inference was started.`;
+}
 function monthlyLimitReached(plan: Plan, now: number): string {
   const { start, end } = month(now);
   if (!plan.monthlyReviews) return 'Reviews are turned off for this organization. An atmin operator can turn them back on. No inference was started.';

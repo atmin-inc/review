@@ -16,7 +16,12 @@ export function validateSettings(form, models, limits) {
   if (!(maxReviewsPerDay >= 1 && maxReviewsPerDay <= limits.maxReviewsPerDay)) {
     errors.maxReviewsPerDay = `Enter a whole number from 1 to ${limits.maxReviewsPerDay}.`;
   }
-  return { errors, value: { model: form.model, maxUsd, maxReviewsPerDay } };
+  // Blank means no limit per author.
+  const maxReviewsPerAuthor = form.maxReviewsPerAuthor.trim() === '' ? null : whole(form.maxReviewsPerAuthor);
+  if (maxReviewsPerAuthor !== null && !(maxReviewsPerAuthor >= 1 && maxReviewsPerAuthor <= 100000)) {
+    errors.maxReviewsPerAuthor = 'Enter a whole number from 1 to 100,000, or leave it blank for no limit.';
+  }
+  return { errors, value: { model: form.model, maxUsd, maxReviewsPerDay, maxReviewsPerAuthor } };
 }
 
 export const planFields = [
