@@ -45,7 +45,7 @@ export function runView(config: PilotConfig, job: Job) {
 // provider cost is not settled; that is unknown, not zero.
 function priced(repositories: Repositories, installation: number, now: number) {
   const { plan } = repositories.plan(installation), period = month(now);
-  return repositories.started(installation, period.start).map(({ entry, job }, index) => {
+  return repositories.started(installation, period.start, period.end).map(({ entry, job }, index) => {
     const usage = runView(entry.config, job).usage, free = index < plan.freeReviews;
     const usd = free ? 0 : usage?.totalUsd === null || usage?.totalUsd === undefined ? null : Math.max(usage.totalUsd * plan.multiplier, plan.minimumUsd);
     return { entry, job, usage, price: { month: period.name, index, freeReviews: plan.freeReviews, free, usd } as ReviewPrice };
@@ -60,7 +60,7 @@ export function reviewPrice(repositories: Repositories, installation: number, jo
 // the free allowance is estimated at max(recorded cost x multiplier, minimum); recorded cost runs
 // below the provider's bill, and a review whose cost is not settled is counted, not guessed.
 export function monthlyUsage(repositories: Repositories, installation: number, now = Date.now()) {
-  const { plan } = repositories.plan(installation), period = month(now), started = priced(repositories, installation, now), perRepository = new Map<number, number>();
+  const { limit } = repositories.limit(installation), period = month(now), started = priced(repositories, installation, now), perRepository = new Map<number, number>();
   let knownUsd = 0, estimatedUsd = 0, unknownCostReviews = 0;
   for (const { entry, usage, price } of started) {
     perRepository.set(entry.config.repositoryId, (perRepository.get(entry.config.repositoryId) ?? 0) + 1);
@@ -71,7 +71,7 @@ export function monthlyUsage(repositories: Repositories, installation: number, n
   }
   const usd = (n: number) => Math.round(n * 1e6) / 1e6;
   return { month: period.name, resetsAt: new Date(period.end).toISOString(), reviews: started.length,
-    remaining: Math.max(0, plan.monthlyReviews - started.length), knownUsd: usd(knownUsd), estimatedUsd: usd(estimatedUsd), unknownCostReviews, perRepository };
+    remaining: Math.max(0, limit - started.length), knownUsd: usd(knownUsd), estimatedUsd: usd(estimatedUsd), unknownCostReviews, perRepository };
 }
 
 export function history(config: PilotConfig, store: Store, pr?: number) {

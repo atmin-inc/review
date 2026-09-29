@@ -13,6 +13,7 @@ import { engineRunner, expireRuns } from './runner.js';
 import { dashboard } from './dashboard.js';
 import { reviewPrice } from './dashboard-view.js';
 import { site } from './site.js';
+import { Billing, Stripe } from './billing.js';
 import { ReviewSettings, readDashboardConfig } from './settings.js';
 import { readProfile } from '../run.js';
 
@@ -55,7 +56,9 @@ async function main(): Promise<void> {
     ? readDashboardConfig(process.env.REVIEW_DASHBOARD_CONFIG, requiredEnv('GITHUB_OAUTH_CLIENT_SECRET')) : undefined;
   const owner = randomUUID();
   if (!store.acquire(owner)) throw new Error('A pilot service already owns this state directory');
-  const repositories = dashboardConfig ? new Repositories(config, store, dashboardConfig.models, owner) : undefined;
+  // Cards and monthly invoices need a Stripe key; without one the default plan stops at its free reviews.
+  const repositories = dashboardConfig ? new Repositories(config, store, dashboardConfig.models, owner, process.env.STRIPE_SECRET_KEY ? dashboardConfig.origin : undefined) : undefined;
+  const billing = repositories && dashboardConfig && process.env.STRIPE_SECRET_KEY ? new Billing(new Stripe(process.env.STRIPE_SECRET_KEY), repositories, dashboardConfig.origin) : undefined;
   const initial: Repository = repositories?.entries.get(config.repositoryId) ?? { config, store, settings: new ReviewSettings(config, store) };
   const entries = repositories?.entries ?? new Map([[config.repositoryId, initial]]);
   const workers = new Map<number, { github: AppGitHub; worker: Worker }>();
@@ -70,7 +73,7 @@ async function main(): Promise<void> {
     }
     return value;
   };
-  const api = dashboardConfig ? dashboard(config, dashboardConfig, store, initial.settings, fetch, repositories, { id: appId, key }) : undefined;
+  const api = dashboardConfig ? dashboard(config, dashboardConfig, store, initial.settings, fetch, repositories, { id: appId, key }, billing) : undefined;
   const pages = dashboardConfig ? site(fileURLToPath(new URL('../../web/dist', import.meta.url))) : undefined;
   const server = webhookServer(secret, (event, delivery, payload) => dispatchRepositories(entries, entry => runtime(entry).github, event, delivery, payload),
     api && pages ? async (request, response) => await api(request, response) || pages(request, response) : undefined);
@@ -80,7 +83,7 @@ async function main(): Promise<void> {
   const heartbeat = setInterval(() => { for (const entry of entries.values()) if (!entry.store.renew(owner)) stop(); }, 5000);
   try {
     await new Promise<void>((done, reject) => { server.once('error', reject); server.listen(config.port, config.host, done); });
-    process.stdout.write(`${JSON.stringify({ service: 'atmin review', repository: config.repository, enabled: store.enabled(), host: config.host, port: config.port })}\n`);
+    process.stdout.write(`${JSON.stringify({ service: 'atmin review', repository: config.repository, enabled: store.enabled(), host: config.host, port: config.port, billing: Boolean(billing) })}\n`);
     while (!stopping) {
       if (Date.now() - swept > 3_600_000) {
         swept = Date.now();
@@ -88,6 +91,7 @@ async function main(): Promise<void> {
           try { expireRuns(entry.config, entry.store); }
           catch (error) { process.stderr.write(`atmin review: deleting old run records in repository ${entry.config.repositoryId} failed: ${failureCause(error)}\n`); }
         }
+        if (billing) await billing.invoice().catch(error => process.stderr.write(`atmin review: monthly invoicing failed: ${failureCause(error)}\n`));
       }
       const ready = [...entries.values()];
       let worked = false;

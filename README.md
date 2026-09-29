@@ -200,7 +200,7 @@ The worker keeps one copy of each connected repository's history in its state di
 (`source-cache.git`) and fetches only the commits it lacks. Each run's snapshot borrows
 that copy and is deleted when the run ends; the JSON records stay. Disk limits per account
 are still needed before widening access.
-No billing or repository execution is included.
+No repository execution is included.
 
 With `REVIEW_DASHBOARD_CONFIG` pointing at a JSON file (`origin`, `clientId`, `models`,
 and optionally `operators` and `appSlug`) and `GITHUB_OAUTH_CLIENT_SECRET` set, `serve`
@@ -208,17 +208,29 @@ also hosts the dashboard: the API, and the pages built into `web/dist` by
 `npm run build:web` (pages answer 503 until that build exists). Anyone can install the
 App and sign in with GitHub. Repository administrators connect up to ten repositories
 per installation and pause or configure each one. Each installation is held to a
-monthly plan: 20 reviews per UTC calendar month by default, all free. A review counts
+monthly plan: 20 free reviews per UTC calendar month by default. A review counts
 once inference starts, failed runs included. Past the limit the PR gets a "review not
 run" comment with the reason and no model call is made. The daily `maxReviewsPerDay`
 cap still applies to every installation together.
+
+With `STRIPE_SECRET_KEY` set, an administrator of a connected repository adds the
+organization's card on the Usage page through Stripe Checkout in setup mode, which charges
+nothing. With a card on file the default plan allows 1,000 reviews a month; without one, or
+without a key, reviews stop at the free ones and the PR comment links to the Usage page. On
+the 2nd of each UTC month the worker invoices each installation with a card, in US dollars,
+for the month before at the plan's price, and Stripe charges the card. Each month is invoiced
+at most once: its row in the `invoices` table is written before the first Stripe call. A row
+left in state `creating` means invoicing stopped midway; the worker logs it every hour until an
+operator checks the customer's invoices in Stripe, finishes or voids that month's there, and
+sets the row to `finalized` (or deletes it to have the worker invoice the month again).
 
 `operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
 by someone else. Operators get `/admin`, which lists every installation of the App (read
 with the App's credentials) with its repositories, reviews this month, model cost,
 billing and margin, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
 reviews off), `multiplier` and `minimumUsd`. Billing for each review past the free ones
-is the larger of its cost times the multiplier and the minimum; no payment is collected.
+is the larger of its cost times the multiplier and the minimum. An operator-set plan
+applies as set, card or not; with a card it is invoiced like any other.
 On OpenRouter, cost is the amount OpenRouter reports billing for each call, not a rate
 card estimate; on OpenAI directly, it is priced from the call's usage, cache writes
 included. A call whose charge or cache writes are not reported stays unsettled and is left

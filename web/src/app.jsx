@@ -68,6 +68,12 @@ export function App() {
     connections: { ...current.connections, repositories: current.connections.repositories.map(r => (r.id === id ? { ...r, ...change } : r)) },
   })), []);
 
+  // After a card is saved, the organization's plan, usage and card change together.
+  const patchInstallation = useCallback((id, change) => setSession(current => ({
+    ...current,
+    connections: { ...current.connections, installations: current.connections.installations.map(i => (i.id === id ? { ...i, ...change } : i)) },
+  })), []);
+
   if (!session) {
     return <div className="grid min-h-dvh place-items-center p-4">
       {failure
@@ -98,7 +104,7 @@ export function App() {
   if (route.view === 'repositories') {
     page = <RepositoriesPage installation={selected} connections={connections} patchRepository={patchRepository}/>;
   } else if (route.view === 'usage') {
-    page = <UsagePage installation={selected}/>;
+    page = <UsagePage installation={selected} checkout={route.checkout} patchInstallation={patchInstallation}/>;
   } else if (route.view === 'repository') {
     const listed = repositories.find(r => r.id === route.repository);
     page = <RepositoryPage key={route.repository} id={route.repository} review={route.review} listed={listed} installation={selected}

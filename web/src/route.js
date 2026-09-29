@@ -2,6 +2,8 @@
 // /?repository=<id>#review/<runId>; those links must keep opening the same review.
 const repositoryId = /^[1-9][0-9]{0,15}$/;
 const runId = /^[a-zA-Z0-9-]{1,100}$/;
+// Stripe Checkout returns to /usage with its session ID once a card is saved.
+const checkoutId = /^cs_(test|live)_[A-Za-z0-9]{1,250}$/;
 
 export const signinMessages = {
   denied: 'GitHub did not grant access. Sign in again.',
@@ -25,7 +27,7 @@ export function parseRoute(href) {
   const installation = single(params, 'installation', repositoryId);
   const base = { signin, installation: installation && Number(installation) };
   if (path === '/admin') return { ...base, view: 'admin' };
-  if (path === '/usage') return { ...base, view: 'usage' };
+  if (path === '/usage') return { ...base, view: 'usage', checkout: single(params, 'checkout', checkoutId) };
   if (path !== '/') return { ...base, view: 'not-found' };
   const repository = single(params, 'repository', repositoryId);
   if (!repository) return { ...base, view: 'repositories' };

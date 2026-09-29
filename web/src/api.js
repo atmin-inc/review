@@ -38,7 +38,8 @@ async function request(method, path, body) {
   if (response.ok) return data;
   const error = new ApiError(response.status, typeof data?.error === 'string' ? data.error
     : fallback[response.status] ?? 'The review service is unavailable. Try again shortly.');
-  const admin = path.startsWith('/api/review/v1/admin');
+  // A refused admin or billing action leaves the session as it was.
+  const admin = path.startsWith('/api/review/v1/admin') || path.startsWith('/api/review/v1/billing');
   if (response.status === 401 || (response.status === 403 && !admin)) sessionEnded(error);
   throw error;
 }
@@ -54,6 +55,8 @@ export const api = {
   setEnabled: (repository, enabled) => request('POST', `${base}/enabled?${repo(repository)}`, { enabled }),
   saveSettings: (repository, settings) => request('POST', `${base}/settings?${repo(repository)}`, settings),
   requestReview: (repository, pr) => request('POST', `${base}/review?${repo(repository)}`, { pr }),
+  billingCheckout: installation => request('POST', `${base}/billing/checkout?installation=${encodeURIComponent(installation)}`, {}),
+  billingConfirm: (installation, session) => request('POST', `${base}/billing/confirm?installation=${encodeURIComponent(installation)}`, { session }),
   logout: () => request('POST', `${base}/logout`, {}),
   admin: () => request('GET', `${base}/admin`),
   savePlan: (installation, plan) => request('POST', `${base}/admin/plan?installation=${encodeURIComponent(installation)}`, plan),
