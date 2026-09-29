@@ -5,6 +5,7 @@ import type { Store } from './store.js';
 import { perInstallation, maxRepositories, defaultPlan, type Repositories } from './repositories.js';
 import type { DashboardConfig, ReviewSettings } from './settings.js';
 import { appJwt } from './api.js';
+import { StripeError, type Billing } from './billing.js';
 
 import { history, pullViews, readReview, livePulls, latestJobs, verifiedRepositories, monthlyUsage } from './dashboard-view.js';
 export { history } from './dashboard-view.js';
@@ -34,7 +35,9 @@ const accountType = (value: unknown) => typeof value === 'string' && /^[A-Za-z]{
 const manageUrl = (i: Installation) => `https://github.com/${i.accountType === 'Organization' ? `organizations/${encodeURIComponent(i.account)}/` : ''}settings/installations/${i.id}`;
 
 // `app` lets operators list every installation of the App; without it there is no admin panel.
-export function dashboard(config: PilotConfig, options: DashboardConfig, store: Store, settings: ReviewSettings, fetcher: typeof fetch = fetch, repositories?: Repositories, app?: { id: string; key: string }) {
+// `billing` is set when a Stripe key is configured; without it no card can be added, so the
+// default plan stops at its free reviews.
+export function dashboard(config: PilotConfig, options: DashboardConfig, store: Store, settings: ReviewSettings, fetcher: typeof fetch = fetch, repositories?: Repositories, app?: { id: string; key: string }, billing?: Billing) {
   // ponytail: one process, bounded in-memory sessions (five per GitHub user); restart signs everyone
   // out. Tokens never touch disk. Add shared encrypted sessions only with multiple web workers.
   const sessions = new Map<string, Session>();
@@ -117,12 +120,14 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     throw new Error('App exceeds installation listing limit');
   };
   const customer = (installation: number) => {
-    const { plan } = repositories!.plan(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
-    return { plan: { freeReviews: plan.freeReviews, monthlyReviews: plan.monthlyReviews }, usage };
+    const { plan, limit, needsCard } = repositories!.limit(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
+    return { plan: { freeReviews: plan.freeReviews, monthlyReviews: limit }, usage,
+      billing: billing ? { card: repositories!.billing(installation)?.card ?? null, needsCard } : null };
   };
   const adminView = (installation: number) => {
     const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation);
     return { plan: { ...plan, custom: updatedAt !== null, updatedAt: updatedAt === null ? null : new Date(updatedAt).toISOString(), updatedBy }, usage,
+      limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null,
       repositories: repositories!.of(installation).map(entry => ({ id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled(), reviews: perRepository.get(entry.config.repositoryId) ?? 0 })) };
   };
   const body = async (request: IncomingMessage) => {
@@ -251,6 +256,30 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
           process.stderr.write(`atmin review: repository ${candidate.id} connected from installation ${candidate.installationId} by GitHub user ${session.user.id}\n`);
           json(response, 200, { repository: { id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled() } }); return true;
         }
+        if (request.method === 'POST' && ['/api/review/v1/billing/checkout', '/api/review/v1/billing/confirm'].includes(url.pathname)) {
+          const target = url.searchParams.get('installation'), installation = owned.find(i => String(i.id) === target);
+          if (!billing || url.searchParams.getAll('installation').length !== 1 || !installation) { json(response, 404, { error: 'Organization not found.' }); return true; }
+          // The card pays for the organization's reviews, so an admin of one of its connected repositories manages it.
+          let admin = operator(session.user);
+          for (const entry of repositories.of(installation.id)) {
+            if (admin) break;
+            try { await authorize(session.token, entry.config); admin = true; }
+            catch (error) { if (!(error instanceof Denied)) throw error; }
+          }
+          if (!admin) { json(response, 403, { error: `Only an admin of a repository connected in ${installation.account} can manage its card.` }); return true; }
+          if (url.pathname.endsWith('/checkout')) { json(response, 200, { url: await billing.checkout(installation.id, installation.account, session.user.id) }); return true; }
+          const read = await body(request);
+          if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
+          const value = 'value' in read ? read.value as { session?: unknown } : null;
+          if (!value || typeof value !== 'object' || Object.keys(value).length !== 1 || typeof value.session !== 'string') { json(response, 400, { error: 'Invalid checkout.' }); return true; }
+          try { json(response, 200, { card: await billing.confirm(installation.id, value.session, session.user.id), ...customer(installation.id) }); }
+          catch (error) {
+            if (!(error instanceof StripeError) || ![400, 409].includes(error.status)) throw error;
+            process.stderr.write(`atmin review: card for installation ${installation.id} not saved: ${error.message}\n`);
+            json(response, 409, { error: 'Stripe did not save a card for this checkout. Add the card again.' });
+          }
+          return true;
+        }
         const isSession = request.method === 'GET' && url.pathname === '/api/review/v1/session';
         if (selected === null && !isSession) { json(response, 400, { error: 'Choose a repository.' }); return true; }
         let id = selected === null ? undefined : Number(selected);
@@ -327,6 +356,7 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
       json(response, 404, { error: 'Not found.' });
     } catch (error) {
       if (error instanceof Denied) { sessions.delete(sessionId); response.setHeader('Set-Cookie', cookie(sessionCookie, '', 0)); }
+      else process.stderr.write(`atmin review: dashboard ${request.method} ${url.pathname} failed: ${error instanceof Error ? `${error.name}: ${error.message.slice(0, 200)}` : 'non-error thrown'}\n`);
       if (url.pathname === '/auth/github/callback') redirect(response, `/?signin=${error instanceof Denied ? 'denied' : 'unavailable'}`);
       else json(response, error instanceof Denied ? 403 : 503, { error: error instanceof Denied ? 'Repository administrator access is required. Sign in again if your access changed.' : 'GitHub or the review service is unavailable. Try again shortly.' });
     }

@@ -30,6 +30,11 @@ test('/admin, /usage and unknown paths', () => {
   assert.equal(parseRoute('/admin/').view, 'admin');
   assert.equal(parseRoute('/usage?installation=99').view, 'usage');
   assert.equal(parseRoute('/usage?installation=99').installation, 99);
+  // Only a Stripe Checkout session ID, given once, is confirmed on return from Checkout.
+  assert.equal(parseRoute('/usage?installation=99&checkout=cs_test_a1B2').checkout, 'cs_test_a1B2');
+  for (const bad of ['cs_other_a1', 'cs_test_', 'cs_test_a1&checkout=cs_test_b2', 'cs_test_a1%2F..']) {
+    assert.equal(parseRoute(`/usage?installation=99&checkout=${bad}`).checkout, null, bad);
+  }
   assert.equal(parseRoute('/settings').view, 'not-found');
 });
 

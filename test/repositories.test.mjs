@@ -9,12 +9,12 @@ import { Repositories, parsePlan, month } from '../dist/github/repositories.js';
 import { dispatchRepositories, webhookServer } from '../dist/github/webhook.js';
 import { readProfile } from '../dist/run.js';
 
-function setup(t, maxReviewsPerDay = 2) {
+function setup(t, maxReviewsPerDay = 2, origin) {
   const root = mkdtempSync(join(tmpdir(), 'review-repositories-'));
   const config = { repository: 'owner/first', repositoryId: 42, installationId: 99, profile: resolve('profiles/smoke-openrouter-free.json'), stateDirectory: root, host: '127.0.0.1', port: 8787, maxReviewsPerDay };
   const models = [{ id: 'free', label: 'Free', profile: readProfile(config.profile) }];
   const store = new Store(root); assert.ok(store.acquire('worker'));
-  const directory = new Repositories(config, store, models, 'worker');
+  const directory = new Repositories(config, store, models, 'worker', origin);
   t.after(() => { directory.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
   return { directory, config, store, models, first: directory.entries.get(42), second: directory.connect(43, 'owner/second', 99), third: directory.connect(44, 'other/third', 100) };
 }
@@ -104,8 +104,39 @@ test('each installation is held to its monthly plan; other installations keep re
   f.directory.close();
   const restored = new Repositories(f.config, f.store, f.models, 'worker');
   assert.deepEqual(restored.plan(99), { plan: { freeReviews: 1, monthlyReviews: 2, multiplier: 1.1, minimumUsd: 0 }, updatedAt: restored.plan(99).updatedAt, updatedBy: 8 });
-  assert.deepEqual(restored.plan(100).plan, { freeReviews: 20, monthlyReviews: 20, multiplier: 2, minimumUsd: .05 });
+  assert.deepEqual(restored.plan(100).plan, { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 });
   restored.close();
+});
+
+test('the default plan stops at its free reviews until a card is on file; an operator plan needs no card', t => {
+  // Anyone can install the App, so without a card a stranger's reviews cost at most the free
+  // allowance; the refusal tells a repository admin where to add one.
+  const f = setup(t, 100, 'https://review.example.test');
+  let n = 0;
+  const run = entry => { entry.store.enable(true); entry.store.enqueue(`d${++n}`, n); return f.directory.reserve(entry, entry.store.next('worker'), 'worker', 100); };
+  assert.deepEqual(f.directory.limit(100), { plan: { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, limit: 20, needsCard: true });
+  for (let i = 0; i < 20; i++) assert.equal(run(f.third), true);
+  assert.match(run(f.third), /^This organization used its 20 free reviews for \w+ \d{4}\. A repository admin can add a card on the atmin dashboard \(https:\/\/review\.example\.test\/usage\?installation=100\) to keep reviewing; otherwise reviews resume on \d{4}-\d{2}-01\./);
+  // A customer without a card is not enough; the card is.
+  f.directory.setCustomer(100, 'cus_test1', 7);
+  assert.equal(f.directory.limit(100).needsCard, true);
+  f.directory.setCard(100, 'pm_test1', 'Visa ending 4242', 7);
+  assert.deepEqual(f.directory.limit(100), { plan: f.directory.plan(100).plan, limit: 1000, needsCard: false });
+  assert.equal(run(f.third), true);
+  assert.deepEqual(f.directory.billed(), [100]);
+  // An operator's plan is applied as set, with or without a card.
+  f.directory.setPlan(99, { freeReviews: 1, monthlyReviews: 50, multiplier: 1.1, minimumUsd: 0 }, 8);
+  assert.deepEqual(f.directory.limit(99), { plan: { freeReviews: 1, monthlyReviews: 50, multiplier: 1.1, minimumUsd: 0 }, limit: 50, needsCard: false });
+});
+
+test('without Stripe, the default plan\'s refusal names the free limit and asks for no card', t => {
+  const f = setup(t, 100);
+  let n = 0;
+  const run = entry => { entry.store.enable(true); entry.store.enqueue(`d${++n}`, n); return f.directory.reserve(entry, entry.store.next('worker'), 'worker', 100); };
+  for (let i = 0; i < 20; i++) assert.equal(run(f.third), true);
+  const refused = run(f.third);
+  assert.match(refused, /^This organization reached its limit of 20 reviews for /);
+  assert.doesNotMatch(refused, /card/);
 });
 
 test('plans reject values outside operator bounds, and each installation connects at most ten repositories', t => {
@@ -116,7 +147,7 @@ test('plans reject values outside operator bounds, and each installation connect
     { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: '0' }, { freeReviews: 1, monthlyReviews: 1, multiplier: Infinity, minimumUsd: 0 }]) {
     assert.throws(() => parsePlan(bad)); assert.throws(() => f.directory.setPlan(99, bad, 8));
   }
-  assert.deepEqual(f.directory.plan(99).plan, { freeReviews: 20, monthlyReviews: 20, multiplier: 2, minimumUsd: .05 });
+  assert.deepEqual(f.directory.plan(99).plan, { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 });
   for (let id = 1; id <= 8; id++) f.directory.connect(1000 + id, `owner/r${id}`, 99);
   assert.equal(f.directory.of(99).length, 10);
   assert.throws(() => f.directory.connect(2000, 'owner/eleventh', 99), /limit/);

@@ -17,8 +17,9 @@ const operatorOnly = 'Operator access is required.';
 const accountKind = type => (type === 'User' ? 'Personal account' : 'Organization');
 const planValue = (field, value) => (field.kind === 'usd' ? usd(value) : field.kind === 'multiplier' ? `${value}×` : count(value));
 
-function Reviews({ usage, plan }) {
-  return <><Figure>{count(usage.reviews)}</Figure> <span className="text-muted-foreground">/ {plan.monthlyReviews ? <Figure>{count(plan.monthlyReviews)}</Figure> : 'off'}</span></>;
+// `limit` is the limit in force: the default plan stops at its free reviews until a card is on file.
+function Reviews({ usage, limit }) {
+  return <><Figure>{count(usage.reviews)}</Figure> <span className="text-muted-foreground">/ {limit ? <Figure>{count(limit)}</Figure> : 'off'}</span></>;
 }
 
 function PlanSummary({ plan }) {
@@ -121,11 +122,11 @@ function Customers({ data, onEdit }) {
                     {installation.suspended && <Badge variant="outline">Suspended</Badge>}
                   </div>
                   <div className="text-[13px] text-muted-foreground">{accountKind(installation.accountType)}</div>
-                  <div className="text-[13px] md:hidden"><Reviews usage={usage} plan={plan}/> reviews</div>
+                  <div className="text-[13px] md:hidden"><Reviews usage={usage} limit={installation.limit}/> reviews</div>
                   <Button variant="outline" size="sm" className="mt-2 md:hidden" onClick={() => onEdit(installation)}>Edit plan</Button>
                 </TableCell>
                 <TableCell className="text-right max-md:hidden"><Figure>{repositories.length}</Figure></TableCell>
-                <TableCell className="text-right max-md:hidden"><Reviews usage={usage} plan={plan}/></TableCell>
+                <TableCell className="text-right max-md:hidden"><Reviews usage={usage} limit={installation.limit}/></TableCell>
                 <TableCell className="text-right max-md:hidden"><Figure>{usd(usage.knownUsd)}</Figure></TableCell>
                 <TableCell className="text-right">
                   <Figure>{usd(usage.estimatedUsd)}</Figure>
@@ -135,6 +136,7 @@ function Customers({ data, onEdit }) {
                 <TableCell className="max-md:hidden">
                   <PlanSummary plan={plan}/>
                   {plan.custom && <div className="text-[13px] text-muted-foreground">Custom{plan.updatedBy ? ` · set by ${plan.updatedBy}` : ''}</div>}
+                  <div className="text-[13px] text-muted-foreground">{installation.card ?? (plan.custom ? 'No card' : 'No card, stops at free reviews')}</div>
                 </TableCell>
                 <TableCell className="text-right max-md:hidden"><Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button></TableCell>
               </TableRow>
