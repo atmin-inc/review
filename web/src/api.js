@@ -53,6 +53,7 @@ export const api = {
   connect: repository => request('POST', `${base}/connect?${repo(repository)}`, {}),
   setEnabled: (repository, enabled) => request('POST', `${base}/enabled?${repo(repository)}`, { enabled }),
   saveSettings: (repository, settings) => request('POST', `${base}/settings?${repo(repository)}`, settings),
+  requestReview: (repository, pr) => request('POST', `${base}/review?${repo(repository)}`, { pr }),
   logout: () => request('POST', `${base}/logout`, {}),
   admin: () => request('GET', `${base}/admin`),
   savePlan: (installation, plan) => request('POST', `${base}/admin/plan?installation=${encodeURIComponent(installation)}`, plan),
