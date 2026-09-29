@@ -31,7 +31,7 @@ function state(t) {
 async function harness(t, findings = []) {
   const s = state(t);
   const fixture = repository(t);
-  let live = { ...fixture.state, draft: false };
+  let live = { ...fixture.state, draft: false, author: { id: 1, login: 'alice' } };
   let comment = null;
   let runs = 0, creates = 0, updates = 0;
   const checks = [];
@@ -726,6 +726,20 @@ test('head movement or lease loss while reading diff suppresses inline publicati
   }
 });
 
+test('the live PR carries its author, which a per-author limit counts by ID', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', {modulusLength: 2048});
+  let user = { id: 7, login: 'dependabot[bot]' };
+  const api = new AppGitHub({repository: 'test/review-fixture', repositoryId: 42, installationId: 21}, '123', privateKey.export({format: 'pem', type: 'pkcs8'}), async url => {
+    if (url.endsWith('/access_tokens')) return Response.json({token: 'fixture', expires_at: new Date(Date.now() + 3600_000).toISOString()});
+    if (url.endsWith('/pulls/1')) return Response.json({ number: 1, state: 'open', draft: false, user, head: { sha: 'a'.repeat(40) },
+      base: { ref: 'main', repo: { id: 42, full_name: 'test/review-fixture' } } });
+    if (url.endsWith('/git/ref/heads/main')) return Response.json({ object: { sha: 'b'.repeat(40) } });
+    throw new Error('Unexpected API request');
+  });
+  assert.deepEqual((await api.pull(1)).author, { id: 7, login: 'dependabot[bot]' });
+  for (const bad of [undefined, { id: 0, login: 'x' }, { id: 7, login: '@x' }]) { user = bad; await assert.rejects(api.pull(1), /Invalid live PR state/); }
+});
+
 test('GitHub inline API ignores forged reviews and submits one COMMENT batch on the supplied commit', async () => {
   const { privateKey } = generateKeyPairSync('rsa', {modulusLength: 2048});
   const head = 'a'.repeat(40), marker = '<!-- atmin-review-inline:fixture -->', requests = [];
@@ -754,7 +768,7 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1 });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null });
   const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
   h.store.enqueue('first-dashboard-run', 1); await worker.tick();
   h.store.enqueue('second-dashboard-run', 1); await worker.tick();
@@ -763,6 +777,34 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
   assert.equal(h.checks.at(-1).conclusion, 'failure');
 });
 
+
+// Lors (2026-09-24): customers can cap spend per person. Past the repository's per-author
+// limit for the month, that author's PRs get the reason instead of a model run; other
+// authors are unaffected, and the refusal names the author without an @-mention.
+test('a PR author past the per-author monthly limit gets the reason on the PR and no model run', async t => {
+  const h = await harness(t);
+  h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
+  const settings = new ReviewSettings(h.config, h.store);
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1 });
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
+  const first = h.store.enqueue('alice-1', 1); await worker.tick();
+  assert.equal(h.counts.runs, 1); assert.equal(h.store.get(first).author, 1);
+  h.store.enqueue('alice-2', 1); await worker.tick();
+  assert.equal(h.counts.runs, 1);
+  assert.match(h.comment.body, /PRs by `alice` reached this repository's limit of 1 review per author for \w+ \d{4}\. Reviews resume on \d{4}-\d\d-01/);
+  assert.ok(!h.comment.body.includes('@alice'));
+  assert.equal(h.checks.at(-1).conclusion, 'failure');
+  h.setLive({ author: { id: 2, login: 'bob' } });
+  h.store.enqueue('bob-1', 1); await worker.tick();
+  assert.equal(h.counts.runs, 2);
+  // Settings saved before the limit existed read as no limit.
+  h.store.db.prepare('UPDATE review_settings SET value=?').run(JSON.stringify({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6 }));
+  assert.equal(settings.current().maxReviewsPerAuthor, null);
+  h.setLive({ author: { id: 1, login: 'alice' } });
+  h.store.enqueue('alice-3', 1); await worker.tick();
+  assert.equal(h.counts.runs, 3);
+  for (const bad of [0, 1.5, 100_001, '2']) assert.throws(() => settings.validate({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: bad }));
+});
 
 test('an organization past its monthly plan gets the reason on its PR and no model run', async t => {
   const { Repositories } = await import('../dist/github/repositories.js');

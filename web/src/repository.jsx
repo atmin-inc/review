@@ -120,12 +120,14 @@ function SettingsForm({ id, data, onSaved }) {
   const prefix = useId();
   const [form, setForm] = useState(() => ({
     model: data.settings.model, maxUsd: String(data.settings.maxUsd), maxReviewsPerDay: String(data.settings.maxReviewsPerDay),
+    maxReviewsPerAuthor: data.settings.maxReviewsPerAuthor === null ? '' : String(data.settings.maxReviewsPerAuthor),
   }));
   const [status, setStatus] = useState({ pending: false, submitted: false, error: null, saved: false });
   const { errors, value } = validateSettings(form, data.models, data.limits);
   const shown = status.submitted ? errors : {};
   const model = data.models.find(m => m.id === form.model);
-  const changed = value.model !== data.settings.model || value.maxUsd !== data.settings.maxUsd || value.maxReviewsPerDay !== data.settings.maxReviewsPerDay;
+  const changed = value.model !== data.settings.model || value.maxUsd !== data.settings.maxUsd || value.maxReviewsPerDay !== data.settings.maxReviewsPerDay
+    || value.maxReviewsPerAuthor !== data.settings.maxReviewsPerAuthor;
   const edit = (key, next) => { setForm(current => ({ ...current, [key]: next })); setStatus(current => ({ ...current, saved: false, error: null })); };
 
   async function submit(event) {
@@ -179,6 +181,10 @@ function SettingsForm({ id, data, onSaved }) {
         <Field id={`${prefix}-maxReviewsPerDay`} label="Maximum reviews per day" error={shown.maxReviewsPerDay}
           help={<>From <Figure>1</Figure> to <Figure>{data.limits.maxReviewsPerDay}</Figure>.</>}>
           <Input {...describe('maxReviewsPerDay')} inputMode="numeric" autoComplete="off" value={form.maxReviewsPerDay} onChange={event => edit('maxReviewsPerDay', event.target.value)}/>
+        </Field>
+        <Field id={`${prefix}-maxReviewsPerAuthor`} label="Reviews per PR author each month" error={shown.maxReviewsPerAuthor}
+          help="Counts every review of one person's PRs in this repository. Leave blank for no limit.">
+          <Input {...describe('maxReviewsPerAuthor')} inputMode="numeric" autoComplete="off" placeholder="No limit" value={form.maxReviewsPerAuthor} onChange={event => edit('maxReviewsPerAuthor', event.target.value)}/>
         </Field>
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={status.pending || !changed}>{status.pending ? 'Saving…' : 'Save settings'}</Button>

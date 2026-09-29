@@ -6,7 +6,9 @@ import type { PilotConfig } from './config.js';
 import type { Store } from './store.js';
 
 export interface ModelChoice { id: string; label: string; profile: Profile; }
-export interface ReviewPreferences { model: string; maxUsd: number; maxReviewsPerDay: number; }
+// maxReviewsPerAuthor caps the reviews of one PR author's PRs in this repository per UTC month;
+// null is no limit. Lors asked (2026-09-24) that customers can cap spend per person.
+export interface ReviewPreferences { model: string; maxUsd: number; maxReviewsPerDay: number; maxReviewsPerAuthor: number | null; }
 // operators: GitHub user IDs (immutable, unlike logins) who may connect repositories from any
 // installation they can see. Everyone else sees only installations an operator already approved.
 export interface DashboardConfig { origin: string; clientId: string; clientSecret: string; models: ModelChoice[]; operators: number[]; appSlug?: string; }
@@ -46,20 +48,22 @@ export class ReviewSettings {
   current(): ReviewPreferences {
     const saved = this.store.db.prepare('SELECT value FROM review_settings WHERE id=1').get();
     const initial = readProfile(this.config.profile);
-    return this.validate(saved ? JSON.parse(String(saved.value)) : {
+    // Settings saved before per-author limits have no such key; they had no limit.
+    return this.validate(saved ? { maxReviewsPerAuthor: null, ...JSON.parse(String(saved.value)) } : {
       model: this.models.find(m => sameProfile(m.profile, initial))!.id,
-      maxUsd: initial.maxUsd, maxReviewsPerDay: this.config.maxReviewsPerDay,
+      maxUsd: initial.maxUsd, maxReviewsPerDay: this.config.maxReviewsPerDay, maxReviewsPerAuthor: null,
     });
   }
   validate(value: unknown): ReviewPreferences {
     const p = value as ReviewPreferences;
     const choice = this.models.find(m => m.id === p?.model);
-    if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).length !== 3
-      || Object.keys(p).some(k => !['model', 'maxUsd', 'maxReviewsPerDay'].includes(k)) || !choice
+    if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).length !== 4
+      || Object.keys(p).some(k => !['model', 'maxUsd', 'maxReviewsPerDay', 'maxReviewsPerAuthor'].includes(k)) || !choice
+      || (p.maxReviewsPerAuthor !== null && (!Number.isSafeInteger(p.maxReviewsPerAuthor) || p.maxReviewsPerAuthor < 1 || p.maxReviewsPerAuthor > 100_000))
       || !Number.isFinite(p.maxUsd) || p.maxUsd < 0 || p.maxUsd > choice.profile.maxUsd
       || !Number.isSafeInteger(p.maxReviewsPerDay) || p.maxReviewsPerDay < 1 || p.maxReviewsPerDay > this.config.maxReviewsPerDay) throw new Error('Settings exceed operator limits');
     parseProfile({ ...choice.profile, maxUsd: p.maxUsd });
-    return { model: p.model, maxUsd: p.maxUsd, maxReviewsPerDay: p.maxReviewsPerDay };
+    return { model: p.model, maxUsd: p.maxUsd, maxReviewsPerDay: p.maxReviewsPerDay, maxReviewsPerAuthor: p.maxReviewsPerAuthor };
   }
   save(value: unknown): ReviewPreferences {
     const p = this.validate(value);

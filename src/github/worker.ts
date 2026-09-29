@@ -12,7 +12,7 @@ import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
 import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
 import type { ReviewSettings } from './settings.js';
-import { dailyLimitReached } from './repositories.js';
+import { dailyLimitReached, authorLimitReached, month } from './repositories.js';
 import { InlineReviews } from './inline.js';
 
 // Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
@@ -65,6 +65,7 @@ export class Worker {
     const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
     if (!this.store.current(job, this.owner) || signal.aborted) return;
     this.store.track(job.pr, initial.baseRef, initial.state === 'open' && !initial.draft);
+    if (job.author !== initial.author.id) this.store.update(job.id, { author: initial.author.id });
     const marker = markerFor(this.config.repositoryId, job.pr);
     if (initial.state !== 'open' || initial.draft) {
       const existing = await this.github.summary(job.pr, marker);
@@ -101,7 +102,11 @@ export class Worker {
       await this.checks.publish(job, initial.headSha, { status: 'in_progress', output: { title: 'Review in progress', summary: `Reviewing head ${initial.headSha} against target ${initial.baseSha}.` } });
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       let artifact: string | null = null;
-      const reserved = this.reserve(job, this.settings?.current().maxReviewsPerDay ?? this.config.maxReviewsPerDay);
+      const preferences = this.settings?.current(), perAuthor = preferences?.maxReviewsPerAuthor ?? null, now = Date.now();
+      const authorUsed = perAuthor === null ? 0 : this.store.authorReviews(initial.author.id, month(now).start);
+      if (perAuthor !== null && authorUsed >= perAuthor) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews\n`);
+      const reserved = perAuthor !== null && authorUsed >= perAuthor ? authorLimitReached(initial.author.login, perAuthor, now)
+        : this.reserve(job, preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay);
       if (reserved !== true) {
         report = `# atmin review — review not run\n\n${reserved}`;
       } else {
