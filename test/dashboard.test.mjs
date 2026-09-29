@@ -44,11 +44,11 @@ async function setup(t, hosted = false, operators = []) {
     if (url.endsWith('/user')) return Response.json({ id: state.userId ?? 7, login: 'owner', email: 'private@example.test' });
     if (url.includes('/user/installations?')) return Response.json({ installations: (state.installations ?? [99]).map(id => ({ id, account: { login: accounts[id], type: id === 77 ? 'User' : 'Organization' } })) });
     if (url.includes('/user/installations/77/repositories')) return Response.json({ repositories: [{ id: 55, full_name: 'other/app', owner: { type: 'Organization' } }] });
-    if (url.endsWith('/repos/other/app')) return Response.json({ id: 55, full_name: 'other/app', permissions: { admin: true } });
+    if (url.endsWith('/repos/other/app')) return Response.json({ id: 55, full_name: 'other/app', size: state.size ?? 1000, permissions: { admin: true } });
     if (url.endsWith('/repos/owner/repo') && state.redirectTo) return new Response(null, { status: 301, headers: { Location: state.redirectTo } });
-    if (url.endsWith('/repositories/42')) return Response.json({ id: 42, full_name: 'owner/repo', permissions: { admin: state.admin } });
-    if (url.endsWith('/repos/owner/repo')) return Response.json({ id: 42, full_name: 'owner/repo', permissions: { admin: state.admin } });
-    if (url.endsWith('/repos/owner/second')) return Response.json({ id: 43, full_name: 'owner/second', permissions: { admin: state.secondAdmin !== false } });
+    if (url.endsWith('/repositories/42')) return Response.json({ id: 42, full_name: 'owner/repo', size: 1000, permissions: { admin: state.admin } });
+    if (url.endsWith('/repos/owner/repo')) return Response.json({ id: 42, full_name: 'owner/repo', size: 1000, permissions: { admin: state.admin } });
+    if (url.endsWith('/repos/owner/second')) return Response.json({ id: 43, full_name: 'owner/second', size: 1000, permissions: { admin: state.secondAdmin !== false } });
     if (url.includes('/user/installations/99/repositories')) return Response.json({ repositories: state.installed ? [{ id: 42, full_name: 'owner/repo', owner: { type: 'Organization' } }, ...(state.second ? [{ id: 43, full_name: 'owner/second' }] : [])] : [] });
     throw new Error('Unexpected GitHub endpoint');
   };
@@ -301,6 +301,13 @@ test('any installation connects its own repositories, up to ten, without an oper
   assert.deepEqual(session.connections.installations[1].plan, { freeReviews: 20, monthlyReviews: 20 });
   assert.equal(session.connections.installations[1].usage.remaining, 20);
   assert.deepEqual(session.connections.repositories.map(r => [r.id, r.installationId, r.connected]), [[42, 99, true], [55, 77, false]]);
+  // Every review fetches the full history onto a disk all customers share, so a repository
+  // over 2 GB on GitHub does not connect (mason-v1 is 760 MB there; its copy is about 175 MB).
+  f.state.size = 2 * 1024 * 1024 + 1;
+  const large = await f.post('connect?repository=55', {}, cookie);
+  assert.equal(large.status, 409); assert.match((await large.json()).error, /up to 2 GB, and other\/app is larger/);
+  assert.equal(f.repositories.entries.has(55), false);
+  f.state.size = 2 * 1024 * 1024;
   assert.equal((await f.post('connect?repository=55', {}, cookie)).status, 200);
   const entry = f.repositories.entries.get(55);
   assert.equal(entry.config.installationId, 77); assert.equal(entry.config.repository, 'other/app');

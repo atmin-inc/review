@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePacket } from '../contracts.js';
 import { readProfile } from '../run.js';
@@ -8,7 +8,44 @@ import { previousReview } from '../claim-result.js';
 import type { PilotConfig } from './config.js';
 import type { GitHub } from './api.js';
 import type { ReviewSettings } from './settings.js';
-import type { Job } from './store.js';
+import type { Job, Store } from './store.js';
+
+// Storage limits, because strangers' repositories share this disk. Each connected repository
+// already has its own directory, database and shared copy (see Repositories).
+export const DEFAULT_MIN_FREE_DISK_MB = 2048;
+export const RUN_RETENTION_DAYS = 90;
+// A shared copy only grows (garbage collection is off; see sourceCache in src/snapshot.ts).
+// Past this size the next review wipes it and fetches afresh; Lors, 2026-09-26: a wipe only
+// slows the next review. Connected repositories are at most 2 GB on GitHub.
+export const MAX_SOURCE_CACHE_BYTES = 3 * 1024 ** 3;
+
+export function freeDiskMb(directory: string): number {
+  const stats = statfsSync(directory);
+  return Math.floor(stats.bavail * stats.bsize / 1024 ** 2);
+}
+function directoryBytes(path: string): number {
+  if (!existsSync(path)) return 0;
+  let total = 0;
+  for (const entry of readdirSync(path, { recursive: true, withFileTypes: true })) if (entry.isFile()) total += statSync(join(entry.parentPath, entry.name)).size;
+  return total;
+}
+// The worker runs one review at a time, so nothing else reads the copy while it is wiped.
+export function trimSourceCache(cache: string, limit = MAX_SOURCE_CACHE_BYTES): boolean {
+  const size = directoryBytes(cache);
+  if (size <= limit) return false;
+  rmSync(cache, { recursive: true, force: true });
+  process.stderr.write(`atmin review: shared copy ${cache} held ${Math.round(size / 1024 ** 2)} MB, over the ${Math.round(limit / 1024 ** 2)} MB limit; wiped\n`);
+  return true;
+}
+// Deletes run records older than RUN_RETENTION_DAYS (see Store.expireRuns). The review's
+// row, with the comment it published, stays in the database.
+export function expireRuns(config: PilotConfig, store: Store, now = Date.now()): number {
+  const runs = join(config.stateDirectory, 'runs') + sep;
+  const expired = store.expireRuns(now - RUN_RETENTION_DAYS * 86_400_000);
+  for (const directory of expired) if (directory.startsWith(runs)) rmSync(directory, { recursive: true, force: true });
+  if (expired.length) process.stderr.write(`atmin review: deleted ${expired.length} run records older than ${RUN_RETENTION_DAYS} days in repository ${config.repositoryId}\n`);
+  return expired.length;
+}
 
 // `previous` is the artifact of an earlier completed review of the same PR, when the
 // worker has one to build on; the claim run decides whether it can be used.
@@ -48,6 +85,7 @@ export function engineRunner(config: PilotConfig, github: GitHub, settings?: Rev
     const home = mkdtempSync(join(config.stateDirectory, 'job-home-'));
     try {
       const token = await github.readToken();
+      trimSourceCache(join(config.stateDirectory, 'source-cache.git'));
       await child(['capture', `https://github.com/${config.repository}/pull/${job.pr}`, directory, join(config.stateDirectory, 'source-cache.git')],
         childEnvironment(home, { GH_TOKEN: token }), signal, 130_000);
       const earlier = previous ? previousReview(previous) : null;

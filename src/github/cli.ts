@@ -8,8 +8,8 @@ import { Store } from './store.js';
 import { AppGitHub } from './api.js';
 import { webhookServer, dispatchRepositories } from './webhook.js';
 import { Repositories, type Repository } from './repositories.js';
-import { Worker } from './worker.js';
-import { engineRunner } from './runner.js';
+import { Worker, failureCause } from './worker.js';
+import { engineRunner, expireRuns } from './runner.js';
 import { dashboard } from './dashboard.js';
 import { reviewPrice } from './dashboard-view.js';
 import { site } from './site.js';
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   const pages = dashboardConfig ? site(fileURLToPath(new URL('../../web/dist', import.meta.url))) : undefined;
   const server = webhookServer(secret, (event, delivery, payload) => dispatchRepositories(entries, entry => runtime(entry).github, event, delivery, payload),
     api && pages ? async (request, response) => await api(request, response) || pages(request, response) : undefined);
-  let stopping = false, cursor = 0;
+  let stopping = false, cursor = 0, swept = 0;
   const stop = () => { stopping = true; for (const { worker } of workers.values()) worker.stop(); server.close(); };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   const heartbeat = setInterval(() => { for (const entry of entries.values()) if (!entry.store.renew(owner)) stop(); }, 5000);
@@ -82,6 +82,13 @@ async function main(): Promise<void> {
     await new Promise<void>((done, reject) => { server.once('error', reject); server.listen(config.port, config.host, done); });
     process.stdout.write(`${JSON.stringify({ service: 'atmin review', repository: config.repository, enabled: store.enabled(), host: config.host, port: config.port })}\n`);
     while (!stopping) {
+      if (Date.now() - swept > 3_600_000) {
+        swept = Date.now();
+        for (const entry of entries.values()) {
+          try { expireRuns(entry.config, entry.store); }
+          catch (error) { process.stderr.write(`atmin review: deleting old run records in repository ${entry.config.repositoryId} failed: ${failureCause(error)}\n`); }
+        }
+      }
       const ready = [...entries.values()];
       let worked = false;
       for (let i = 0; i < ready.length && !stopping; i++) {

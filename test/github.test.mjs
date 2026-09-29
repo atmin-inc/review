@@ -16,7 +16,7 @@ import { capture } from '../dist/snapshot.js';
 import { Worker, markerFor, failureCause } from '../dist/github/worker.js';
 import { AppGitHub, GitHubError, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
-import { childEnvironment, engineRunner } from '../dist/github/runner.js';
+import { childEnvironment, engineRunner, expireRuns, trimSourceCache } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
 import { repository, completed, finding, current } from './helpers.mjs';
 
@@ -25,7 +25,7 @@ function state(t) {
   const root = mkdtempSync(join(tmpdir(), 'atmin-github-test-'));
   const store = new Store(root);
   t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }); });
-  const config = { repository: 'test/review-fixture', repositoryId: 42, installationId: 21, stateDirectory: root, profile: '', host: '127.0.0.1', port: 0, maxReviewsPerDay: 6 };
+  const config = { repository: 'test/review-fixture', repositoryId: 42, installationId: 21, stateDirectory: root, profile: '', host: '127.0.0.1', port: 0, maxReviewsPerDay: 6, minFreeDiskMb: 0 };
   return { root, store, config };
 }
 async function harness(t, findings = []) {
@@ -388,7 +388,7 @@ test('compiled pilot CLI starts paused, serves a signed ping and shuts down clea
   const config = join(root, 'config.json');
   writeFileSync(config, JSON.stringify({ repository: 'test/review-fixture', repositoryId: 42, installationId: 21,
     profile: fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url)),
-    stateDirectory: join(root, 'state'), host: '127.0.0.1', port, maxReviewsPerDay: 6 }));
+    stateDirectory: join(root, 'state'), host: '127.0.0.1', port, maxReviewsPerDay: 6, minFreeDiskMb: 0 }));
   const key = join(root, 'fake.pem'); writeFileSync(key, 'offline fixture; no API calls are permitted');
   const cli = fileURLToPath(new URL('../dist/github/cli.js', import.meta.url));
   const env = childEnvironment(root, { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: key, GITHUB_WEBHOOK_SECRET: secret });
@@ -804,6 +804,48 @@ test('a PR author past the per-author monthly limit gets the reason on the PR an
   h.store.enqueue('alice-3', 1); await worker.tick();
   assert.equal(h.counts.runs, 3);
   for (const bad of [0, 1.5, 100_001, '2']) assert.throws(() => settings.validate({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: bad }));
+});
+
+// Strangers' repositories share one disk. Below the configured free space no review starts,
+// the PR says why, and nothing counts against the plan.
+test('a review does not start when the state disk is low on space', async t => {
+  const h = await harness(t); h.config.minFreeDiskMb = 1_000_000;
+  const id = h.store.enqueue('low-disk', 1); await h.worker.tick();
+  assert.equal(h.counts.runs, 0);
+  assert.match(h.comment.body, /low on disk space, so this review did not start/);
+  assert.equal(h.checks.at(-1).conclusion, 'failure');
+  assert.equal(h.store.get(id).started, null);
+});
+
+// Run records are deleted after RUN_RETENTION_DAYS, except each PR's latest completed review,
+// which the next push review builds on; unfinished jobs and paths outside runs/ are untouched.
+test('old run records are deleted except the latest completed review of each PR', async t => {
+  const h = await harness(t);
+  const day = 86_400_000, now = Date.now(), runs = join(h.root, 'runs');
+  const job = (pr, state, age, directory = join(runs, `${pr}-${state}-${age}`)) => {
+    mkdirSync(directory, { recursive: true }); writeFileSync(join(directory, 'receipt.json'), '{}');
+    const id = h.store.enqueue(`${pr}-${state}-${age}`, pr);
+    h.store.db.prepare('UPDATE jobs SET state=?, created=?, artifact=? WHERE id=?').run(state, now - age * day, directory, id);
+    return { id, directory };
+  };
+  const oldest = job(1, 'completed', 200), older = job(1, 'failed', 150), latest = job(1, 'completed', 120);
+  const recent = job(2, 'completed', 10), stale = job(2, 'completed', 95), queued = job(3, 'queued', 100);
+  const outside = job(4, 'failed', 300, join(h.root, 'elsewhere')), kept = job(4, 'completed', 5);
+  assert.equal(expireRuns(h.config, h.store, now), 4);
+  for (const gone of [oldest, older, stale]) { assert.equal(existsSync(gone.directory), false); assert.equal(h.store.get(gone.id).artifact, null); }
+  for (const stays of [latest, recent, queued, kept]) { assert.equal(existsSync(stays.directory), true); assert.equal(h.store.get(stays.id).artifact, stays.directory); }
+  assert.equal(existsSync(outside.directory), true); assert.equal(h.store.get(outside.id).artifact, null);
+  assert.equal(expireRuns(h.config, h.store, now), 0);
+});
+
+test('a shared repository copy over its size limit is wiped before the next capture', t => {
+  const root = mkdtempSync(join(tmpdir(), 'atmin-cache-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const cache = join(root, 'source-cache.git');
+  mkdirSync(join(cache, 'objects', 'pack'), { recursive: true });
+  writeFileSync(join(cache, 'objects', 'pack', 'a.pack'), Buffer.alloc(600)); writeFileSync(join(cache, 'config'), Buffer.alloc(100));
+  assert.equal(trimSourceCache(cache, 700), false); assert.equal(existsSync(cache), true);
+  assert.equal(trimSourceCache(cache, 699), true); assert.equal(existsSync(cache), false);
+  assert.equal(trimSourceCache(cache, 0), false);
 });
 
 test('an organization past its monthly plan gets the reason on its PR and no model run', async t => {

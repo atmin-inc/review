@@ -111,6 +111,17 @@ export class Store {
       return true;
     });
   }
+  // Clears and returns the run directories of jobs created before `before`, except each PR's
+  // latest completed review, which a push review builds on. Unfinished jobs are left alone.
+  expireRuns(before: number): string[] {
+    return this.transaction(() => {
+      const rows = this.db.prepare(`SELECT id, artifact FROM jobs WHERE artifact IS NOT NULL AND created<? AND state NOT IN ('queued','running','publishing')
+        AND id NOT IN (SELECT latest FROM (SELECT (SELECT k.id FROM jobs k WHERE k.pr=p.pr AND k.state='completed' AND k.artifact IS NOT NULL
+          ORDER BY k.created DESC, k.rowid DESC LIMIT 1) AS latest FROM (SELECT DISTINCT pr FROM jobs) p) WHERE latest IS NOT NULL)`).all(before);
+      for (const row of rows) this.db.prepare('UPDATE jobs SET artifact=NULL WHERE id=?').run(row.id!);
+      return rows.map(row => String(row.artifact));
+    });
+  }
   // Reviews of this author's PRs that started inference since `since`.
   authorReviews(author: number, since: number): number {
     return Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE author=? AND started>=?').get(author, since)!.n);

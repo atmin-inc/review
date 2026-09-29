@@ -126,7 +126,11 @@ review. Automatic reviews pause after five reviewed heads of one PR; comment
 `/atmin review` to rerun. Use a dedicated host user. Source review does not execute repository code.
 Optional [isolated checks](docs/isolated-checks.md) run selected commands and
 verify proposed patches on a configured Linux worker. This private pilot is not
-a hardened isolation boundary for many tenants.
+a hardened isolation boundary for many tenants. Each connected repository has its own
+state directory, database and shared copy of its history. A repository over 2 GB on GitHub
+does not connect; no review starts while the state disk has less than `minFreeDiskMb`
+(default 2048) free; a shared copy over 3 GB is wiped before the next capture; and run
+records older than 90 days are deleted, except each PR's latest completed review.
 
 Register an App with repository Contents read, Issues read, Pull requests write and
 Checks write. Issues read is what makes GitHub offer the Issue comment event, which carries
@@ -152,7 +156,7 @@ and installation IDs in a local configuration:
 }
 ```
 
-`trustedChecks` is optional. Use the actual check name and producer App ID you
+`trustedChecks` and `minFreeDiskMb` are optional. Use the actual check name and producer App ID you
 trust; check names must match the target policy's required checks. App 15368 is
 an illustrative configuration; verify the producer in your repository before
 using it. The worker queries GitHub on the exact reviewed head. CI that runs on

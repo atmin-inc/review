@@ -7,7 +7,7 @@ import { readVerification, type Verification } from '../verification.js';
 import { renderMarkdown, type ReviewPrice } from '../render.js';
 import type { PilotConfig } from './config.js';
 import { GitHubError, type GitHub, type LivePull } from './api.js';
-import type { Runner } from './runner.js';
+import { DEFAULT_MIN_FREE_DISK_MB, freeDiskMb, type Runner } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
 import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
@@ -22,6 +22,7 @@ export function failureCause(error: unknown): string {
   if (error instanceof GitHubError) return `GitHub ${error.status || error.detail} on ${error.request}`;
   return error instanceof Error ? `${error.name}: ${error.message.slice(0, 200)}` : 'non-error thrown';
 }
+const diskLow = 'The review service is low on disk space, so this review did not start. A maintainer can rerun with `/atmin review` once an atmin operator frees space. No inference was started.';
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
@@ -104,9 +105,12 @@ export class Worker {
       let artifact: string | null = null;
       const preferences = this.settings?.current(), perAuthor = preferences?.maxReviewsPerAuthor ?? null, now = Date.now();
       const authorUsed = perAuthor === null ? 0 : this.store.authorReviews(initial.author.id, month(now).start);
-      if (perAuthor !== null && authorUsed >= perAuthor) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews\n`);
-      const reserved = perAuthor !== null && authorUsed >= perAuthor ? authorLimitReached(initial.author.login, perAuthor, now)
-        : this.reserve(job, preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay);
+      const freeMb = freeDiskMb(this.config.stateDirectory), floorMb = this.config.minFreeDiskMb ?? DEFAULT_MIN_FREE_DISK_MB;
+      const refusal = freeMb < floorMb ? { reason: diskLow, detail: `${freeMb} MB free on the state disk, below ${floorMb} MB` }
+        : perAuthor !== null && authorUsed >= perAuthor ? { reason: authorLimitReached(initial.author.login, perAuthor, now), detail: `author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews` }
+        : null;
+      if (refusal) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: ${refusal.detail}\n`);
+      const reserved = refusal ? refusal.reason : this.reserve(job, preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay);
       if (reserved !== true) {
         report = `# atmin review — review not run\n\n${reserved}`;
       } else {
