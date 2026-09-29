@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useState } from 'react';
 import { Search } from 'lucide-react';
 import { api } from './api.js';
 import { Button } from './ui/button.jsx';
@@ -6,7 +6,7 @@ import { Card, CardHeader } from './ui/card.jsx';
 import { Input } from './ui/input.jsx';
 import { Switch } from './ui/switch.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
-import { ExternalLink, Figure, Link, Navigation, Notice, PageHeader } from './components.jsx';
+import { ExternalLink, Figure, Link, Notice, PageHeader } from './components.jsx';
 import { UsageNotice } from './usage.jsx';
 import { routeHref } from './route.js';
 
@@ -19,7 +19,6 @@ export function RepositoriesPage({ installation, connections, patchRepository })
   const [query, setQuery] = useState('');
   const [pending, setPending] = useState(null);
   const [error, setError] = useState(null);
-  const navigate = useContext(Navigation);
   const all = connections.repositories.filter(r => r.installationId === installation.id)
     .toSorted((a, b) => Number(b.connected) - Number(a.connected) || a.name.localeCompare(b.name));
   const connected = all.filter(r => r.connected).length;
@@ -35,8 +34,6 @@ export function RepositoriesPage({ installation, connections, patchRepository })
       if (action === 'connect') {
         const result = await api.connect(repository.id);
         patchRepository(repository.id, { connected: true, enabled: result.repository.enabled });
-        // The repository page is where reviews are turned on and a first review is requested.
-        navigate(routeHref({ view: 'repository', repository: repository.id }));
       } else {
         const result = await api.setEnabled(repository.id, action === 'on');
         patchRepository(repository.id, { enabled: result.enabled });
