@@ -265,3 +265,27 @@ test('icons: every finding carries its priority, the headline follows the score,
     assert.ok(existsSync(new URL(`../assets/review-icons/${name}.svg`, import.meta.url)), `${name}.svg must be committed`);
   }
 });
+
+// On mason-v1 the details listed every changed file and every grep check that settled
+// nothing: PR 4420's comment carried 21 file lines and 11 such checks under 2 findings.
+// The comment names only what was not reviewed and counts the unsettled checks; the run
+// record and the dashboard keep both lists whole.
+test('the PR comment lists only unreviewed files and counts checks that settled nothing', t => {
+  const { packet } = repository(t);
+  const result = completed(packet);
+  result.limitations = ['grep: body of `f` contains "x": the search truncated before any declaration was found',
+    'grep: `g` unreferenced outside a.ts: the search truncated before it could rule out external references', 'The failure path was not followed.'];
+  const clean = renderMarkdown(packet, result, assess(packet, result, current()), 'https://review.atmin.ai/?repository=1#review/r1');
+  assert.ok(clean.includes(`${packet.changedFiles.length} of ${packet.changedFiles.length} changed files reviewed.\n`));
+  for (const file of packet.changedFiles) assert.ok(!clean.includes(`- ${file.path} ·`), file.path);
+  assert.ok(!clean.includes('the search truncated'));
+  assert.ok(clean.includes('- 2 source checks settled nothing; the full review on atmin lists them.'));
+  assert.ok(clean.includes('- Limitation: The failure path was not followed.'));
+
+  const partial = structuredClone(result);
+  partial.coverage[0] = { ...partial.coverage[0], status: 'unreviewed', evidenceIds: [] };
+  const text = renderMarkdown(packet, partial, assess(packet, partial, current()));
+  assert.ok(text.includes(`${packet.changedFiles.length - 1} of ${packet.changedFiles.length} changed files reviewed. Not reviewed:`));
+  assert.ok(text.includes(`- ${partial.coverage[0].path} · `));
+  assert.ok(text.includes('- 2 source checks settled nothing.\n'));
+});
