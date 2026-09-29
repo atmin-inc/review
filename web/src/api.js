@@ -54,7 +54,6 @@ export const api = {
   connect: repository => request('POST', `${base}/connect?${repo(repository)}`, {}),
   setEnabled: (repository, enabled) => request('POST', `${base}/enabled?${repo(repository)}`, { enabled }),
   saveSettings: (repository, settings) => request('POST', `${base}/settings?${repo(repository)}`, settings),
-  requestReview: (repository, pr) => request('POST', `${base}/review?${repo(repository)}`, { pr }),
   billingCheckout: installation => request('POST', `${base}/billing/checkout?installation=${encodeURIComponent(installation)}`, {}),
   billingConfirm: (installation, session) => request('POST', `${base}/billing/confirm?installation=${encodeURIComponent(installation)}`, { session }),
   logout: () => request('POST', `${base}/logout`, {}),

@@ -334,25 +334,6 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         json(response, 200, { settings: settings.save(value) });
         return true;
       }
-      // A repository admin asks for a full review of one open PR, as `/atmin review` does, so a
-      // new customer sees a result during setup instead of waiting for the next PR. It counts
-      // against the plan like any other review.
-      if (request.method === 'POST' && url.pathname === '/api/review/v1/review') {
-        const read = await body(request);
-        if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
-        const value = 'value' in read ? read.value as { pr?: unknown } : null;
-        if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || !Number.isSafeInteger(value.pr) || (value.pr as number) < 1) {
-          json(response, 400, { error: 'Choose an open pull request.' }); return true;
-        }
-        const pr = value.pr as number;
-        if (!store.enabled()) { json(response, 409, { error: 'Turn reviews on for this repository first.' }); return true; }
-        const pull = (await livePulls(config, scopedApi)).find(p => p.pr === pr);
-        if (!pull || pull.state !== 'open' || pull.draft) { json(response, 409, { error: 'Only an open pull request that is not a draft can be reviewed.' }); return true; }
-        const id = store.enqueue(`dashboard-${random()}`, pr, 'command');
-        if (!id) { json(response, 409, { error: 'Turn reviews on for this repository first.' }); return true; }
-        process.stderr.write(`atmin review: review ${id} of PR ${pr} in repository ${config.repositoryId} requested on the dashboard by GitHub user ${session.user.id}\n`);
-        json(response, 200, { review: id }); return true;
-      }
       json(response, 404, { error: 'Not found.' });
     } catch (error) {
       if (error instanceof Denied) { sessions.delete(sessionId); response.setHeader('Set-Cookie', cookie(sessionCookie, '', 0)); }
