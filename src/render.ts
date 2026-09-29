@@ -67,9 +67,8 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   }
   if (assessment.hiddenOptionalCount) lines.push(`${assessment.hiddenOptionalCount} optional P4 suggestion(s) hidden by target-branch policy.`, '');
   lines.push('---', '');
-  if (detailsUrl && /^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?\/\?repository=\d+#review\/[a-zA-Z0-9-]+$/.test(detailsUrl)) {
-    lines.push(`[View full review on atmin](${detailsUrl})`, '');
-  }
+  const linked = detailsUrl !== undefined && /^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?\/\?repository=\d+#review\/[a-zA-Z0-9-]+$/.test(detailsUrl);
+  if (linked) lines.push(`[View full review on atmin](${detailsUrl})`, '');
   lines.push('<details><summary>Rating policy and rationale</summary>', '',
     `Preset: **${e(assessment.rating.policy.label)}**. Scores are subjective assessments, not a probability of correctness or merge approval.`, '',
     ...assessment.rating.reasons.map(reason => `- ${e(reason)}`), '',
@@ -88,18 +87,23 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   }
   lines.push('', 'Policy is read from `.atmin/review.json` on the target branch. Optional suggestions and missing patches do not independently lower the rating.', '', '</details>', '',
     '<details><summary>Run summary and checks</summary>', '', e(reviewSummary(assessment)), '', '### Required validation', '');
+  if (!assessment.validationChecks.length) lines.push('None apply.');
   for (const check of assessment.validationChecks) {
     lines.push(`- ${e(check.name)}: **${check.status}** — ${e(check.reason)}${check.url ? ` [GitHub check](${check.url})` : ''}`);
   }
   lines.push('', '### Evidence', '');
   if (!result.evidence.length) lines.push('No investigation evidence recorded.');
   for (const item of result.evidence) lines.push(`- ${e(item.id)} · ${item.kind} · ${item.provenance}: ${e(item.summary)} ${item.anchors.map(a => sourceLink(packet, a)).join(', ')}`);
+  // Only what was not reviewed, and a count of the source checks that settled nothing: a
+  // list of every changed file and every inconclusive grep buried the comment on large
+  // PRs. Both lists stay whole in the run record and on the dashboard.
   lines.push('', '### Coverage and limitations', '');
-  for (const file of packet.changedFiles) {
-    const coverage = result.coverage.find(c => c.path === file.path)!;
-    lines.push(`- ${e(file.path)} · ${file.change}/${file.kind} · ${coverage.status}`);
-  }
-  lines.push(...result.limitations.map(reason => `- Limitation: ${e(reason)}`), '',
+  const open = packet.changedFiles.filter(file => result.coverage.find(c => c.path === file.path)!.status !== 'reviewed');
+  lines.push(`${packet.changedFiles.length - open.length} of ${packet.changedFiles.length} changed files reviewed.${open.length ? ' Not reviewed:' : ''}`);
+  for (const file of open) lines.push(`- ${e(file.path)} · ${file.change}/${file.kind} · ${result.coverage.find(c => c.path === file.path)!.status}`);
+  const unsettled = result.limitations.filter(reason => reason.startsWith('grep: ')).length;
+  lines.push(...result.limitations.filter(reason => !reason.startsWith('grep: ')).map(reason => `- Limitation: ${e(reason)}`),
+    ...(unsettled ? [`- ${unsettled} source ${unsettled === 1 ? 'check' : 'checks'} settled nothing${linked ? '; the full review on atmin lists them' : ''}.`] : []), '',
     '</details>', '', '<details><summary>Run details</summary>', '',
     `Repository: ${e(packet.repository)} · PR ${packet.pr}`,
     `Head: \`${packet.headSha}\` · Target: \`${packet.baseSha}\` · Merge base: \`${packet.mergeBaseSha}\``,
