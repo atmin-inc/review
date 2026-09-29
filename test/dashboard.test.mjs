@@ -39,7 +39,8 @@ async function setup(t, hosted = false, operators = []) {
     }
     assert.equal(init.headers.Authorization, 'Bearer ghu_faketoken0123456789');
     if (state.revoked) return Response.json({}, { status: 401 });
-    if (url.includes('/pulls?')) return Response.json([]);
+    if (url.includes('/pulls?')) return Response.json(state.pulls ?? []);
+    if (url.includes('/git/ref/heads/')) return Response.json({ object: { type: 'commit', sha: 'b'.repeat(40) } });
     if (url.endsWith('/user')) return Response.json({ id: state.userId ?? 7, login: 'owner', email: 'private@example.test' });
     if (url.includes('/user/installations?')) return Response.json({ installations: (state.installations ?? [99]).map(id => ({ id, account: { login: accounts[id], type: id === 77 ? 'User' : 'Organization' } })) });
     if (url.includes('/user/installations/77/repositories')) return Response.json({ repositories: [{ id: 55, full_name: 'other/app', owner: { type: 'Organization' } }] });
@@ -93,6 +94,31 @@ test('OAuth binds browser/state/PKCE/repository; tokens stay server-side; codes 
   const later = []; for (let i = 0; i < 5; i++) later.push(await f.login());
   assert.equal((await f.get('/api/review/v1/dashboard', cookie)).status, 401);
   for (const kept of later) assert.equal((await f.get('/api/review/v1/dashboard', kept)).status, 200);
+});
+
+// A new customer should see a result during setup rather than wait for the next PR, so a
+// repository admin can ask for a full review of one open PR, as `/atmin review` does. It
+// queues like any other review and counts against the plan when it starts.
+test('a repository admin can request a full review of an open PR from the dashboard', async t => {
+  const f = await setup(t);
+  const pull = (number, extra = {}) => ({ number, title: `PR ${number}`, user: { login: 'someone' }, state: 'open', draft: false, merged_at: null,
+    head: { sha: 'a'.repeat(40) }, base: { ref: 'main', repo: { id: 42, full_name: 'owner/repo' } }, ...extra });
+  f.state.pulls = [pull(5), pull(6, { draft: true }), pull(7, { state: 'closed' })];
+  const cookie = await f.login();
+  assert.deepEqual(await (await f.post('review', { pr: 5 }, cookie)).json(), { error: 'Turn reviews on for this repository first.' });
+  f.store.enable(true);
+  for (const [value, status] of [[{ pr: 6 }, 409], [{ pr: 7 }, 409], [{ pr: 8 }, 409], [{ pr: '5' }, 400], [{ pr: 5, more: 1 }, 400], ['x', 400]]) {
+    assert.equal((await f.post('review', value, cookie)).status, status, JSON.stringify(value));
+  }
+  assert.equal(f.store.status().jobs.length, 0);
+  const response = await f.post('review', { pr: 5 }, cookie);
+  assert.equal(response.status, 200);
+  const job = f.store.get((await response.json()).review);
+  assert.deepEqual([job.pr, job.state, job.trigger], [5, 'queued', 'command']);
+  assert.equal((await f.post('review', { pr: 5 }, cookie, { Origin: 'https://evil.test' })).status, 403);
+  f.state.admin = false;
+  assert.equal((await f.post('review', { pr: 5 }, cookie)).status, 403);
+  assert.equal(f.store.status().jobs.length, 1);
 });
 
 test('repository admin and actual installation access are required and revalidated', async t => {

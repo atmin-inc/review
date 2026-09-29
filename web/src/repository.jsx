@@ -33,8 +33,23 @@ function PullState({ state }) {
   return <span className="inline-flex items-center gap-1.5"><Icon aria-hidden="true" className="size-4 text-muted-foreground"/>{label}</span>;
 }
 
-function PullsTable({ id, data }) {
+// "Review" asks for a full review of one open PR now, the way a new customer gets a first
+// result during setup; new PRs are still reviewed on their own while reviews are on.
+function PullsTable({ id, data, onRequested }) {
+  const [pending, setPending] = useState(null);
+  const [error, setError] = useState(null);
+  const enabled = data.repository.enabled;
+  async function review(pull) {
+    setPending(pull.pr); setError(null);
+    try { await api.requestReview(id, pull.pr); onRequested(); }
+    catch (failure) { setError(`#${pull.pr}: ${failure.message}`); }
+    finally { setPending(null); }
+  }
+  const reviewButton = pull => <Button variant="outline" size="sm" disabled={!enabled || pending !== null}
+    title={enabled ? undefined : 'Turn reviews on to request one.'} aria-label={`Review #${pull.pr} now`}
+    onClick={() => review(pull)}>{pending === pull.pr ? 'Requesting…' : 'Review'}</Button>;
   return <>
+    {error && <Notice tone="error" className="mb-4">{error}</Notice>}
     <Card className="panel">
       <Table className="panel-table">
         <TableHeader>
@@ -45,6 +60,7 @@ function PullsTable({ id, data }) {
             <TableHead>Latest review</TableHead>
             {priorities.map(p => <TableHead key={p} className="text-right max-md:hidden">{p}</TableHead>)}
             <TableHead className="text-right max-md:hidden">Coverage</TableHead>
+            <TableHead className="max-md:hidden"><span className="sr-only">Actions</span></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -52,6 +68,7 @@ function PullsTable({ id, data }) {
             <TableCell className="whitespace-normal md:min-w-[240px]">
               <ExternalLink href={pull.url} icon={false}><Figure className="text-muted-foreground">#{pull.pr}</Figure> {pull.title}</ExternalLink>
               <div className="mt-0.5 text-[13px] text-muted-foreground md:hidden">{pull.author ?? 'Unknown author'} · {(pullStates[pull.state] ?? pullStates.unknown)[0]}</div>
+              {pull.state === 'open' && <div className="mt-2 md:hidden">{reviewButton(pull)}</div>}
             </TableCell>
             <TableCell className="max-md:hidden">{pull.author ?? <span className="text-muted-foreground">Unknown</span>}</TableCell>
             <TableCell className="max-md:hidden"><PullState state={pull.state}/></TableCell>
@@ -66,8 +83,9 @@ function PullsTable({ id, data }) {
             <TableCell className="text-right max-md:hidden">
               {pull.coverage ? <Figure>{pull.coverage.reviewed}/{pull.coverage.total}</Figure> : <span className="text-muted-foreground">—</span>}
             </TableCell>
+            <TableCell className="text-right max-md:hidden">{pull.state === 'open' && reviewButton(pull)}</TableCell>
           </TableRow>)}
-          {!data.pulls.length && <TableRow><TableCell colSpan={10} className="empty-cell">No pull requests were found in this repository.</TableCell></TableRow>}
+          {!data.pulls.length && <TableRow><TableCell colSpan={11} className="empty-cell">No pull requests were found in this repository.</TableCell></TableRow>}
         </TableBody>
       </Table>
     </Card>
@@ -236,6 +254,11 @@ export function RepositoryPage({ id, review, listed, installation, initial, patc
         {toggle.error && <Notice tone="error">{toggle.error}</Notice>}
         {dashboard.error && <Notice tone="error" action={!data && <Link className="link whitespace-nowrap" href={back}>Back to repositories</Link>}>{dashboard.error.message}</Notice>}
         {!data && dashboard.loading && <Loading>Loading pull requests and runs</Loading>}
+        {data && !data.runs.length && <Notice>
+          {data.repository.enabled
+            ? 'No reviews yet. Choose Review on an open pull request to see a first review now. New pull requests are reviewed on their own.'
+            : 'No reviews yet. Turn reviews on, then choose Review on an open pull request to see a first review now.'}
+        </Notice>}
         {data && <Tabs defaultValue="pulls" className="gap-4">
           <div className="tabs-bar">
             <TabsList>
@@ -250,7 +273,7 @@ export function RepositoryPage({ id, review, listed, installation, initial, patc
               <Button variant="ghost" size="sm" onClick={dashboard.reload} disabled={dashboard.loading}><RefreshCw aria-hidden="true"/>Refresh</Button>
             </div>
           </div>
-          <TabsContent value="pulls"><PullsTable id={id} data={data}/></TabsContent>
+          <TabsContent value="pulls"><PullsTable id={id} data={data} onRequested={dashboard.reload}/></TabsContent>
           <TabsContent value="runs"><RunsTable id={id} data={data}/></TabsContent>
           <TabsContent value="settings">
             <SettingsForm id={id} data={data}
