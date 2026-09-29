@@ -145,6 +145,20 @@ test('draft / closed PRs skip inference using canonical state, not event orderin
   assert.equal(h.counts.runs, 1);
 });
 
+// Lors's pricing (2026-09-24) bills each review beyond the free allowance, so the PR comment
+// that delivers the review says what it cost; the price is read when the comment is written.
+test('the published review says what it costs the organization', async t => {
+  const h = await harness(t);
+  const asked = [];
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', undefined, undefined, undefined,
+    job => { asked.push(job); return { month: '2026-09', index: 20, freeReviews: 20, free: false, usd: 0.0425 }; });
+  const id = h.store.enqueue('priced', 1);
+  await worker.tick();
+  assert.equal(h.store.get(id).state, 'completed');
+  assert.ok(h.comment.body.includes('**This review costs $0.043**. It is review 21 in September 2026, after 20 free.'), h.comment.body);
+  assert.equal(asked.at(-1).id, id); assert.notEqual(asked.at(-1).started, null);
+});
+
 test('new push aborts active investigation and only replacement work can publish', async t => {
   const h = await harness(t);
   let started; const ready = new Promise(done => { started = done; });

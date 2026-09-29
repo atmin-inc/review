@@ -33,7 +33,15 @@ export function renderFinding(packet: Packet, f: Finding, showFix = true): strin
     'Source range verified. Execution is unverified unless fix check results are shown below. GitHub commit controls appear on eligible inline suggestions.', '');
   return [...lines, '</details>', ''].join('\n');
 }
-export function renderMarkdown(packet: Packet, result: Result, assessment: Assessment, detailsUrl?: string, verification?: Verification): string {
+// What this review costs the organization under its plan; see `reviewPrice` in src/github.
+export interface ReviewPrice { month: string; index: number; freeReviews: number; free: boolean; usd: number | null; }
+export function priceLine(price: ReviewPrice): string {
+  const name = new Date(`${price.month}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  if (price.free) return `**This review is free:** ${price.index + 1} of ${price.freeReviews} free reviews in ${name}.`;
+  const cost = price.usd === null ? 'This review’s price is not known yet** because its model cost has not settled' : `This review costs $${price.usd.toFixed(3).replace(/0$/, '')}**`;
+  return `**${cost}. It is review ${price.index + 1} in ${name}, after ${price.freeReviews} free.`;
+}
+export function renderMarkdown(packet: Packet, result: Result, assessment: Assessment, detailsUrl?: string, verification?: Verification, price?: ReviewPrice): string {
   const e = escapeMarkdown;
   const required = assessment.findings.filter(f => ['P0', 'P1', 'P2'].includes(f.priority)).length;
   const headline = assessment.freshness.status === 'superseded' ? 'Outdated review'
@@ -68,6 +76,7 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   if (assessment.hiddenOptionalCount) lines.push(`${assessment.hiddenOptionalCount} optional P4 suggestion(s) hidden by target-branch policy.`, '');
   lines.push('---', '');
   const linked = detailsUrl !== undefined && /^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?\/\?repository=\d+#review\/[a-zA-Z0-9-]+$/.test(detailsUrl);
+  if (price) lines.push(priceLine(price), '');
   if (linked) lines.push(`[View full review on atmin](${detailsUrl})`, '');
   lines.push('<details><summary>Rating policy and rationale</summary>', '',
     `Preset: **${e(assessment.rating.policy.label)}**. Scores are subjective assessments, not a probability of correctness or merge approval.`, '',

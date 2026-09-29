@@ -11,6 +11,7 @@ import { Repositories, type Repository } from './repositories.js';
 import { Worker } from './worker.js';
 import { engineRunner } from './runner.js';
 import { dashboard } from './dashboard.js';
+import { reviewPrice } from './dashboard-view.js';
 import { site } from './site.js';
 import { ReviewSettings, readDashboardConfig } from './settings.js';
 import { readProfile } from '../run.js';
@@ -63,7 +64,8 @@ async function main(): Promise<void> {
     if (!value) {
       const github = new AppGitHub(entry.config, appId, key);
       value = { github, worker: new Worker(entry.config, entry.store, github, engineRunner(entry.config, github, entry.settings), owner, entry.settings,
-        repositories ? (job, limit) => repositories.reserve(entry, job, owner, limit) : undefined, dashboardConfig?.origin) };
+        repositories ? (job, limit) => repositories.reserve(entry, job, owner, limit) : undefined, dashboardConfig?.origin,
+        repositories ? job => reviewPrice(repositories, entry.config.installationId, job) : undefined) };
       workers.set(entry.config.repositoryId, value);
     }
     return value;

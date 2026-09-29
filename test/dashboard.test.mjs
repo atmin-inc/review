@@ -10,6 +10,8 @@ import { Store } from '../dist/github/store.js';
 import { ReviewSettings, readDashboardConfig } from '../dist/github/settings.js';
 import { readProfile } from '../dist/run.js';
 import { dashboard, history } from '../dist/github/dashboard.js';
+import { reviewPrice } from '../dist/github/dashboard-view.js';
+import { priceLine } from '../dist/render.js';
 const origin = 'https://review.example.test';
 const profile = resolve('profiles/smoke-openrouter-free.json');
 const models = [{ id: 'free', label: 'Free', profile: readProfile(profile) }, { id: 'deepseek', label: 'DeepSeek', profile: readProfile(resolve('profiles/baseline-deepseek.json')) }];
@@ -329,6 +331,16 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   const owner = admin.installations[0];
   assert.deepEqual(owner.usage, { month: owner.usage.month, resetsAt: owner.usage.resetsAt, reviews: 4, remaining: 1, knownUsd: .24, estimatedUsd: .25, unknownCostReviews: 1 });
   assert.deepEqual(owner.repositories, [{ id: 42, name: 'owner/repo', enabled: true, reviews: 4 }]);
+  // Each review's own price uses the same rule, so the PR comment and the estimate agree.
+  const jobs = f.store.db.prepare('SELECT * FROM jobs ORDER BY started').all();
+  assert.deepEqual(jobs.map(job => { const p = reviewPrice(f.repositories, 99, job); return [p.index, p.free, p.usd]; }),
+    [[0, true, 0], [1, false, .05], [2, false, .2], [3, false, null]]);
+  assert.equal(reviewPrice(f.repositories, 99, { ...jobs[0], started: null }), null);
+  const month = new Date().toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[0])), `**This review is free:** 1 of 1 free reviews in ${month}.`);
+  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[1])), `**This review costs $0.05**. It is review 2 in ${month}, after 1 free.`);
+  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[3])), `**This review’s price is not known yet** because its model cost has not settled. It is review 4 in ${month}, after 1 free.`);
+
   assert.equal(owner.plan.custom, true); assert.equal(owner.plan.updatedBy, 8);
   // Customers see their plan, usage and estimate, but not recorded cost.
   const own = (await (await f.get('/api/review/v1/session', cookie)).json());
