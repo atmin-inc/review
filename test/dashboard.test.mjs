@@ -60,7 +60,7 @@ async function setup(t, hosted = false, operators = [], stripe) {
     (stripe.calls ??= []).push(`${init.method} ${path}`);
     if (init.method === 'POST' && path === '/customers') return Response.json({ id: 'cus_test1' });
     if (init.method === 'POST' && path === '/checkout/sessions') return Response.json({ url: 'https://checkout.stripe.com/c/pay/cs_test_abc' });
-    if (init.method === 'GET' && path === '/checkout/sessions/cs_test_abc') return Response.json({ customer: stripe.customer ?? 'cus_test1', mode: 'setup', status: 'complete',
+    if (init.method === 'GET' && path === '/checkout/sessions/cs_test_abc') return Response.json({ customer: { id: stripe.customer ?? 'cus_test1', email: 'billing@owner.test' }, mode: 'setup', status: 'complete',
       setup_intent: { status: 'succeeded', payment_method: { id: 'pm_test1', card: { brand: 'visa', last4: '4242' } } } });
     if (init.method === 'POST' && path === '/customers/cus_test1') return Response.json({ id: 'cus_test1' });
     throw new Error('Unexpected Stripe endpoint');
@@ -329,7 +329,7 @@ test('a repository admin adds the organization\'s card through Stripe Checkout, 
   const stripe = {}, f = await setup(t, true, [8], stripe); f.state.installations = [99, 77];
   let cookie = await f.login();
   let [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
-  assert.deepEqual([owner.plan, owner.billing], [{ freeReviews: 20, monthlyReviews: 20 }, { card: null, needsCard: true }]);
+  assert.deepEqual([owner.plan, owner.billing], [{ freeReviews: 20, monthlyReviews: 20 }, { card: null, email: null, needsCard: true, unpaid: null, invoices: [] }]);
   // The card pays for every repository in the organization, so a non-admin, a foreign origin, an
   // organization with no connected repository and an unknown one are all refused before Stripe.
   assert.equal((await f.post('billing/checkout?installation=99', {}, cookie, { Origin: 'https://evil.test' })).status, 403);
@@ -349,9 +349,19 @@ test('a repository admin adds the organization\'s card through Stripe Checkout, 
   assert.deepEqual([refused.status, (await refused.json()).error], [409, 'Stripe did not save a card for this checkout. Add the card again.']);
   delete stripe.customer;
   const confirmed = await (await f.post('billing/confirm?installation=99', { session: 'cs_test_abc' }, cookie)).json();
-  assert.deepEqual([confirmed.card, confirmed.plan, confirmed.billing], ['Visa ending 4242', { freeReviews: 20, monthlyReviews: 1000 }, { card: 'Visa ending 4242', needsCard: false }]);
+  const saved = { card: 'Visa ending 4242', email: 'billing@owner.test', needsCard: false, unpaid: null, invoices: [] };
+  assert.deepEqual([confirmed.card, confirmed.plan, confirmed.billing], ['Visa ending 4242', { freeReviews: 20, monthlyReviews: 1000 }, saved]);
   [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
-  assert.deepEqual(owner.billing, { card: 'Visa ending 4242', needsCard: false });
+  assert.deepEqual(owner.billing, saved);
+  // Invoices show newest first with Stripe's page for each; one still being created does not.
+  f.repositories.startInvoice(99, '2026-08', 0, 3, 'nothing-due');
+  f.repositories.startInvoice(99, '2026-09', 412, 40, 'creating'); f.repositories.finishInvoice(99, '2026-09', 'in_test99', 'https://invoice.stripe.com/i/acct_1/test_99');
+  f.repositories.settleInvoice(99, '2026-09', 'failed', 'https://invoice.stripe.com/i/acct_1/test_99', Date.now());
+  f.repositories.startInvoice(99, '2026-10', 100, 25, 'creating');
+  [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
+  assert.deepEqual([owner.plan.monthlyReviews, owner.billing.needsCard, owner.billing.unpaid, owner.billing.invoices], [20, true, '2026-09', [
+    { month: '2026-09', amountCents: 412, reviews: 40, state: 'failed', url: 'https://invoice.stripe.com/i/acct_1/test_99' },
+    { month: '2026-08', amountCents: 0, reviews: 3, state: 'nothing-due', url: null }]]);
   assert.deepEqual(stripe.calls, ['POST /customers', 'POST /checkout/sessions', 'GET /checkout/sessions/cs_test_abc', 'GET /checkout/sessions/cs_test_abc', 'POST /customers/cus_test1']);
 });
 
@@ -382,7 +392,7 @@ test('the admin panel is operator-only, lists every installation, and plan chang
     [[99, 'owner', 'Organization', false, false], [77, 'other', 'User', true, false], [300, 'gone', null, false, true]]);
   const owner = admin.installations[0];
   // The limit in force: an operator's plan as set; the default plan stops at its free reviews without a card.
-  assert.deepEqual(admin.installations.map(i => [i.limit, i.card]), [[5, null], [20, null], [20, null]]);
+  assert.deepEqual(admin.installations.map(i => [i.limit, i.card, i.unpaid]), [[5, null, null], [20, null, null], [20, null, null]]);
   assert.deepEqual(owner.usage, { month: owner.usage.month, resetsAt: owner.usage.resetsAt, reviews: 4, remaining: 1, knownUsd: .24, estimatedUsd: .25, unknownCostReviews: 1 });
   assert.deepEqual(owner.repositories, [{ id: 42, name: 'owner/repo', enabled: true, reviews: 4 }]);
   // Each review's own price uses the same rule, so the PR comment and the estimate agree.

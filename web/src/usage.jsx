@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import { Button } from './ui/button.jsx';
 import { Card, CardContent, CardHeader } from './ui/card.jsx';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
 import { Figure, Link, Notice, PageHeader, Progress } from './components.jsx';
 import { count, monthName, plural, usd, utcDate } from './format.js';
 import { routeHref } from './route.js';
@@ -12,6 +13,14 @@ export function UsageNotice({ installation, link = false }) {
   const more = link && <Link className="link whitespace-nowrap" href={routeHref({ view: 'usage', installation: installation.id })}>View usage</Link>;
   if (plan.monthlyReviews === 0) {
     return <Notice action={more}>Reviews are turned off for {account}. Contact atmin to turn them on.</Notice>;
+  }
+  // An operator-set plan keeps running while an invoice is unpaid; the default plan does not.
+  if (installation.billing?.unpaid) {
+    return <Notice tone="error" action={more}>
+      {account}’s card did not pay the invoice for {monthName(installation.billing.unpaid)}. {installation.billing.needsCard
+        ? <>Until a repository admin pays it or adds a new card on the Usage page, reviews stop after the {plural(plan.freeReviews, 'free review')} each month.</>
+        : 'A repository admin can pay it or add a new card on the Usage page.'}
+    </Notice>;
   }
   if (usage.reviews >= plan.monthlyReviews && installation.billing?.needsCard) {
     return <Notice action={more}>
@@ -24,6 +33,42 @@ export function UsageNotice({ installation, link = false }) {
     </Notice>;
   }
   return null;
+}
+
+const invoiceStates = {
+  finalized: 'Charging card', failed: 'Payment failed', paid: 'Paid', uncollectible: 'Not paid',
+  void: 'Cancelled', 'nothing-due': 'Nothing due',
+};
+
+// Monthly invoices, newest first. Stripe's page for each shows the invoice and its receipt, and
+// takes payment for one the card did not pay.
+function Invoices({ invoices }) {
+  if (!invoices.length) return <p className="text-[13px] text-muted-foreground">No invoices yet. The first one is made on the 2nd of next month.</p>;
+  return <Table>
+    <TableHeader>
+      <TableRow>
+        <TableHead>Month</TableHead>
+        <TableHead className="text-right max-sm:hidden">Reviews</TableHead>
+        <TableHead className="text-right">Amount</TableHead>
+        <TableHead>Status</TableHead>
+        <TableHead><span className="sr-only">Invoice</span></TableHead>
+      </TableRow>
+    </TableHeader>
+    <TableBody>
+      {invoices.map(invoice => <TableRow key={invoice.month}>
+        <TableCell>{monthName(invoice.month)}</TableCell>
+        <TableCell className="text-right max-sm:hidden"><Figure>{count(invoice.reviews)}</Figure></TableCell>
+        <TableCell className="text-right"><Figure>{usd(invoice.amountCents / 100)}</Figure></TableCell>
+        <TableCell>{invoiceStates[invoice.state] ?? invoice.state}</TableCell>
+        <TableCell className="text-right">
+          {invoice.url && <a className="link" href={invoice.url} target="_blank" rel="noreferrer"
+            onClick={() => console.info(`atmin review: invoice for ${invoice.month} opened (${invoice.state})`)}>
+            {['failed', 'uncollectible'].includes(invoice.state) ? 'Pay' : 'View'}<span className="max-sm:hidden"> invoice</span>
+          </a>}
+        </TableCell>
+      </TableRow>)}
+    </TableBody>
+  </Table>;
 }
 
 // The organization's card, saved through Stripe Checkout. Shown only when atmin has a Stripe key.
@@ -68,14 +113,23 @@ function Billing({ installation, checkout, patchInstallation }) {
       {status.saved && <Notice>Card saved: {status.saved}. {account} can now use up to {count(plan.monthlyReviews)} reviews a month.</Notice>}
       {status.error && <Notice tone="error">{status.error}</Notice>}
       {billing.card
-        ? <p><span className="font-medium">{billing.card}</span> <span className="text-muted-foreground">pays for reviews past the free ones. Stripe invoices it on the 2nd of each month for the month before.</span></p>
+        ? <div className="grid gap-1">
+          <p><span className="font-medium">{billing.card}</span> <span className="text-muted-foreground">pays for reviews past the free ones. Stripe invoices it on the 2nd of each month for the month before.</span></p>
+          <p className="text-[13px] text-muted-foreground">{billing.email ? <>Stripe emails receipts and failed-payment notices to {billing.email}.</> : 'Stripe has no email address for this card, so it sends no receipts.'}</p>
+        </div>
         : <p className="text-muted-foreground">
           {account} has no card on file, so reviews stop after its {plural(plan.freeReviews, 'free review')} each month. With a card, reviews continue and the ones past the free allowance are invoiced on the 2nd of the next month, at the price each PR comment shows.
         </p>}
-      <Button variant={billing.card ? 'outline' : 'default'} disabled={status.pending !== null} onClick={addCard}>
-        {status.pending === 'checkout' ? 'Opening Stripe…' : billing.card ? 'Replace card' : 'Add card'}
+      <Button variant={billing.card && !billing.unpaid ? 'outline' : 'default'} disabled={status.pending !== null} onClick={addCard}>
+        {status.pending === 'checkout' ? 'Opening Stripe…' : billing.unpaid ? 'Add a new card' : billing.card ? 'Replace card' : 'Add card'}
       </Button>
-      <p className="text-[13px] text-muted-foreground">Stripe keeps the card. Saving it charges nothing. Only an admin of a connected repository can change it.</p>
+      <p className="text-[13px] text-muted-foreground">
+        {billing.unpaid
+          ? `Stripe keeps the card. Saving a new one charges it for the unpaid invoice for ${monthName(billing.unpaid)} straight away.`
+          : 'Stripe keeps the card. Saving it charges nothing.'} Only an admin of a connected repository can change it.
+      </p>
+      <h3 className="panel-title pt-2">Invoices</h3>
+      <div className="w-full overflow-x-auto"><Invoices invoices={billing.invoices}/></div>
     </CardContent>
   </Card>;
 }
