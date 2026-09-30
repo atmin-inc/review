@@ -133,6 +133,7 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation);
     return { plan: { ...plan, custom: updatedAt !== null, updatedAt: updatedAt === null ? null : new Date(updatedAt).toISOString(), updatedBy }, usage,
       limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null, unpaid: repositories!.limit(installation).unpaid,
+      storage: { mb: Math.round(Object.values(repositories!.stored(installation)).reduce((a, b) => a + b, 0) / 1024 ** 2), limitMb: repositories!.storageLimitMb() },
       repositories: repositories!.of(installation).map(entry => ({ id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled(), reviews: perRepository.get(entry.config.repositoryId) ?? 0, outcomes: outcomeSummary(entry.store) })) };
   };
   const body = async (request: IncomingMessage) => {

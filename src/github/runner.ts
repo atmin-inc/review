@@ -18,12 +18,15 @@ export const RUN_RETENTION_DAYS = 90;
 // Past this size the next review wipes it and fetches afresh; Lors, 2026-09-26: a wipe only
 // slows the next review. Connected repositories are at most 2 GB on GitHub.
 export const MAX_SOURCE_CACHE_BYTES = 3 * 1024 ** 3;
+// What one organization's run records and shared copies may hold together. mason-v1's copy is
+// about 175 MB and a finished run record a few hundred KB, since its snapshot is deleted.
+export const DEFAULT_MAX_INSTALLATION_DISK_MB = 5120;
 
 export function freeDiskMb(directory: string): number {
   const stats = statfsSync(directory);
   return Math.floor(stats.bavail * stats.bsize / 1024 ** 2);
 }
-function directoryBytes(path: string): number {
+export function directoryBytes(path: string): number {
   if (!existsSync(path)) return 0;
   let total = 0;
   for (const entry of readdirSync(path, { recursive: true, withFileTypes: true })) if (entry.isFile()) total += statSync(join(entry.parentPath, entry.name)).size;

@@ -1,7 +1,9 @@
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PilotConfig } from './config.js';
 import { Store, type Job } from './store.js';
 import { ReviewSettings, type ModelChoice } from './settings.js';
+import { DEFAULT_MAX_INSTALLATION_DISK_MB, directoryBytes } from './runner.js';
 
 export interface Repository { config: PilotConfig; store: Store; settings: ReviewSettings; }
 // A plan caps an installation's reviews per UTC month and prices the ones beyond its free
@@ -23,6 +25,8 @@ export interface InvoiceRecord { month: string; invoice: string | null; amountCe
 export const unpaidStates: InvoiceState[] = ['failed', 'uncollectible'];
 export const perInstallation = 10, maxRepositories = 200;
 export const dailyLimitReached = 'The operator’s rolling 24-hour review limit was reached. A maintainer can rerun after capacity is available. No inference was started.';
+export const storageLimitReached = (limitMb: number) => `This organization’s review records on the atmin review service are over its ${limitMb} MB storage limit, so this review did not start. Records older than 90 days are deleted automatically; contact atmin to raise the limit sooner. No inference was started.`;
+const mb = (bytes: number) => Math.round(bytes / 1024 ** 2);
 
 export function month(now: number): { name: string; start: number; end: number } {
   const date = new Date(now), start = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
@@ -170,6 +174,13 @@ export class Repositories {
     return this.of(installation).flatMap(entry => (entry.store.db.prepare('SELECT * FROM jobs WHERE started>=? AND started<?').all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
       .sort((a, b) => a.job.started! - b.job.started!);
   }
+  // What the installation's repositories store on the shared disk: run records and each
+  // repository's shared copy of its history. Databases are small and not counted.
+  stored(installation: number): { runs: number; copies: number } {
+    return this.of(installation).reduce((sum, entry) => ({ runs: sum.runs + directoryBytes(join(entry.config.stateDirectory, 'runs')),
+      copies: sum.copies + directoryBytes(join(entry.config.stateDirectory, 'source-cache.git')) }), { runs: 0, copies: 0 });
+  }
+  storageLimitMb(): number { return this.config.maxInstallationDiskMb ?? DEFAULT_MAX_INSTALLATION_DISK_MB; }
   reviewsToday(now = Date.now()): number { return [...this.entries.values()].reduce((n, entry) => n + startedSince(entry.store, now - 86_400_000), 0); }
   // Returns true once inference may start, or the reason it may not, which the PR comment shows.
   reserve(repository: Repository, job: Job, owner: string, limit: number): true | string {
@@ -185,6 +196,17 @@ export class Repositories {
       `installation ${installation} used ${used} of ${monthly} monthly reviews${!needsCard ? '' : unpaid ? ` with the ${unpaid} invoice unpaid` : ' with no card on file'}`);
     const today = this.reviewsToday(now);
     if (today >= this.config.maxReviewsPerDay) return refuse(dailyLimitReached, `service used ${today} of ${this.config.maxReviewsPerDay} daily reviews`);
+    // Checked before each review, so one review can take an organization past its limit. Shared
+    // copies go first: the next review fetches its own again. Reviews run one at a time, so no
+    // other review is reading a copy while it is wiped.
+    const limitMb = this.storageLimitMb();
+    let stored = this.stored(installation);
+    if (stored.runs + stored.copies > limitMb * 1024 ** 2) {
+      for (const entry of this.of(installation)) rmSync(join(entry.config.stateDirectory, 'source-cache.git'), { recursive: true, force: true });
+      process.stderr.write(`atmin review: installation ${installation} stored ${mb(stored.runs + stored.copies)} MB (${mb(stored.copies)} MB in shared copies), over its ${limitMb} MB limit; wiped its shared copies\n`);
+      stored = this.stored(installation);
+      if (stored.runs + stored.copies > limitMb * 1024 ** 2) return refuse(storageLimitReached(limitMb), `installation ${installation} stores ${mb(stored.runs)} MB of run records, over its ${limitMb} MB limit`);
+    }
     return repository.store.reserve(job, owner, limit) || refuse(dailyLimitReached, 'repository daily limit reached or job superseded');
   }
   close(): void {
