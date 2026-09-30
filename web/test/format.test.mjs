@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { usd, monthName, utcDate, share, runCost, plural } from '../src/format.js';
+import { usd, money, monthName, utcDate, share, runCost, plural } from '../src/format.js';
 import { toWoff2, readTables } from '../scripts/woff2.mjs';
 import { brotliDecompressSync } from 'node:zlib';
 
@@ -14,6 +14,14 @@ test('USD uses two decimals, four under $0.10', () => {
   // A small negative margin keeps its precision instead of reading as -$0.00.
   assert.equal(usd(-0.0412), '-$0.0412');
   assert.equal(usd(-0.3), '-$0.30');
+});
+
+test('prices and limits read as whole dollars when they are, cents otherwise', () => {
+  // "$0.0500" for the minimum price read as a precise cost, not a price.
+  assert.equal(money(50), '$50');
+  assert.equal(money(1000), '$1,000');
+  assert.equal(money(0.05), '$0.05');
+  assert.equal(money(5.98), '$5.98');
 });
 
 test('unknown cost is never shown as zero', () => {

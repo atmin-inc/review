@@ -1,5 +1,5 @@
 import { useContext, useEffect, useState } from 'react';
-import { ChevronsUpDown, FolderGit2, Gauge, LogOut, Menu, Plus, Shield } from 'lucide-react';
+import { ChevronsUpDown, CreditCard, FolderGit2, Gauge, LogOut, Menu, Plus, Shield } from 'lucide-react';
 import { Button } from './ui/button.jsx';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog.jsx';
 import {
@@ -14,7 +14,7 @@ const accountKind = type => (type === 'User' ? 'Personal account' : 'Organizatio
 
 function OrganizationSwitcher({ installations, selected, installUrl, route }) {
   const navigate = useContext(Navigation);
-  const choose = id => navigate(routeHref({ view: route.view === 'usage' ? 'usage' : 'repositories', installation: Number(id) }));
+  const choose = id => navigate(routeHref({ view: ['usage', 'billing'].includes(route.view) ? route.view : 'repositories', installation: Number(id) }));
   return <DropdownMenu>
     <DropdownMenuTrigger asChild>
       <Button variant="outline" className="w-full justify-between" aria-label={`Organization: ${selected.account}. Switch organization`}>
@@ -48,6 +48,8 @@ function Sidebar({ session, installation, route, onSignOut }) {
   const links = [
     { href: routeHref({ view: 'repositories', installation: installation.id }), label: 'Repositories', icon: FolderGit2, active: route.view === 'repositories' || route.view === 'repository' },
     { href: routeHref({ view: 'usage', installation: installation.id }), label: 'Usage', icon: Gauge, active: route.view === 'usage' },
+    // Only when atmin has a Stripe key; without one no organization has a card or invoices.
+    ...(installation.billing ? [{ href: routeHref({ view: 'billing', installation: installation.id }), label: 'Billing', icon: CreditCard, active: route.view === 'billing' }] : []),
     ...(session.operator ? [{ href: '/admin', label: 'Admin', icon: Shield, active: route.view === 'admin' }] : []),
   ];
   return <div className="sidebar-content">

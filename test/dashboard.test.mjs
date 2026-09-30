@@ -61,7 +61,7 @@ async function setup(t, hosted = false, operators = [], stripe) {
     if (init.method === 'POST' && path === '/customers') return Response.json({ id: 'cus_test1' });
     if (init.method === 'POST' && path === '/checkout/sessions') return Response.json({ url: 'https://checkout.stripe.com/c/pay/cs_test_abc' });
     if (init.method === 'GET' && path === '/checkout/sessions/cs_test_abc') return Response.json({ customer: { id: stripe.customer ?? 'cus_test1', email: 'billing@owner.test' }, mode: 'setup', status: 'complete',
-      setup_intent: { status: 'succeeded', payment_method: { id: 'pm_test1', card: { brand: 'visa', last4: '4242' } } } });
+      setup_intent: { status: 'succeeded', payment_method: { id: 'pm_test1', card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } } } });
     if (init.method === 'POST' && path === '/customers/cus_test1') return Response.json({ id: 'cus_test1' });
     throw new Error('Unexpected Stripe endpoint');
   }), repositories, origin);
@@ -284,7 +284,7 @@ test('any installation connects its own repositories, up to ten, without an oper
   assert.equal(session.operator, false);
   assert.deepEqual(session.connections.installations.map(i => [i.id, i.account, i.manageUrl]), [
     [99, 'owner', 'https://github.com/organizations/owner/settings/installations/99'], [77, 'other', 'https://github.com/settings/installations/77']]);
-  assert.deepEqual(session.connections.installations[1].plan, { freeReviews: 20, monthlyReviews: 20 });
+  assert.deepEqual(session.connections.installations[1].plan, { freeReviews: 20, monthlyReviews: 20, multiplier: 2, minimumUsd: .05, custom: false });
   // Without a Stripe key no card can be added, so the free reviews are the month's limit.
   assert.equal(session.connections.installations[1].billing, null);
   assert.equal((await f.post('billing/checkout?installation=77', {}, cookie)).status, 404);
@@ -329,7 +329,10 @@ test('a repository admin adds the organization\'s card through Stripe Checkout, 
   const stripe = {}, f = await setup(t, true, [8], stripe); f.state.installations = [99, 77];
   let cookie = await f.login();
   let [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
-  assert.deepEqual([owner.plan, owner.billing], [{ freeReviews: 20, monthlyReviews: 20 }, { card: null, email: null, needsCard: true, unpaid: null, invoices: [] }]);
+  // The Billing page shows the price terms and how far a new card may run before it has paid.
+  const newCard = { paidUsd: 0, monthlyUsd: 50, next: { paidUsd: 10, monthlyUsd: 250 } };
+  assert.deepEqual([owner.plan, owner.billing], [{ freeReviews: 20, monthlyReviews: 20, multiplier: 2, minimumUsd: .05, custom: false },
+    { card: null, expires: null, email: null, needsCard: true, unpaid: null, invoices: [], spending: newCard }]);
   // The card pays for every repository in the organization, so a non-admin, a foreign origin, an
   // organization with no connected repository and an unknown one are all refused before Stripe.
   assert.equal((await f.post('billing/checkout?installation=99', {}, cookie, { Origin: 'https://evil.test' })).status, 403);
@@ -349,8 +352,8 @@ test('a repository admin adds the organization\'s card through Stripe Checkout, 
   assert.deepEqual([refused.status, (await refused.json()).error], [409, 'Stripe did not save a card for this checkout. Add the card again.']);
   delete stripe.customer;
   const confirmed = await (await f.post('billing/confirm?installation=99', { session: 'cs_test_abc' }, cookie)).json();
-  const saved = { card: 'Visa ending 4242', email: 'billing@owner.test', needsCard: false, unpaid: null, invoices: [] };
-  assert.deepEqual([confirmed.card, confirmed.plan, confirmed.billing], ['Visa ending 4242', { freeReviews: 20, monthlyReviews: 1000 }, saved]);
+  const saved = { card: 'Visa ending 4242', expires: '12/2030', email: 'billing@owner.test', needsCard: false, unpaid: null, invoices: [], spending: newCard };
+  assert.deepEqual([confirmed.card, confirmed.plan, confirmed.billing], ['Visa ending 4242', { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05, custom: false }, saved]);
   [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
   assert.deepEqual(owner.billing, saved);
   // Invoices show newest first with Stripe's page for each; one still being created does not.

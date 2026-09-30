@@ -231,9 +231,9 @@ run" comment with the reason and no model call is made. The daily `maxReviewsPer
 cap still applies to every installation together.
 
 With `STRIPE_SECRET_KEY` set, an administrator of a connected repository adds the
-organization's card on the Usage page through Stripe Checkout in setup mode, which charges
+organization's card on the Billing page through Stripe Checkout in setup mode, which charges
 nothing. With a card on file the default plan allows 1,000 reviews a month; without one, or
-without a key, reviews stop at the free ones and the PR comment links to the Usage page. On
+without a key, reviews stop at the free ones and the PR comment links to the Billing page. On
 the 2nd of each UTC month the worker invoices each installation with a card, in US dollars,
 for the month before at the plan's price, and Stripe charges the card. Each month is invoiced
 at most once: its row in the `invoices` table is written before the first Stripe call. A row
@@ -241,9 +241,18 @@ left in state `creating` means invoicing stopped midway; the worker logs it ever
 operator checks the customer's invoices in Stripe, finishes or voids that month's there, and
 sets the row to `finalized` (or deletes it to have the worker invoice the month again).
 
+A card is only tested when its first invoice is charged, after the month ends, so the default
+plan also caps each month's charges by what the organization has paid in total
+(`spendingTiers` in `src/github/repositories.ts`): $50 a month until it has paid $10, $250
+until it has paid $250, then only the 1,000-review limit. Paid means invoices Stripe marked
+paid. A card that never pays therefore costs at most $50 of charges, at most half that in model
+cost at the default ×2. The ceiling is checked before each review, so one review can take a
+month past it; past it the PR comment says so and links to the Billing page. Plans an
+operator sets have no ceiling.
+
 Every hour the worker asks Stripe how each unsettled invoice stands. When Stripe has tried
 the card and failed, the row becomes `failed`, and the default plan stops at its free reviews
-again, as if there were no card, until the invoice is paid. The Usage page names the unpaid
+again, as if there were no card, until the invoice is paid. The Billing page names the unpaid
 month and links to Stripe's page for the invoice, where it can be paid. Saving a new card
 charges it for any unpaid invoice straight away. A paid invoice lifts the limit on the next
 check, and so does one an operator voids in Stripe. Plans an operator sets are not gated.
