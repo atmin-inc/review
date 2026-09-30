@@ -122,17 +122,17 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
   };
   const customer = (installation: number) => {
     const { plan, limit, needsCard, unpaid } = repositories!.limit(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
-    const record = repositories!.billing(installation);
+    const record = repositories!.billing(installation), custom = repositories!.plan(installation).updatedAt !== null;
     // The last year of invoices; one still being created is an operator's to resolve, not shown.
     const invoices = repositories!.invoices(installation).filter(row => row.state !== 'creating').slice(0, 12)
       .map(({ month, amountCents, reviews, state, url }) => ({ month, amountCents, reviews, state, url }));
-    return { plan: { freeReviews: plan.freeReviews, monthlyReviews: limit }, usage,
-      billing: billing ? { card: record?.card ?? null, email: record?.email ?? null, needsCard, unpaid, invoices } : null };
+    return { plan: { freeReviews: plan.freeReviews, monthlyReviews: limit, multiplier: plan.multiplier, minimumUsd: plan.minimumUsd, custom }, usage,
+      billing: billing ? { card: record?.card ?? null, expires: record?.expires ?? null, email: record?.email ?? null, needsCard, unpaid, invoices, spending: repositories!.spending(installation) } : null };
   };
   const adminView = (installation: number) => {
     const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation);
     return { plan: { ...plan, custom: updatedAt !== null, updatedAt: updatedAt === null ? null : new Date(updatedAt).toISOString(), updatedBy }, usage,
-      limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null, unpaid: repositories!.limit(installation).unpaid,
+      limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null, unpaid: repositories!.limit(installation).unpaid, spending: repositories!.spending(installation),
       storage: { mb: Math.round(Object.values(repositories!.stored(installation)).reduce((a, b) => a + b, 0) / 1024 ** 2), limitMb: repositories!.storageLimitMb() },
       repositories: repositories!.of(installation).map(entry => ({ id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled(), reviews: perRepository.get(entry.config.repositoryId) ?? 0, outcomes: outcomeSummary(entry.store) })) };
   };

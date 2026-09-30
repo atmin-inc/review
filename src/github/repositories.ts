@@ -4,6 +4,7 @@ import type { PilotConfig } from './config.js';
 import { Store, type Job } from './store.js';
 import { ReviewSettings, type ModelChoice } from './settings.js';
 import { DEFAULT_MAX_INSTALLATION_DISK_MB, directoryBytes } from './runner.js';
+import { monthlyUsage } from './dashboard-view.js';
 
 export interface Repository { config: PilotConfig; store: Store; settings: ReviewSettings; }
 // A plan caps an installation's reviews per UTC month and prices the ones beyond its free
@@ -12,10 +13,17 @@ export interface Repository { config: PilotConfig; store: Store; settings: Revie
 // invoiced monthly at its plan's price (see billing.ts).
 export interface Plan { freeReviews: number; monthlyReviews: number; multiplier: number; minimumUsd: number; }
 export const defaultPlan: Plan = { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: 0.05 };
+// How much the default plan may charge a card in a UTC month, raised by what the organization
+// has paid in total, so a card that never pays costs atmin at most the first ceiling. Paid means
+// invoices Stripe marked paid; $10 rather than any payment, so an invoice of a few cents does not
+// count as standing. A null ceiling leaves only the plan's review limit. Operator plans have none.
+export const spendingTiers: { paidUsd: number; monthlyUsd: number | null }[] = [
+  { paidUsd: 0, monthlyUsd: 50 }, { paidUsd: 10, monthlyUsd: 250 }, { paidUsd: 250, monthlyUsd: null }];
 // `customer` is the installation's Stripe customer; `card` describes its default card, as
-// "Visa ending 4242", once Checkout has saved one. `email` is where Stripe sends receipts and
+// "Visa ending 4242", once Checkout has saved one, and `expires` its expiry as "MM/YYYY" (null
+// for cards saved before expiry was recorded). `email` is where Stripe sends receipts and
 // failed-payment notices: the address entered in Checkout, which Stripe sets on the customer.
-export interface BillingRecord { customer: string; paymentMethod: string | null; card: string | null; email: string | null; updated: number; updatedBy: number; }
+export interface BillingRecord { customer: string; paymentMethod: string | null; card: string | null; expires: string | null; email: string | null; updated: number; updatedBy: number; }
 // An invoice row's state. 'creating' is written before the first Stripe call; 'finalized' means
 // Stripe has it and has not charged the card yet. 'failed' means Stripe tried to charge the
 // card and could not; Stripe may still retry. Stripe's own states follow: paid, uncollectible, void.
@@ -25,6 +33,13 @@ export interface InvoiceRecord { month: string; invoice: string | null; amountCe
 export const unpaidStates: InvoiceState[] = ['failed', 'uncollectible'];
 export const perInstallation = 10, maxRepositories = 200;
 export const dailyLimitReached = 'The operator’s rolling 24-hour review limit was reached. A maintainer can rerun after capacity is available. No inference was started.';
+// Ceilings are whole dollars. `url` is the Billing page, where admins see the limit and invoices.
+export function spendingLimitReached(monthlyUsd: number, next: { paidUsd: number; monthlyUsd: number | null } | null, now: number, url?: string): string {
+  const { start, end } = month(now);
+  const name = new Date(start).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const rises = next ? ` The limit rises to ${next.monthlyUsd === null ? 'the plan’s full review allowance' : `$${next.monthlyUsd} a month`} once the organization has paid $${next.paidUsd} in total.` : '';
+  return `This organization’s charges reached its $${monthlyUsd} monthly spending limit for ${name}.${rises}${url ? ` A repository admin can see the limit and invoices on the atmin dashboard (${url}).` : ''} Reviews resume on ${new Date(end).toISOString().slice(0, 10)}, or sooner if atmin raises the limit. No inference was started.`;
+}
 export const storageLimitReached = (limitMb: number) => `This organization’s review records on the atmin review service are over its ${limitMb} MB storage limit, so this review did not start. Records older than 90 days are deleted automatically; contact atmin to raise the limit sooner. No inference was started.`;
 const mb = (bytes: number) => Math.round(bytes / 1024 ** 2);
 
@@ -71,7 +86,7 @@ export class Repositories {
       CREATE TABLE IF NOT EXISTS billing (installation INTEGER PRIMARY KEY, customer TEXT NOT NULL, paymentMethod TEXT, card TEXT, updated INTEGER NOT NULL, updatedBy INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS invoices (installation INTEGER NOT NULL, month TEXT NOT NULL, invoice TEXT, amountCents INTEGER NOT NULL, reviews INTEGER NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(installation, month));`);
     // Columns added after the first billing release; its tables exist on the server.
-    for (const [table, column] of [['billing', 'email'], ['invoices', 'url'], ['invoices', 'checked']]) {
+    for (const [table, column] of [['billing', 'email'], ['invoices', 'url'], ['invoices', 'checked'], ['billing', 'expires']]) {
       if (!root.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) root.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${column === 'checked' ? 'INTEGER' : 'TEXT'}`);
     }
     const rows = root.db.prepare('SELECT * FROM repositories').all();
@@ -119,18 +134,26 @@ export class Repositories {
     const needsCard = updatedAt === null && (!this.billing(installation)?.card || unpaid !== null);
     return { plan, limit: needsCard ? Math.min(plan.freeReviews, plan.monthlyReviews) : plan.monthlyReviews, needsCard, unpaid };
   }
+  // The default plan's spending tier (see `spendingTiers`): what the organization has paid in
+  // total, the ceiling on this month's charges, and the next tier. Operator plans have no ceiling.
+  spending(installation: number): { paidUsd: number; monthlyUsd: number | null; next: { paidUsd: number; monthlyUsd: number | null } | null } {
+    const paidUsd = this.invoices(installation).filter(row => row.state === 'paid').reduce((sum, row) => sum + row.amountCents, 0) / 100;
+    if (this.plan(installation).updatedAt !== null) return { paidUsd, monthlyUsd: null, next: null };
+    const tier = spendingTiers.findLastIndex(row => paidUsd >= row.paidUsd);
+    return { paidUsd, monthlyUsd: spendingTiers[tier]!.monthlyUsd, next: spendingTiers[tier + 1] ?? null };
+  }
   billing(installation: number): BillingRecord | null {
     const row = this.root.db.prepare('SELECT * FROM billing WHERE installation=?').get(installation);
     return row ? { customer: String(row.customer), paymentMethod: row.paymentMethod === null ? null : String(row.paymentMethod), card: row.card === null ? null : String(row.card),
-      email: row.email === null ? null : String(row.email), updated: Number(row.updated), updatedBy: Number(row.updatedBy) } : null;
+      expires: row.expires === null ? null : String(row.expires), email: row.email === null ? null : String(row.email), updated: Number(row.updated), updatedBy: Number(row.updatedBy) } : null;
   }
   billed(): number[] { return this.root.db.prepare('SELECT installation FROM billing WHERE paymentMethod IS NOT NULL').all().map(row => Number(row.installation)); }
   setCustomer(installation: number, customer: string, by: number): void {
     // Two admins starting Checkout at once get the same customer from Stripe's idempotency key.
     this.root.db.prepare('INSERT INTO billing(installation,customer,updated,updatedBy) VALUES(?,?,?,?) ON CONFLICT(installation) DO NOTHING').run(installation, customer, Date.now(), by);
   }
-  setCard(installation: number, paymentMethod: string, card: string, email: string | null, by: number): void {
-    this.root.db.prepare('UPDATE billing SET paymentMethod=?, card=?, email=?, updated=?, updatedBy=? WHERE installation=?').run(paymentMethod, card, email, Date.now(), by, installation);
+  setCard(installation: number, paymentMethod: string, card: string, expires: string, email: string | null, by: number): void {
+    this.root.db.prepare('UPDATE billing SET paymentMethod=?, card=?, expires=?, email=?, updated=?, updatedBy=? WHERE installation=?').run(paymentMethod, card, expires, email, Date.now(), by, installation);
   }
   // One invoice per installation and month. A row is written as 'creating' before any Stripe
   // call and only then finalized, so a crash midway is left for an operator, never billed twice.
@@ -192,8 +215,15 @@ export class Repositories {
       process.stderr.write(`atmin review: review ${job.id} of repository ${repository.config.repositoryId} not started: ${detail}\n`);
       return reason;
     };
-    if (used >= monthly) return refuse(monthlyLimitReached(plan, monthly, now, needsCard && this.origin ? `${this.origin}/usage?installation=${installation}` : undefined, unpaid ?? undefined),
+    if (used >= monthly) return refuse(monthlyLimitReached(plan, monthly, now, needsCard && this.origin ? `${this.origin}/billing?installation=${installation}` : undefined, unpaid ?? undefined),
       `installation ${installation} used ${used} of ${monthly} monthly reviews${!needsCard ? '' : unpaid ? ` with the ${unpaid} invoice unpaid` : ' with no card on file'}`);
+    // Checked before each review, so one review can take charges past the ceiling.
+    const spending = this.spending(installation);
+    if (spending.monthlyUsd !== null && !needsCard) {
+      const charged = monthlyUsage(this, installation, now).estimatedUsd;
+      if (charged >= spending.monthlyUsd) return refuse(spendingLimitReached(spending.monthlyUsd, spending.next, now, this.origin && `${this.origin}/billing?installation=${installation}`),
+        `installation ${installation} charged $${charged.toFixed(2)} of its $${spending.monthlyUsd} monthly spending limit, having paid $${spending.paidUsd.toFixed(2)} in total`);
+    }
     const today = this.reviewsToday(now);
     if (today >= this.config.maxReviewsPerDay) return refuse(dailyLimitReached, `service used ${today} of ${this.config.maxReviewsPerDay} daily reviews`);
     // Checked before each review, so one review can take an organization past its limit. Shared

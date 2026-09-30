@@ -8,6 +8,7 @@ import { Landing, NoInstallations } from './landing.jsx';
 import { Shell } from './shell.jsx';
 import { RepositoriesPage } from './repositories.jsx';
 import { UsagePage } from './usage.jsx';
+import { BillingPage } from './billing.jsx';
 import { RepositoryPage } from './repository.jsx';
 import { AdminPage } from './admin.jsx';
 
@@ -104,7 +105,9 @@ export function App() {
   if (route.view === 'repositories') {
     page = <RepositoriesPage installation={selected} connections={connections} patchRepository={patchRepository}/>;
   } else if (route.view === 'usage') {
-    page = <UsagePage installation={selected} checkout={route.checkout} patchInstallation={patchInstallation}/>;
+    page = <UsagePage installation={selected}/>;
+  } else if (route.view === 'billing') {
+    page = <BillingPage installation={selected} checkout={route.checkout} patchInstallation={patchInstallation}/>;
   } else if (route.view === 'repository') {
     const listed = repositories.find(r => r.id === route.repository);
     page = <RepositoryPage key={route.repository} id={route.repository} review={route.review} listed={listed} installation={selected}

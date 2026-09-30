@@ -55,9 +55,9 @@ export class Billing {
       this.repositories.setCustomer(installation, customer, by);
       log(`Stripe customer ${customer} created for installation ${installation} by GitHub user ${by}`);
     }
-    const usage = `${this.origin}/usage?installation=${installation}`;
+    const page = `${this.origin}/billing?installation=${installation}`;
     const session = await this.stripe.call('POST', '/checkout/sessions', { mode: 'setup', customer, 'payment_method_types[0]': 'card',
-      success_url: `${usage}&checkout={CHECKOUT_SESSION_ID}`, cancel_url: usage, 'metadata[installation]': String(installation) });
+      success_url: `${page}&checkout={CHECKOUT_SESSION_ID}`, cancel_url: page, 'metadata[installation]': String(installation) });
     if (typeof session.url !== 'string' || !session.url.startsWith('https://checkout.stripe.com/')) throw new StripeError(200, 'POST /checkout/sessions', 'invalid session');
     log(`card checkout started for installation ${installation} by GitHub user ${by}`);
     return session.url;
@@ -71,18 +71,19 @@ export class Billing {
     const found = await this.stripe.call('GET', `/checkout/sessions/${session}`, { 'expand[0]': 'setup_intent.payment_method', 'expand[1]': 'customer' });
     const method = found.setup_intent?.payment_method;
     if (found.customer?.id !== record.customer || found.mode !== 'setup' || found.status !== 'complete' || found.setup_intent?.status !== 'succeeded'
-      || !id('pm').test(method?.id) || typeof method.card?.last4 !== 'string' || !/^\d{4}$/.test(method.card.last4)) throw new StripeError(409, `GET /checkout/sessions/${session}`, 'checkout not complete');
+      || !id('pm').test(method?.id) || typeof method.card?.last4 !== 'string' || !/^\d{4}$/.test(method.card.last4)
+      || !Number.isInteger(method.card.exp_month) || method.card.exp_month < 1 || method.card.exp_month > 12 || !Number.isInteger(method.card.exp_year) || method.card.exp_year < 2000 || method.card.exp_year > 2200) throw new StripeError(409, `GET /checkout/sessions/${session}`, 'checkout not complete');
     await this.stripe.call('POST', `/customers/${record.customer}`, { 'invoice_settings[default_payment_method]': method.id }, `atmin-default-${method.id}`);
-    const card = `${brands[method.card.brand] ?? 'Card'} ending ${method.card.last4}`;
+    const card = `${brands[method.card.brand] ?? 'Card'} ending ${method.card.last4}`, expires = `${String(method.card.exp_month).padStart(2, '0')}/${method.card.exp_year}`;
     // Checkout puts the address it collected on a customer that had none.
     const email = typeof found.customer.email === 'string' && found.customer.email.length <= 512 ? found.customer.email : null;
-    this.repositories.setCard(installation, method.id, card, email, by);
+    this.repositories.setCard(installation, method.id, card, expires, email, by);
     log(`card ${method.id} saved for installation ${installation} by GitHub user ${by}; ${email ? 'Stripe has an email for receipts' : 'Stripe has no email for this customer, so it sends no receipts'}`);
     await this.payUnpaid(installation, method.id);
     return card;
   }
   // Charges each invoice the installation still owes to `paymentMethod`. The card is saved
-  // either way: a declined or failed charge leaves the invoice owed, the Usage page still shows
+  // either way: a declined or failed charge leaves the invoice owed, the Billing page still shows
   // it, and the hourly check picks up whatever Stripe does next.
   async payUnpaid(installation: number, paymentMethod: string): Promise<void> {
     for (const row of this.repositories.invoices(installation).filter(row => row.invoice && unpaidStates.includes(row.state))) {

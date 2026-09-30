@@ -25,15 +25,18 @@ test('malformed or repeated repository parameters fall back to the repository li
   }
 });
 
-test('/admin, /usage and unknown paths', () => {
+test('/admin, /usage, /billing and unknown paths', () => {
   assert.equal(parseRoute('/admin').view, 'admin');
   assert.equal(parseRoute('/admin/').view, 'admin');
   assert.equal(parseRoute('/usage?installation=99').view, 'usage');
   assert.equal(parseRoute('/usage?installation=99').installation, 99);
-  // Only a Stripe Checkout session ID, given once, is confirmed on return from Checkout.
-  assert.equal(parseRoute('/usage?installation=99&checkout=cs_test_a1B2').checkout, 'cs_test_a1B2');
+  assert.equal(parseRoute('/billing?installation=99').view, 'billing');
+  // Only a Stripe Checkout session ID, given once, is confirmed on return from Checkout, and
+  // Checkout returns to Billing.
+  assert.equal(parseRoute('/billing?installation=99&checkout=cs_test_a1B2').checkout, 'cs_test_a1B2');
+  assert.equal(parseRoute('/usage?installation=99&checkout=cs_test_a1B2').checkout, undefined);
   for (const bad of ['cs_other_a1', 'cs_test_', 'cs_test_a1&checkout=cs_test_b2', 'cs_test_a1%2F..']) {
-    assert.equal(parseRoute(`/usage?installation=99&checkout=${bad}`).checkout, null, bad);
+    assert.equal(parseRoute(`/billing?installation=99&checkout=${bad}`).checkout, null, bad);
   }
   assert.equal(parseRoute('/settings').view, 'not-found');
 });
@@ -45,7 +48,7 @@ test('sign-in errors come only from the known codes', () => {
 });
 
 test('routeHref round-trips every view', () => {
-  for (const href of ['/', '/?installation=99', '/usage?installation=99', '/admin', '/?repository=42', '/?repository=42#review/abc-123']) {
+  for (const href of ['/', '/?installation=99', '/usage?installation=99', '/billing?installation=99', '/admin', '/?repository=42', '/?repository=42#review/abc-123']) {
     assert.equal(routeHref(parseRoute(href)), href);
   }
 });

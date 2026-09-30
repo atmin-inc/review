@@ -10,7 +10,7 @@ import { Input } from './ui/input.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
 import { AutoHeight } from './ui/auto-height.jsx';
 import { Field, Figure, Loading, Notice, PageHeader, Progress } from './components.jsx';
-import { count, monthName, usd } from './format.js';
+import { count, money, monthName, usd } from './format.js';
 import { planFields, validatePlan } from './validate.js';
 
 const operatorOnly = 'Operator access is required.';
@@ -153,6 +153,9 @@ function Customers({ data, onEdit }) {
                   <PlanSummary plan={plan}/>
                   {plan.custom && <div className="text-[13px] text-muted-foreground">Custom{plan.updatedBy ? ` · set by ${plan.updatedBy}` : ''}</div>}
                   <div className="text-[13px] text-muted-foreground">{installation.card ?? (plan.custom ? 'No card' : 'No card, stops at free reviews')}</div>
+                  {installation.card && installation.spending.monthlyUsd !== null && <div className={`text-[13px] ${usage.estimatedUsd >= installation.spending.monthlyUsd ? 'text-destructive' : 'text-muted-foreground'}`}>
+                    <Figure>{money(installation.spending.monthlyUsd)}</Figure> a month limit, <Figure>{money(installation.spending.paidUsd)}</Figure> paid
+                  </div>}
                   {installation.unpaid && <div className="text-[13px] text-destructive">Invoice for {monthName(installation.unpaid)} unpaid{plan.custom ? '' : ', stops at free reviews'}</div>}
                   <div className={`text-[13px] ${installation.storage.mb > installation.storage.limitMb ? 'text-destructive' : 'text-muted-foreground'}`}>
                     <Figure>{count(installation.storage.mb)}</Figure> of <Figure>{count(installation.storage.limitMb)}</Figure> MB stored
