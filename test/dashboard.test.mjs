@@ -386,6 +386,9 @@ test('the admin panel is operator-only, lists every installation, and plan chang
     writeFileSync(join(directory, 'receipt.json'), JSON.stringify({ profile: models[0].profile, finishedAt: 'now', calls: [{ meteredUsd: usd }, ...(settled ? [] : [{ meteredUsd: null }])] }));
     f.store.db.prepare("UPDATE jobs SET state='completed', started=?, artifact=? WHERE id=?").run(now - 1000 + i, directory, id);
   });
+  // What became of findings on closed PRs, as the worker records them at close.
+  const outcome = f.store.db.prepare("INSERT INTO outcomes(pr,finding,job,head,final,merged,priority,path,line,title,code,up,down,replies,recorded) VALUES(?,?,'job','a','b',?,'P2','a.ts',1,'t',?,?,0,0,0)");
+  [[1, 'f1', 1, 'changed', 1], [1, 'f2', 1, 'unchanged', 0], [2, 'f1', 0, 'changed', null]].forEach(row => outcome.run(...row));
   const admin = await (await f.get('/api/review/v1/admin', cookie)).json();
   assert.deepEqual(admin.limits, { maxReviewsPerDay: 12, reviewsToday: 4 });
   assert.deepEqual(admin.installations.map(i => [i.id, i.account, i.accountType, i.suspended, i.removed]),
@@ -394,7 +397,9 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   // The limit in force: an operator's plan as set; the default plan stops at its free reviews without a card.
   assert.deepEqual(admin.installations.map(i => [i.limit, i.card, i.unpaid]), [[5, null, null], [20, null, null], [20, null, null]]);
   assert.deepEqual(owner.usage, { month: owner.usage.month, resetsAt: owner.usage.resetsAt, reviews: 4, remaining: 1, knownUsd: .24, estimatedUsd: .25, unknownCostReviews: 1 });
-  assert.deepEqual(owner.repositories, [{ id: 42, name: 'owner/repo', enabled: true, reviews: 4 }]);
+  assert.deepEqual(owner.repositories, [{ id: 42, name: 'owner/repo', enabled: true, reviews: 4, outcomes: {
+    merged: { pulls: 1, findings: 2, changed: 1, unchanged: 1, unknown: 0, up: 1, down: 0, replies: 0 },
+    unmerged: { pulls: 1, findings: 1, changed: 1, unchanged: 0, unknown: 0, up: 0, down: 0, replies: 0 } } }]);
   // Each review's own price uses the same rule, so the PR comment and the estimate agree.
   const jobs = f.store.db.prepare('SELECT * FROM jobs ORDER BY started').all();
   assert.deepEqual(jobs.map(job => { const p = reviewPrice(f.repositories, 99, job); return [p.index, p.free, p.usd]; }),

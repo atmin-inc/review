@@ -14,6 +14,7 @@ import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
 import type { ReviewSettings } from './settings.js';
 import { dailyLimitReached, authorLimitReached, month } from './repositories.js';
 import { InlineReviews } from './inline.js';
+import { Outcomes } from './outcomes.js';
 
 // Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
 // check turned "Review failed" after its comment was posted, and nothing said which step
@@ -28,10 +29,11 @@ const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha 
 export class Worker {
   private checks: Checks;
   private inline: InlineReviews;
+  private outcomes: Outcomes;
   private abort: AbortController | undefined;
   constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string,
     private price?: (job: Job) => ReviewPrice | null) {
-    this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github);
+    this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github); this.outcomes = new Outcomes(store, github, config.repositoryId);
   }
   stop(): void { this.abort?.abort(); }
   async tick(): Promise<boolean> {
@@ -72,6 +74,9 @@ export class Worker {
       const existing = await this.github.summary(job.pr, marker);
       if (existing && this.store.current(job, this.owner)) await this.github.update(existing.id, `${marker}\n# atmin review — inactive\n\nPR is ${initial.draft ? 'a draft' : 'closed'}. Previous findings are historical. No merge approval.`);
       if (this.store.current(job, this.owner)) this.store.update(job.id, { state: 'skipped', error: initial.draft ? 'draft' : 'closed' });
+      // Only a closed PR shows what became of its findings. Reading it never fails the job.
+      if (initial.state === 'closed' && this.store.owns(this.owner)) await this.outcomes.record(job.pr, initial)
+        .catch(error => process.stderr.write(`atmin review: recording outcomes of PR ${job.pr} in repository ${this.config.repositoryId} failed: ${failureCause(error)}\n`));
       return;
     }
     if (job.state !== 'publishing' && job.trigger === 'event') {

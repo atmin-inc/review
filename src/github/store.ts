@@ -27,6 +27,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, pr INTEGER NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL, started INTEGER, artifact TEXT, report TEXT, error TEXT, createStarted INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS pulls (pr INTEGER PRIMARY KEY, desired TEXT NOT NULL, comment INTEGER, baseRef TEXT, active INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS ci_refreshes (job TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS outcomes (pr INTEGER NOT NULL, finding TEXT NOT NULL, job TEXT NOT NULL, head TEXT NOT NULL, final TEXT NOT NULL, merged INTEGER NOT NULL,
+        priority TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, title TEXT NOT NULL, code TEXT NOT NULL, note TEXT, up INTEGER, down INTEGER, replies INTEGER,
+        recorded INTEGER NOT NULL, PRIMARY KEY(pr, finding));
       CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, created);`);
     // Databases created before incremental review lack the column; old jobs read as events.
     if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'trigger')) {

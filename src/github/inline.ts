@@ -4,6 +4,7 @@ import { renderFinding } from '../render.js';
 import { validateFix } from '../assessment.js';
 import type { GitHub, InlineComment, PullFile } from './api.js';
 import type { Job, Store } from './store.js';
+import { findingMarker } from './outcomes.js';
 
 // GitHub's per-file patch avoids parsing quoted Git paths or guessing rename mappings.
 function diffLines(patch: string) {
@@ -29,7 +30,7 @@ export function inlineComments(packet: Packet, findings: Finding[], files: PullF
     if (!file?.patch) continue;
     const diff = diffLines(file.patch);
     if (!(side === 'base' ? diff.deleted.has(line) : diff.head.has(line))) continue;
-    const rendered = renderFinding(packet, finding, false);
+    const rendered = `${findingMarker(finding)}\n${renderFinding(packet, finding, false)}`;
     const comment: InlineComment = { path: file.filename, side: side === 'base' ? 'LEFT' : 'RIGHT', line,
       body: rendered.length <= 8000 ? rendered : `${rendered.slice(0, 7800)}\n\nFinding shortened; see the full PR summary.` };
     if (finding.fix) {

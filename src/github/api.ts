@@ -4,8 +4,10 @@ import type { PilotConfig } from './config.js';
 import type { PullState } from '../snapshot.js';
 
 // `author` is the PR's author: the id counts toward a per-author limit, since logins can change.
-export interface LivePull extends PullState { draft: boolean; author: { id: number; login: string }; }
+export interface LivePull extends PullState { draft: boolean; merged: boolean; author: { id: number; login: string }; }
 export interface Comment { id: number; body: string; user: { login: string; type: string }; }
+// A comment on a PR's diff, with its thumbs-up and thumbs-down counts; `human` is false for bots.
+export interface ReviewComment { id: number; reviewId: number | null; replyTo: number | null; human: boolean; body: string; up: number; down: number; }
 export interface PullFile { filename: string; previous_filename?: string; patch?: string; }
 export interface InlineComment { path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; start_line?: number; start_side?: 'RIGHT'; }
 export interface CheckOutput { status: 'in_progress' | 'completed'; conclusion?: 'success' | 'failure' | 'cancelled'; output: { title: string; summary: string }; details_url?: string; }
@@ -20,6 +22,8 @@ export interface GitHub {
   files(pr: number): Promise<PullFile[]>;
   findReview(pr: number, head: string, marker: string): Promise<number | null>;
   createReview(pr: number, head: string, body: string, comments: InlineComment[]): Promise<number>;
+  reviewComments(pr: number): Promise<ReviewComment[]>;
+  file(path: string, ref: string): Promise<string | null>;
   findCheck(head: string, externalId: string): Promise<number | null>;
   createCheck(head: string, externalId: string, output: CheckOutput): Promise<number>;
   updateCheck(id: number, output: CheckOutput): Promise<void>;
@@ -77,7 +81,7 @@ export class AppGitHub implements GitHub {
     const ref = await this.request(`/repos/${this.config.repository}/git/ref/heads/${encodeURIComponent(data.base.ref)}`, token);
     if (![data.head?.sha, ref.object?.sha].every(sha => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha)) || typeof data.base.ref !== 'string' || !['open', 'closed'].includes(data.state) || typeof data.draft !== 'boolean'
       || !Number.isSafeInteger(data.user?.id) || data.user.id < 1 || typeof data.user.login !== 'string' || !/^[a-zA-Z0-9-]{1,39}(?:\[bot\])?$/.test(data.user.login)) throw new Error('Invalid live PR state');
-    return { repository: this.config.repository, pr, headSha: data.head.sha, baseSha: ref.object.sha, baseRef: data.base.ref, state: data.state, draft: data.draft,
+    return { repository: this.config.repository, pr, headSha: data.head.sha, baseSha: ref.object.sha, baseRef: data.base.ref, state: data.state, draft: data.draft, merged: data.merged === true,
       author: { id: data.user.id, login: data.user.login } };
   }
   async canReview(login: string): Promise<boolean> {
@@ -155,6 +159,33 @@ export class AppGitHub implements GitHub {
       { commit_id: head, event: 'COMMENT', body, comments });
     if (!Number.isSafeInteger(review.id) || review.id < 1) throw new Error('Uncertain inline review creation');
     return review.id;
+  }
+  async reviewComments(pr: number): Promise<ReviewComment[]> {
+    const found: ReviewComment[] = [];
+    const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : 0;
+    for (let page = 1; page <= 20; page++) {
+      const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}/comments?per_page=100&page=${page}`, await this.token(false));
+      if (!Array.isArray(data)) throw new Error('Invalid review comment listing');
+      for (const comment of data) {
+        if (!Number.isSafeInteger(comment.id) || typeof comment.body !== 'string' || typeof comment.user?.type !== 'string') throw new Error('Invalid review comment');
+        found.push({ id: comment.id, reviewId: Number.isSafeInteger(comment.pull_request_review_id) ? comment.pull_request_review_id : null,
+          replyTo: Number.isSafeInteger(comment.in_reply_to_id) ? comment.in_reply_to_id : null, human: comment.user.type === 'User', body: comment.body,
+          up: count(comment.reactions?.['+1']), down: count(comment.reactions?.['-1']) });
+      }
+      if (data.length < 100) return found;
+    }
+    throw new Error('Review comment scan limit reached');
+  }
+  // A file's text at one commit, or null when no file is at that path there.
+  async file(path: string, ref: string): Promise<string | null> {
+    if (!/^[a-f0-9]{40}$/.test(ref) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('Invalid file request');
+    try {
+      const data = await this.request(`/repos/${this.config.repository}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${ref}`, await this.token(false));
+      if (Array.isArray(data) || data.type !== 'file') return null;
+      // The contents API leaves out files over 1 MB.
+      if (data.encoding !== 'base64' || typeof data.content !== 'string') throw new Error(`File not readable through the contents API (${Number(data.size)} bytes)`);
+      return Buffer.from(data.content, 'base64').toString('utf8');
+    } catch (error) { if (error instanceof GitHubError && error.status === 404) return null; throw error; }
   }
   async validation(head: string, names: string[]): Promise<ValidationCheck[]> {
     if (!/^[a-f0-9]{40}$/.test(head)) throw new Error('Invalid CI commit');

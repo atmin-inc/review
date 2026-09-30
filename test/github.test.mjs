@@ -18,6 +18,7 @@ import { AppGitHub, GitHubError, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
 import { childEnvironment, engineRunner, expireRuns, trimSourceCache } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
+import { outcomeSummary } from '../dist/github/outcomes.js';
 import { repository, completed, finding, current } from './helpers.mjs';
 
 const secret = 'a local test secret with more than 32 bytes';
@@ -40,6 +41,8 @@ async function harness(t, findings = []) {
     files: async () => [{ filename: 'update.ts', patch: fixture.diff.toString().slice(fixture.diff.toString().indexOf('@@')) }],
     findReview: async (_pr, head, marker) => reviews.find(r => r.head === head && r.body.startsWith(`${marker}\n`))?.id ?? null,
     createReview: async (pr, head, body, comments) => { const id = reviews.length + 1; reviews.push({ id, pr, head, body, comments }); return id; },
+    reviewComments: async () => reviews.flatMap(r => r.comments.map((c, i) => ({ id: r.id * 100 + i, reviewId: r.id, replyTo: null, human: false, body: c.body, up: 0, down: 0 }))),
+    file: async (path, ref) => { const shown = spawnSync('git', ['-C', fixture.source, 'show', `${ref}:${path}`]); return shown.status === 0 ? shown.stdout.toString('utf8') : null; },
     validation: async () => [],
     findCheck: async (head, externalId) => checks.find(c => c.head === head && c.externalId === externalId)?.id ?? null,
     createCheck: async (head, externalId, output) => { const id = checks.length + 1; checks.push({id, head, externalId, ...output}); return id; },
@@ -692,6 +695,82 @@ test('native fixes use exact head ranges, preserve code and suppress unsafe or c
   assert.doesNotMatch(inlineComments(f.packet, [make({})], noNewline)[0].body, /```suggestion/);
   const [deletion] = inlineComments(f.packet, [make({ fix: { ...fix, replacement: '' } })], files);
   assert.ok(deletion.body.includes('```suggestion\n\n```'));
+});
+
+// Precision on real PRs (2026-09-30): what people did with each finding is read when its PR
+// closes, so an edited flagged line, a thumbs-down or a reply lands in the operator's numbers.
+test('a closed PR records whether the lines of each published finding changed, and the thumbs and replies on its inline comments', async t => {
+  const h = await harness(t, [finding()]);
+  h.store.enqueue('source', 1); await h.worker.tick();
+  const [inline] = h.reviews[0].comments;
+  assert.match(inline.body, /^<!-- atmin-finding:[a-f0-9]{16} -->\n/);
+  // The author puts the guard back on the flagged line, then the PR merges.
+  h.fixture.write('update.ts', 'export function update(owner, account) {\n  if (owner !== account) throw new Error("forbidden");\n  return "updated";\n}\n');
+  h.setLive({ headSha: h.fixture.commit('restore the guard'), state: 'closed', merged: true });
+  h.github.reviewComments = async () => [
+    { id: 500, reviewId: h.reviews[0].id, replyTo: null, human: false, body: inline.body, up: 2, down: 1 },
+    { id: 501, reviewId: 77, replyTo: 500, human: true, body: 'Fixed, thanks.', up: 0, down: 0 },
+    { id: 502, reviewId: 77, replyTo: 500, human: false, body: 'A bot replying does not count.', up: 0, down: 0 },
+    // The same marker in a review that is not one of ours is not counted.
+    { id: 503, reviewId: 99, replyTo: null, human: false, body: inline.body, up: 5, down: 5 },
+  ];
+  const closed = h.store.enqueue('closed', 1); await h.worker.tick();
+  assert.equal(h.store.get(closed).state, 'skipped'); assert.match(h.comment.body, /inactive/);
+  const [row] = h.store.db.prepare('SELECT * FROM outcomes').all();
+  assert.deepEqual({ code: row.code, merged: row.merged, up: row.up, down: row.down, replies: row.replies, head: row.head, final: row.final, note: row.note },
+    { code: 'changed', merged: 1, up: 2, down: 1, replies: 1, head: h.fixture.state.headSha, final: h.live.headSha, note: null });
+  assert.deepEqual(outcomeSummary(h.store).merged, { pulls: 1, findings: 1, changed: 1, unchanged: 0, unknown: 0, up: 2, down: 1, replies: 1 });
+  assert.equal(h.counts.runs, 1);
+});
+
+test('flagged lines that only moved or were reindented count as unchanged, and a read GitHub refuses is unknown with its cause', async t => {
+  const h = await harness(t, [finding()]);
+  h.store.enqueue('source', 1); await h.worker.tick();
+  // Lines added above and a new indent leave the flagged code as it was.
+  h.fixture.write('update.ts', '// header\n// more\nexport function update(owner, account) {\n    return "updated";\n}\n');
+  h.setLive({ headSha: h.fixture.commit('unrelated edit'), state: 'closed', merged: false });
+  h.store.enqueue('closed', 1); await h.worker.tick();
+  assert.deepEqual(outcomeSummary(h.store), { merged: { pulls: 0, findings: 0, changed: 0, unchanged: 0, unknown: 0, up: 0, down: 0, replies: 0 },
+    unmerged: { pulls: 1, findings: 1, changed: 0, unchanged: 1, unknown: 0, up: 0, down: 0, replies: 0 } });
+  // Reopened and closed again: the last close replaces the first, and failures are kept as causes.
+  h.github.file = async () => { throw new GitHubError(502, 'GET /repos/test/review-fixture/contents/update.ts'); };
+  h.github.reviewComments = async () => { throw new GitHubError(0, 'GET /repos/test/review-fixture/pulls/1/comments', 'no response in 8 s'); };
+  h.store.enqueue('closed-again', 1); await h.worker.tick();
+  const rows = h.store.db.prepare('SELECT * FROM outcomes').all();
+  assert.equal(rows.length, 1);
+  assert.deepEqual({ code: rows[0].code, note: rows[0].note, up: rows[0].up }, { code: 'unknown', note: 'GitHub 502 on GET /repos/test/review-fixture/contents/update.ts', up: null });
+});
+
+test('GitHub API reads a file at a commit, review comment reactions and whether a PR merged', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', {modulusLength: 2048});
+  const head = 'a'.repeat(40), requested = [];
+  const api = new AppGitHub({repository: 'test/review-fixture', repositoryId: 42, installationId: 21}, '123', privateKey.export({format: 'pem', type: 'pkcs8'}), async url => {
+    requested.push(url);
+    if (url.endsWith('/access_tokens')) return Response.json({token: 'fixture', expires_at: new Date(Date.now() + 3600_000).toISOString()});
+    if (url.endsWith('/pulls/1')) return Response.json({ number: 1, state: 'closed', draft: false, merged: true, user: { id: 7, login: 'alice' }, head: { sha: head },
+      base: { ref: 'main', repo: { id: 42, full_name: 'test/review-fixture' } } });
+    if (url.endsWith('/git/ref/heads/main')) return Response.json({ object: { sha: 'b'.repeat(40) } });
+    if (url.includes('/contents/src/a%20b.ts?')) return Response.json({ type: 'file', encoding: 'base64', content: Buffer.from('one\ntwo\n').toString('base64') });
+    if (url.includes('/contents/big.bin?')) return Response.json({ type: 'file', encoding: 'none', content: '', size: 2_000_000 });
+    if (url.includes('/contents/src?')) return Response.json([]);
+    if (url.includes('/contents/')) return new Response('{}', { status: 404 });
+    if (url.includes('/pulls/1/comments?')) return Response.json([
+      { id: 5, pull_request_review_id: 3, body: 'finding', user: { login: 'atmin-test[bot]', type: 'Bot' }, reactions: { '+1': 2, '-1': 0, heart: 4 } },
+      { id: 6, pull_request_review_id: 8, in_reply_to_id: 5, body: 'reply', user: { login: 'alice', type: 'User' } },
+    ]);
+    throw new Error('Unexpected API request');
+  });
+  assert.equal((await api.pull(1)).merged, true);
+  assert.equal(await api.file('src/a b.ts', head), 'one\ntwo\n');
+  assert.ok(requested.at(-1).endsWith(`/contents/src/a%20b.ts?ref=${head}`));
+  assert.equal(await api.file('src', head), null);
+  assert.equal(await api.file('gone.ts', head), null);
+  await assert.rejects(api.file('big.bin', head), /not readable through the contents API \(2000000 bytes\)/);
+  for (const [path, ref] of [['../secrets', head], ['a//b', head], ['a.ts', 'main']]) await assert.rejects(api.file(path, ref), /Invalid file request/);
+  assert.deepEqual(await api.reviewComments(1), [
+    { id: 5, reviewId: 3, replyTo: null, human: false, body: 'finding', up: 2, down: 0 },
+    { id: 6, reviewId: 8, replyTo: 5, human: true, body: 'reply', up: 0, down: 0 },
+  ]);
 });
 
 test('lost inline POST response reconciles by bot identity without another POST or inference', async t => {
