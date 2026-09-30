@@ -224,6 +224,18 @@ left in state `creating` means invoicing stopped midway; the worker logs it ever
 operator checks the customer's invoices in Stripe, finishes or voids that month's there, and
 sets the row to `finalized` (or deletes it to have the worker invoice the month again).
 
+Every hour the worker asks Stripe how each unsettled invoice stands. When Stripe has tried
+the card and failed, the row becomes `failed`, and the default plan stops at its free reviews
+again, as if there were no card, until the invoice is paid. The Usage page names the unpaid
+month and links to Stripe's page for the invoice, where it can be paid. Saving a new card
+charges it for any unpaid invoice straight away. A paid invoice lifts the limit on the next
+check, and so does one an operator voids in Stripe. Plans an operator sets are not gated.
+Checkout records the address it collects on the Stripe customer, and Stripe sends receipts
+and failed-payment notices there, if two settings are on in the Stripe dashboard:
+Settings > Emails > Successful payments, and Settings > Billing > Subscriptions and emails >
+Send emails when card payments fail (with the link set to a Stripe-hosted page). Smart
+Retries in the same place decide whether Stripe charges the card again after a failure.
+
 `operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
 by someone else. Operators get `/admin`, which lists every installation of the App (read
 with the App's credentials) with its repositories, reviews this month, model cost,

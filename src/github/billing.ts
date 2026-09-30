@@ -1,4 +1,4 @@
-import { month, type Repositories } from './repositories.js';
+import { month, unpaidStates, type InvoiceState, type Repositories } from './repositories.js';
 import { monthlyUsage } from './dashboard-view.js';
 
 // A failed Stripe call names its method, path, Stripe's error code and Stripe's own sentence
@@ -26,11 +26,23 @@ export class Stripe {
 const id = (prefix: string) => new RegExp(`^${prefix}_[A-Za-z0-9_]{1,250}$`);
 const brands: Record<string, string> = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', discover: 'Discover', diners: 'Diners Club', jcb: 'JCB', unionpay: 'UnionPay' };
 const log = (line: string) => process.stderr.write(`atmin review: ${line}\n`);
+// Stripe's page for one invoice, where the customer sees it and can pay it; nothing else is linked.
+const hostedUrl = (value: unknown) => typeof value === 'string' && value.startsWith('https://invoice.stripe.com/') && value.length <= 2048 ? value : null;
+// Stripe's invoice status, in the words the worker acts on. An open invoice that Stripe has
+// tried to charge failed on the card, and Stripe may still retry it.
+function invoiceState(invoice: { status?: unknown; attempt_count?: unknown }): InvoiceState | null {
+  if (invoice.status === 'paid' || invoice.status === 'void' || invoice.status === 'uncollectible') return invoice.status;
+  if (invoice.status === 'open') return Number(invoice.attempt_count) > 0 ? 'failed' : 'finalized';
+  return null;
+}
 
 // Cards and monthly invoices through Stripe. A card is saved with Checkout in setup mode, so
 // nothing is charged then. On the second day of each UTC month, each installation with a card
 // is invoiced once for the month before, in US dollars, at the price the PR comments showed
-// under the plan in force when the invoice is made.
+// under the plan in force when the invoice is made. Stripe charges the card and emails the
+// receipt, or the failed-payment notice, to the address entered in Checkout; the worker asks
+// Stripe hourly how each open invoice stands (see `refresh`), and a failed one stops the
+// default plan at its free reviews until it is paid.
 export class Billing {
   constructor(private stripe: Stripe, private repositories: Repositories, private origin: string) {}
   // The Checkout page for saving a card; the browser is sent there.
@@ -51,19 +63,50 @@ export class Billing {
     return session.url;
   }
   // After Checkout returns: the session must belong to this installation's customer and have
-  // saved a card, which becomes the customer's default for invoices.
+  // saved a card, which becomes the customer's default for invoices. Any invoice the old card
+  // failed to pay is charged to the new one straight away.
   async confirm(installation: number, session: string, by: number): Promise<string> {
     const record = this.repositories.billing(installation);
     if (!record || !/^cs_(test|live)_[A-Za-z0-9]{1,250}$/.test(session)) throw new StripeError(400, 'confirm', 'unknown checkout');
-    const found = await this.stripe.call('GET', `/checkout/sessions/${session}`, { 'expand[0]': 'setup_intent.payment_method' });
+    const found = await this.stripe.call('GET', `/checkout/sessions/${session}`, { 'expand[0]': 'setup_intent.payment_method', 'expand[1]': 'customer' });
     const method = found.setup_intent?.payment_method;
-    if (found.customer !== record.customer || found.mode !== 'setup' || found.status !== 'complete' || found.setup_intent?.status !== 'succeeded'
+    if (found.customer?.id !== record.customer || found.mode !== 'setup' || found.status !== 'complete' || found.setup_intent?.status !== 'succeeded'
       || !id('pm').test(method?.id) || typeof method.card?.last4 !== 'string' || !/^\d{4}$/.test(method.card.last4)) throw new StripeError(409, `GET /checkout/sessions/${session}`, 'checkout not complete');
     await this.stripe.call('POST', `/customers/${record.customer}`, { 'invoice_settings[default_payment_method]': method.id }, `atmin-default-${method.id}`);
     const card = `${brands[method.card.brand] ?? 'Card'} ending ${method.card.last4}`;
-    this.repositories.setCard(installation, method.id, card, by);
-    log(`card ${method.id} saved for installation ${installation} by GitHub user ${by}`);
+    // Checkout puts the address it collected on a customer that had none.
+    const email = typeof found.customer.email === 'string' && found.customer.email.length <= 512 ? found.customer.email : null;
+    this.repositories.setCard(installation, method.id, card, email, by);
+    log(`card ${method.id} saved for installation ${installation} by GitHub user ${by}; ${email ? 'Stripe has an email for receipts' : 'Stripe has no email for this customer, so it sends no receipts'}`);
+    await this.payUnpaid(installation, method.id);
     return card;
+  }
+  // Charges each invoice the installation still owes to `paymentMethod`. The card is saved
+  // either way: a declined or failed charge leaves the invoice owed, the Usage page still shows
+  // it, and the hourly check picks up whatever Stripe does next.
+  async payUnpaid(installation: number, paymentMethod: string): Promise<void> {
+    for (const row of this.repositories.invoices(installation).filter(row => row.invoice && unpaidStates.includes(row.state))) {
+      try {
+        const paid = await this.stripe.call('POST', `/invoices/${row.invoice}/pay`, { payment_method: paymentMethod }, `atmin-pay-${row.invoice}-${paymentMethod}`);
+        this.settle(installation, row.month, row.state, paid, Date.now());
+      } catch (error) {
+        log(`invoice ${row.invoice} for installation ${installation} for ${row.month} is still unpaid after charging the new card: ${error instanceof Error ? error.message.slice(0, 200) : 'non-error thrown'}`);
+      }
+    }
+  }
+  // Asks Stripe how each invoice it has not settled stands, and records any change: paid, a
+  // charge that failed, or an invoice marked uncollectible or void in Stripe. Called hourly.
+  async refresh(now = Date.now()): Promise<void> {
+    for (const row of this.repositories.outstanding()) {
+      try { this.settle(row.installation, row.month, row.state, await this.stripe.call('GET', `/invoices/${row.invoice}`), now); }
+      catch (error) { log(`checking invoice ${row.invoice} for installation ${row.installation} failed: ${error instanceof Error ? error.message.slice(0, 200) : 'non-error thrown'}`); }
+    }
+  }
+  private settle(installation: number, name: string, before: InvoiceState, invoice: { id?: unknown; status?: unknown; attempt_count?: unknown; hosted_invoice_url?: unknown }, now: number): void {
+    const state = invoiceState(invoice);
+    if (!state) { log(`invoice ${String(invoice.id)} for installation ${installation} for ${name} has status ${String(invoice.status)}, which billing does not handle; left as ${before}`); return; }
+    this.repositories.settleInvoice(installation, name, state, hostedUrl(invoice.hosted_invoice_url), now);
+    if (state !== before) log(`invoice ${String(invoice.id)} for installation ${installation} for ${name} went from ${before} to ${state}${state === 'failed' ? ` after ${Number(invoice.attempt_count)} charge attempt(s)` : ''}`);
   }
   // Bills the month before `now`, from its second day. Returns the invoices created.
   async invoice(now = Date.now()): Promise<string[]> {
@@ -90,8 +133,8 @@ export class Billing {
         await this.stripe.call('POST', '/invoiceitems', { customer, invoice: invoice.id, amount: String(cents), currency: 'usd',
           description: `${usage.reviews} reviews in ${label}: ${plan.freeReviews} free, ${billed} billed${usage.unknownCostReviews ? `, ${usage.unknownCostReviews} not billed because their cost never settled` : ''}` }, `atmin-item-${installation}-${name}`);
         // Finalizing hands collection to Stripe, which charges the default card.
-        await this.stripe.call('POST', `/invoices/${invoice.id}/finalize`, { auto_advance: 'true' }, `atmin-finalize-${installation}-${name}`);
-        this.repositories.finishInvoice(installation, name, invoice.id);
+        const finalized = await this.stripe.call('POST', `/invoices/${invoice.id}/finalize`, { auto_advance: 'true' }, `atmin-finalize-${installation}-${name}`);
+        this.repositories.finishInvoice(installation, name, invoice.id, hostedUrl(finalized.hosted_invoice_url));
         log(`invoice ${invoice.id} of ${cents} cents for ${usage.reviews} reviews in ${name} finalized for installation ${installation}`);
         created.push(invoice.id);
       } catch (error) {

@@ -120,14 +120,18 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     throw new Error('App exceeds installation listing limit');
   };
   const customer = (installation: number) => {
-    const { plan, limit, needsCard } = repositories!.limit(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
+    const { plan, limit, needsCard, unpaid } = repositories!.limit(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
+    const record = repositories!.billing(installation);
+    // The last year of invoices; one still being created is an operator's to resolve, not shown.
+    const invoices = repositories!.invoices(installation).filter(row => row.state !== 'creating').slice(0, 12)
+      .map(({ month, amountCents, reviews, state, url }) => ({ month, amountCents, reviews, state, url }));
     return { plan: { freeReviews: plan.freeReviews, monthlyReviews: limit }, usage,
-      billing: billing ? { card: repositories!.billing(installation)?.card ?? null, needsCard } : null };
+      billing: billing ? { card: record?.card ?? null, email: record?.email ?? null, needsCard, unpaid, invoices } : null };
   };
   const adminView = (installation: number) => {
     const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation);
     return { plan: { ...plan, custom: updatedAt !== null, updatedAt: updatedAt === null ? null : new Date(updatedAt).toISOString(), updatedBy }, usage,
-      limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null,
+      limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null, unpaid: repositories!.limit(installation).unpaid,
       repositories: repositories!.of(installation).map(entry => ({ id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled(), reviews: perRepository.get(entry.config.repositoryId) ?? 0 })) };
   };
   const body = async (request: IncomingMessage) => {

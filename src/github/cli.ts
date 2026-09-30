@@ -92,6 +92,7 @@ async function main(): Promise<void> {
           catch (error) { process.stderr.write(`atmin review: deleting old run records in repository ${entry.config.repositoryId} failed: ${failureCause(error)}\n`); }
         }
         if (billing) await billing.invoice().catch(error => process.stderr.write(`atmin review: monthly invoicing failed: ${failureCause(error)}\n`));
+        if (billing) await billing.refresh().catch(error => process.stderr.write(`atmin review: checking invoices with Stripe failed: ${failureCause(error)}\n`));
       }
       const ready = [...entries.values()];
       let worked = false;

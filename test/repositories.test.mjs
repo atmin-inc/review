@@ -108,25 +108,38 @@ test('each installation is held to its monthly plan; other installations keep re
   restored.close();
 });
 
-test('the default plan stops at its free reviews until a card is on file; an operator plan needs no card', t => {
+test('the default plan stops at its free reviews until a card is on file and while it leaves an invoice unpaid; an operator plan needs no card', t => {
   // Anyone can install the App, so without a card a stranger's reviews cost at most the free
   // allowance; the refusal tells a repository admin where to add one.
   const f = setup(t, 100, 'https://review.example.test');
   let n = 0;
   const run = entry => { entry.store.enable(true); entry.store.enqueue(`d${++n}`, n); return f.directory.reserve(entry, entry.store.next('worker'), 'worker', 100); };
-  assert.deepEqual(f.directory.limit(100), { plan: { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, limit: 20, needsCard: true });
+  assert.deepEqual(f.directory.limit(100), { plan: { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, limit: 20, needsCard: true, unpaid: null });
   for (let i = 0; i < 20; i++) assert.equal(run(f.third), true);
   assert.match(run(f.third), /^This organization used its 20 free reviews for \w+ \d{4}\. A repository admin can add a card on the atmin dashboard \(https:\/\/review\.example\.test\/usage\?installation=100\) to keep reviewing; otherwise reviews resume on \d{4}-\d{2}-01\./);
   // A customer without a card is not enough; the card is.
   f.directory.setCustomer(100, 'cus_test1', 7);
   assert.equal(f.directory.limit(100).needsCard, true);
-  f.directory.setCard(100, 'pm_test1', 'Visa ending 4242', 7);
-  assert.deepEqual(f.directory.limit(100), { plan: f.directory.plan(100).plan, limit: 1000, needsCard: false });
+  f.directory.setCard(100, 'pm_test1', 'Visa ending 4242', 'billing@owner.test', 7);
+  assert.deepEqual(f.directory.limit(100), { plan: f.directory.plan(100).plan, limit: 1000, needsCard: false, unpaid: null });
   assert.equal(run(f.third), true);
   assert.deepEqual(f.directory.billed(), [100]);
+  // A card that did not pay last month's invoice is no better than no card until it is paid, and
+  // the refusal says which invoice. One still being charged, or voided in Stripe, does not count.
+  const last = month(month(Date.now()).start - 1).name;
+  f.directory.startInvoice(100, last, 250, 45, 'creating'); f.directory.finishInvoice(100, last, 'in_test100', 'https://invoice.stripe.com/i/acct_1/test_100');
+  assert.equal(f.directory.limit(100).limit, 1000);
+  f.directory.settleInvoice(100, last, 'failed', 'https://invoice.stripe.com/i/acct_1/test_100', Date.now());
+  assert.deepEqual(f.directory.limit(100), { plan: f.directory.plan(100).plan, limit: 20, needsCard: true, unpaid: last });
+  assert.match(run(f.third), /^This organization used its 20 free reviews for \w+ \d{4}, and its card did not pay the invoice for \w+ \d{4}\. A repository admin can pay that invoice or add a new card on the atmin dashboard \(https:\/\/review\.example\.test\/usage\?installation=100\)/);
+  for (const state of ['paid', 'void']) { f.directory.settleInvoice(100, last, state, null, Date.now()); assert.equal(f.directory.limit(100).limit, 1000); }
+  f.directory.settleInvoice(100, last, 'uncollectible', null, Date.now());
+  assert.equal(f.directory.limit(100).unpaid, last);
+  f.directory.setPlan(100, { freeReviews: 20, monthlyReviews: 500, multiplier: 1.1, minimumUsd: 0 }, 8);
+  assert.deepEqual([f.directory.limit(100).limit, f.directory.limit(100).needsCard], [500, false]);
   // An operator's plan is applied as set, with or without a card.
   f.directory.setPlan(99, { freeReviews: 1, monthlyReviews: 50, multiplier: 1.1, minimumUsd: 0 }, 8);
-  assert.deepEqual(f.directory.limit(99), { plan: { freeReviews: 1, monthlyReviews: 50, multiplier: 1.1, minimumUsd: 0 }, limit: 50, needsCard: false });
+  assert.deepEqual(f.directory.limit(99), { plan: { freeReviews: 1, monthlyReviews: 50, multiplier: 1.1, minimumUsd: 0 }, limit: 50, needsCard: false, unpaid: null });
 });
 
 test('without Stripe, the default plan\'s refusal names the free limit and asks for no card', t => {
@@ -152,4 +165,26 @@ test('plans reject values outside operator bounds, and each installation connect
   assert.equal(f.directory.of(99).length, 10);
   assert.throws(() => f.directory.connect(2000, 'owner/eleventh', 99), /limit/);
   assert.equal(f.directory.connect(2001, 'other/second', 100).config.installationId, 100);
+});
+
+test('billing tables made by the first billing release gain the new columns and keep their rows', t => {
+  // The server already has these tables, created before email, invoice links and payment checks.
+  const root = mkdtempSync(join(tmpdir(), 'review-repositories-'));
+  const config = { repository: 'owner/first', repositoryId: 42, installationId: 99, profile: resolve('profiles/smoke-openrouter-free.json'), stateDirectory: root, host: '127.0.0.1', port: 8787, maxReviewsPerDay: 2 };
+  const store = new Store(root); assert.ok(store.acquire('worker'));
+  store.db.exec(`CREATE TABLE billing (installation INTEGER PRIMARY KEY, customer TEXT NOT NULL, paymentMethod TEXT, card TEXT, updated INTEGER NOT NULL, updatedBy INTEGER NOT NULL);
+    CREATE TABLE invoices (installation INTEGER NOT NULL, month TEXT NOT NULL, invoice TEXT, amountCents INTEGER NOT NULL, reviews INTEGER NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(installation, month));
+    INSERT INTO billing VALUES(99, 'cus_old', 'pm_old', 'Visa ending 4242', 1, 7);
+    INSERT INTO invoices VALUES(99, '2026-09', 'in_old', 120, 30, 'finalized', 1);`);
+  const models = [{ id: 'free', label: 'Free', profile: readProfile(config.profile) }];
+  const directory = new Repositories(config, store, models, 'worker');
+  t.after(() => { directory.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
+  assert.deepEqual(directory.billing(99), { customer: 'cus_old', paymentMethod: 'pm_old', card: 'Visa ending 4242', email: null, updated: 1, updatedBy: 7 });
+  assert.deepEqual(directory.invoices(99), [{ month: '2026-09', invoice: 'in_old', amountCents: 120, reviews: 30, state: 'finalized', url: null }]);
+  assert.deepEqual(directory.outstanding(), [{ installation: 99, month: '2026-09', invoice: 'in_old', state: 'finalized' }]);
+  directory.startInvoice(99, '2026-10', 0, 2, 'nothing-due');
+  assert.equal(directory.invoices(99).length, 2);
+  // Opening it again adds nothing twice.
+  directory.close();
+  assert.equal(new Repositories(config, store, models, 'worker').billing(99).email, null);
 });
