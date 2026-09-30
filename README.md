@@ -130,7 +130,12 @@ a hardened isolation boundary for many tenants. Each connected repository has it
 state directory, database and shared copy of its history. A repository over 2 GB on GitHub
 does not connect; no review starts while the state disk has less than `minFreeDiskMb`
 (default 2048) free; a shared copy over 3 GB is wiped before the next capture; and run
-records older than 90 days are deleted, except each PR's latest completed review.
+records older than 90 days are deleted, except each PR's latest completed review. Each
+organization's run records and shared copies together are held to `maxInstallationDiskMb`
+(default 5120), checked before each review, so one review can go past it. Over the limit,
+the organization's shared copies are wiped first, since the next review fetches its own
+again; if its run records alone are still over, the review does not start, the PR comment
+says why, and nothing counts against the plan. `/admin` shows each organization's use.
 
 Register an App with repository Contents read, Issues read, Pull requests write and
 Checks write. Issues read is what makes GitHub offer the Issue comment event, which carries
@@ -156,7 +161,7 @@ and installation IDs in a local configuration:
 }
 ```
 
-`trustedChecks` and `minFreeDiskMb` are optional. Use the actual check name and producer App ID you
+`trustedChecks`, `minFreeDiskMb` and `maxInstallationDiskMb` are optional. Use the actual check name and producer App ID you
 trust; check names must match the target policy's required checks. App 15368 is
 an illustrative configuration; verify the producer in your repository before
 using it. The worker queries GitHub on the exact reviewed head. CI that runs on

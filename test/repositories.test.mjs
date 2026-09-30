@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHmac } from 'node:crypto';
@@ -150,6 +150,31 @@ test('without Stripe, the default plan\'s refusal names the free limit and asks 
   const refused = run(f.third);
   assert.match(refused, /^This organization reached its limit of 20 reviews for /);
   assert.doesNotMatch(refused, /card/);
+});
+
+// Strangers' repositories share one disk (2026-09-30): one organization's records must not
+// fill it for everyone. Shared copies are refetched by the next review, so they go first.
+test('an organization over its storage limit loses its shared copies first, and is refused only while its run records alone are over it', t => {
+  const f = setup(t, 100);
+  f.config.maxInstallationDiskMb = 1;
+  const run = (entry, delivery) => { entry.store.enable(true); entry.store.enqueue(delivery, 1); return f.directory.reserve(entry, entry.store.next('worker'), 'worker', 100); };
+  const fill = (path, bytes) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, Buffer.alloc(bytes)); };
+  const copy = entry => join(entry.config.stateDirectory, 'source-cache.git');
+  fill(join(copy(f.second), 'objects', 'pack', 'big.pack'), 2 * 1024 ** 2);
+  fill(join(f.first.config.stateDirectory, 'runs', 'a', 'calls.json'), 512 * 1024);
+  fill(join(copy(f.third), 'objects', 'pack', 'other.pack'), 512 * 1024);
+  assert.deepEqual(f.directory.stored(99), { runs: 512 * 1024, copies: 2 * 1024 ** 2 });
+  assert.equal(run(f.second, 'over-with-copies'), true);
+  assert.equal(existsSync(copy(f.second)), false);
+  assert.ok(existsSync(join(f.first.config.stateDirectory, 'runs', 'a', 'calls.json')));
+  fill(join(f.second.config.stateDirectory, 'runs', 'b', 'calls.json'), 1024 ** 2);
+  assert.match(run(f.second, 'over-with-runs'), /over its 1 MB storage limit, so this review did not start/);
+  assert.equal(f.second.store.db.prepare('SELECT started FROM jobs ORDER BY created DESC, rowid DESC LIMIT 1').get().started, null);
+  // Another organization under its limit keeps reviewing, and keeps its shared copy.
+  assert.equal(run(f.third, 'other-organization'), true);
+  assert.ok(existsSync(join(copy(f.third), 'objects', 'pack', 'other.pack')));
+  delete f.config.maxInstallationDiskMb;
+  assert.equal(f.directory.storageLimitMb(), 5120);
 });
 
 test('plans reject values outside operator bounds, and each installation connects at most ten repositories', t => {

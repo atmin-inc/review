@@ -154,6 +154,9 @@ function Customers({ data, onEdit }) {
                   {plan.custom && <div className="text-[13px] text-muted-foreground">Custom{plan.updatedBy ? ` · set by ${plan.updatedBy}` : ''}</div>}
                   <div className="text-[13px] text-muted-foreground">{installation.card ?? (plan.custom ? 'No card' : 'No card, stops at free reviews')}</div>
                   {installation.unpaid && <div className="text-[13px] text-destructive">Invoice for {monthName(installation.unpaid)} unpaid{plan.custom ? '' : ', stops at free reviews'}</div>}
+                  <div className={`text-[13px] ${installation.storage.mb > installation.storage.limitMb ? 'text-destructive' : 'text-muted-foreground'}`}>
+                    <Figure>{count(installation.storage.mb)}</Figure> of <Figure>{count(installation.storage.limitMb)}</Figure> MB stored
+                  </div>
                 </TableCell>
                 <TableCell className="text-right max-md:hidden"><Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button></TableCell>
               </TableRow>
