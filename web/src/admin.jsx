@@ -22,6 +22,22 @@ function Reviews({ usage, limit }) {
   return <><Figure>{count(usage.reviews)}</Figure> <span className="text-muted-foreground">/ {limit ? <Figure>{count(limit)}</Figure> : 'off'}</span></>;
 }
 
+// What became of the findings on this repository's merged PRs, read when each PR closed. A
+// changed line is a sign a finding was acted on, not proof, so it is shown as an upper bound.
+function FindingOutcomes({ outcomes: { merged, unmerged } }) {
+  const read = merged.changed + merged.unchanged;
+  return <span className="col-span-full text-muted-foreground">
+    {merged.findings
+      ? <>Merged PRs: <Figure>{count(merged.findings)}</Figure> {merged.findings === 1 ? 'finding' : 'findings'} on <Figure>{count(merged.pulls)}</Figure> {merged.pulls === 1 ? 'PR' : 'PRs'}.{' '}
+        <span title="The flagged line or a line next to it was edited before merge. An unrelated edit counts too, so this is at most the share acted on.">
+          Lines changed after review: <Figure>{count(merged.changed)}</Figure>{read ? <> (<Figure>{Math.round(merged.changed / read * 100)}%</Figure>)</> : null}
+        </span>, unchanged <Figure>{count(merged.unchanged)}</Figure>{merged.unknown ? <>, unknown <Figure>{count(merged.unknown)}</Figure></> : null}.
+        {' '}Thumbs up <Figure>{count(merged.up)}</Figure>, down <Figure>{count(merged.down)}</Figure>, replies <Figure>{count(merged.replies)}</Figure>.</>
+      : 'No findings on merged PRs yet.'}
+    {unmerged.findings ? <> <Figure>{count(unmerged.findings)}</Figure> more on PRs closed without merging.</> : null}
+  </span>;
+}
+
 function PlanSummary({ plan }) {
   return <div className="text-[13px]">
     <div><Figure>{count(plan.freeReviews)}</Figure> free · {plan.monthlyReviews ? <><Figure>{count(plan.monthlyReviews)}</Figure> limit</> : 'reviews off'}</div>
@@ -149,6 +165,7 @@ function Customers({ data, onEdit }) {
                         <span className="min-w-0 break-all">{repository.name}</span>
                         <span className="status">{repository.enabled ? 'On' : 'Paused'}</span>
                         <span className="text-right"><Figure>{count(repository.reviews)}</Figure> <span className="text-muted-foreground">{repository.reviews === 1 ? 'review' : 'reviews'}</span></span>
+                        <FindingOutcomes outcomes={repository.outcomes}/>
                       </li>)}
                     </ul>
                     : <p className="text-muted-foreground">No connected repositories.</p>}

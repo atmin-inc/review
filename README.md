@@ -183,6 +183,18 @@ CI refreshes reuse the batch; an explicit model rerun creates a new review run.
 Unknown publication outcomes require reconciliation and never blindly repeat a
 POST. Historical inline findings retain their original commits and run identity.
 
+When a PR closes, the worker records what became of each finding the PR's completed
+reviews published, first publication counted once. `changed` means the flagged line or a
+line next to it was edited or removed by the PR's last head; `unchanged` means those three
+lines are still in the file, ignoring indentation, wherever they moved to. An unrelated
+edit to the same lines also counts as changed, so the changed share is at most the share of
+findings acted on. It also records whether the PR merged, and the thumbs up, thumbs down
+and human replies on the finding's inline comments (each carries a hidden
+`<!-- atmin-finding:... -->` marker; comments posted before 2026-09-30 have none, so their
+reactions are not read). Resolved conversations are not read, since GitHub reports them
+only through GraphQL. A read that fails is recorded as `unknown` with its cause, and one
+log line per closed PR gives the counts. `/admin` shows the totals per repository.
+
 ```sh
 npx atmin-review-github check ./pilot.json
 npx atmin-review-github serve ./pilot.json
