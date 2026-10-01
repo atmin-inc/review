@@ -16,7 +16,7 @@ import { costReport } from './cost-report.js';
 
 const help = `atmin review — source investigation and evidence tools
 
-  atmin-review review <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
+  atmin-review [review] <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
   atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>] [--cross-family none|jev] [--question-refutations] [--question-conclusion] [--show-minor]
   atmin-review claim-ablate <directory> [--rung symbolic|cross_family_llm]
   atmin-review prepare <https://github.com/owner/repo/pull/number> [--out <new-directory>]
@@ -66,6 +66,9 @@ async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, strict: true,
     options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' }, 'cross-family': { type: 'string' }, 'question-refutations': { type: 'boolean' }, 'question-conclusion': { type: 'boolean' }, 'show-minor': { type: 'boolean' } } });
   if (values.help || !positionals.length) { process.stdout.write(help); return; }
+  // `atmin review <PR URL>` reaches this binary as `atmin-review <PR URL>`: a bare pull request
+  // URL is the review command.
+  if (/^https:\/\/github\.com\//.test(positionals[0]!)) positionals.unshift('review');
   const [operation, input] = positionals;
   if (!input || positionals.length !== 2) throw new Error('Expected one command and one input; use --help');
   if (operation === 'claim-ablate') {
