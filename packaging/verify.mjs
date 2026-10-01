@@ -21,7 +21,7 @@ try {
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', temporary, join(root, 'artifacts', packed.filename)], temporary);
   const installed = join(temporary, 'node_modules/@atmin.ai/review');
   const cli = join(installed, 'dist/cli.js');
-  assert.match(run(process.execPath, [cli, '--help'], temporary), /atmin-review review/);
+  assert.match(run(process.execPath, [cli, '--help'], temporary), /atmin-review \[review\]/);
   assert.match(run(process.execPath, [join(installed, 'dist/github/cli.js'), '--help'], temporary), /reconcile/);
   for (const profile of ['smoke-openai', 'smoke-openrouter-free', 'baseline-deepseek']) JSON.parse(readFileSync(join(installed, 'profiles', `${profile}.json`)));
   const fixture = repository({ after: fn => cleanup.push(fn) });
