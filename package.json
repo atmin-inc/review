@@ -9,7 +9,8 @@
   },
   "bin": {
     "atmin-review": "dist/cli.js",
-    "atmin-review-github": "dist/github/cli.js"
+    "atmin-review-github": "dist/github/cli.js",
+    "atmin-code-review-runner": "dist/runner-cli.js"
   },
   "scripts": {
     "build": "tsc",
