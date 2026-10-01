@@ -9,7 +9,7 @@ import { AppGitHub } from './api.js';
 import { webhookServer, dispatchRepositories } from './webhook.js';
 import { Repositories, type Repository } from './repositories.js';
 import { Worker, failureCause } from './worker.js';
-import { engineRunner, expireRuns, selfRun } from './runner.js';
+import { expireRuns, router } from './runner.js';
 import { Runners } from './runners.js';
 import { runnerApi } from './runner-api.js';
 import { dashboard } from './dashboard.js';
@@ -63,26 +63,28 @@ async function main(): Promise<void> {
   const billing = repositories && dashboardConfig && process.env.STRIPE_SECRET_KEY ? new Billing(new Stripe(process.env.STRIPE_SECRET_KEY), repositories, dashboardConfig.origin) : undefined;
   const initial: Repository = repositories?.entries.get(config.repositoryId) ?? { config, store, settings: new ReviewSettings(config, store) };
   const entries = repositories?.entries ?? new Map([[config.repositoryId, initial]]);
-  // Self-run needs sign-in, so it exists only with the dashboard.
-  const runners = dashboardConfig ? new Runners(store.db) : undefined;
+  // Every review runs on a runner: this service's own (`atmin-code-review-runner start --pool`,
+  // sharing ATMIN_RUNNER_POOL_TOKEN), or a member's own, which needs the dashboard's sign-in.
+  const runners = new Runners(store.db);
+  const poolToken = process.env.ATMIN_RUNNER_POOL_TOKEN;
+  if (!poolToken || Buffer.byteLength(poolToken) < 32) throw new Error('Set ATMIN_RUNNER_POOL_TOKEN to a secret of at least 32 bytes');
   const workers = new Map<number, { github: AppGitHub; worker: Worker }>();
   const runtime = (entry: Repository) => {
     let value = workers.get(entry.config.repositoryId);
     if (!value) {
       const github = new AppGitHub(entry.config, appId, key);
-      value = { github, worker: new Worker(entry.config, entry.store, github, engineRunner(entry.config, github, entry.settings), owner, entry.settings,
+      value = { github, worker: new Worker(entry.config, entry.store, github, router(entry.config, github, runners, entry.settings), owner, entry.settings,
         repositories ? (job, limit) => repositories.reserve(entry, job, owner, limit) : undefined, dashboardConfig?.origin,
-        repositories ? job => reviewPrice(repositories, entry.config.installationId, job) : undefined,
-        runners ? selfRun(entry.config, github, entry.settings, runners) : undefined) };
+        repositories ? job => reviewPrice(repositories, entry.config.installationId, job) : undefined) };
       workers.set(entry.config.repositoryId, value);
     }
     return value;
   };
-  const runnerRoutes = runners && dashboardConfig ? runnerApi(runners, dashboardConfig.clientId) : undefined;
+  const runnerRoutes = runnerApi(runners, dashboardConfig?.clientId, poolToken);
   const api = dashboardConfig ? dashboard(config, dashboardConfig, store, initial.settings, fetch, repositories, { id: appId, key }, billing) : undefined;
   const pages = dashboardConfig ? site(fileURLToPath(new URL('../../web/dist', import.meta.url))) : undefined;
   const server = webhookServer(secret, (event, delivery, payload) => dispatchRepositories(entries, entry => runtime(entry).github, event, delivery, payload),
-    api && pages ? async (request, response) => await runnerRoutes!(request, response) || await api(request, response) || pages(request, response) : undefined);
+    api && pages ? async (request, response) => await runnerRoutes(request, response) || await api(request, response) || pages(request, response) : runnerRoutes);
   let stopping = false, cursor = 0, swept = 0;
   const stop = () => { stopping = true; for (const { worker } of workers.values()) worker.stop(); server.close(); };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);

@@ -4,9 +4,12 @@ import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePacket } from '../contracts.js';
 import { readProfile } from '../run.js';
+import { parseProfile } from '../investigation.js';
+import { tmpdir } from 'node:os';
 import { previousReview } from '../claim-result.js';
-import type { SelfRun } from './worker.js';
-import type { Runners } from './runners.js';
+import type { Dispatcher } from './worker.js';
+import { POOL, type Offer, type Runners } from './runners.js';
+import type { LocalCheck } from '../verification.js';
 import type { PilotConfig } from './config.js';
 import type { GitHub } from './api.js';
 import type { ReviewSettings } from './settings.js';
@@ -52,9 +55,6 @@ export function expireRuns(config: PilotConfig, store: Store, now = Date.now()):
   return expired.length;
 }
 
-// `previous` is the artifact of an earlier completed review of the same PR, when the
-// worker has one to build on; the claim run decides whether it can be used.
-export type Runner = (job: Job, signal: AbortSignal, previous?: string | null) => Promise<string>;
 export function childEnvironment(home: string, credentials: Record<string, string>): NodeJS.ProcessEnv {
   return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: home, GH_CONFIG_DIR: join(home, 'gh'), LANG: 'C.UTF-8', ...credentials };
 }
@@ -81,58 +81,60 @@ export function child(args: string[], env: NodeJS.ProcessEnv, signal: AbortSigna
     proc.once('exit', code => { cleanup(); if (code === 0 && !stopped) resolve(); else reject(new Error('Review child interrupted or failed')); });
   });
 }
-export function engineRunner(config: PilotConfig, github: GitHub, settings?: ReviewSettings): Runner {
-  const runs = join(config.stateDirectory, 'runs');
-  mkdirSync(runs, { recursive: true, mode: 0o700 });
-  return async (job, signal, previous) => {
-    const directory = join(runs, job.id);
-    const profile = settings?.profile() ?? readProfile(config.profile);
-    const home = mkdtempSync(join(config.stateDirectory, 'job-home-'));
-    try {
-      const token = await github.readToken();
-      trimSourceCache(join(config.stateDirectory, 'source-cache.git'));
-      await child(['capture', `https://github.com/${config.repository}/pull/${job.pr}`, directory, join(config.stateDirectory, 'source-cache.git')],
-        childEnvironment(home, { GH_TOKEN: token }), signal, 130_000);
-      const earlier = previous ? previousReview(previous) : null;
-      if (earlier) writeFileSync(join(directory, 'previous.json'), JSON.stringify(earlier), { mode: 0o600, flag: 'wx' });
-      const profilePath = join(directory, 'profile.json');
-      writeFileSync(profilePath, JSON.stringify(profile), { mode: 0o600, flag: 'wx' });
-      const keyName = profile.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
-      const key = process.env[keyName];
-      if (!key) throw new Error('Configured model credential unavailable');
-      // Rung 3 (Jev) is part of the configuration that was measured; without its key the
-      // claim run still completes and records that the rung was off.
-      const jev = process.env.TYPESAFE_API_KEY ? { TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY } : {};
-      await child(['investigate', directory, profilePath], childEnvironment(home, { [keyName]: key, ...jev }), signal, profile.deadlineMs + 30_000);
-      const packet = parsePacket(JSON.parse(readFileSync(join(directory, 'packet.json'), 'utf8')));
-      const checks = config.localChecks?.filter(check => check.repositoryId === config.repositoryId && packet.policy.requiredChecks.includes(check.name)) ?? [];
-      if (checks.length) {
-        const checksPath = join(directory, 'local-checks.json');
-        writeFileSync(checksPath, JSON.stringify(checks), { mode: 0o600, flag: 'wx' });
-        await child(['verify', directory, checksPath], childEnvironment(home, {}), signal, checks.length * 120_000 + 30_000);
-      }
-      return directory;
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-      // Only the run itself reads its snapshot, which borrows the repository's shared copy.
-      // Publication, CI refreshes, push reviews and the dashboard read the JSON records beside it.
-      rmSync(join(directory, 'source.git'), { recursive: true, force: true });
+
+// One review on one of this service's own runners, with this service's model key: capture the
+// PR with the offer's read-only token, investigate with the offer's profile, and run the local
+// checks the PR's policy requires. Source and model credentials never share a process.
+export async function hostedReview(offer: Offer, directory: string, cache: string, signal: AbortSignal, credentials: Record<string, string | undefined> = process.env): Promise<void> {
+  const profile = parseProfile(offer.profile);
+  const home = mkdtempSync(join(tmpdir(), 'atmin-runner-home-'));
+  try {
+    trimSourceCache(cache);
+    await child(['capture', `https://github.com/${offer.repository}/pull/${offer.pr}`, directory, cache], childEnvironment(home, { GH_TOKEN: offer.token }), signal, 130_000);
+    if (offer.previous) writeFileSync(join(directory, 'previous.json'), JSON.stringify(offer.previous), { mode: 0o600, flag: 'wx' });
+    const profilePath = join(directory, 'profile.json');
+    writeFileSync(profilePath, JSON.stringify(profile), { mode: 0o600, flag: 'wx' });
+    const keyName = profile.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
+    const key = credentials[keyName];
+    if (!key) throw new Error('Configured model credential unavailable');
+    // Rung 3 (Jev) is part of the configuration that was measured; without its key the
+    // claim run still completes and records that the rung was off.
+    const jev = credentials.TYPESAFE_API_KEY ? { TYPESAFE_API_KEY: credentials.TYPESAFE_API_KEY } : {};
+    await child(['investigate', directory, profilePath], childEnvironment(home, { [keyName]: key, ...jev }), signal, profile.deadlineMs + 30_000);
+    const packet = parsePacket(JSON.parse(readFileSync(join(directory, 'packet.json'), 'utf8')));
+    const checks = (Array.isArray(offer.checks) ? offer.checks as LocalCheck[] : []).filter(check => packet.policy.requiredChecks.includes(check.name));
+    if (checks.length) {
+      const checksPath = join(directory, 'local-checks.json');
+      writeFileSync(checksPath, JSON.stringify(checks), { mode: 0o600, flag: 'wx' });
+      await child(['verify', directory, checksPath], childEnvironment(home, {}), signal, checks.length * 120_000 + 30_000);
     }
-  };
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    // Only the run itself reads its snapshot, which borrows the repository's shared copy.
+    rmSync(join(directory, 'source.git'), { recursive: true, force: true });
+  }
 }
 
-// How long a runner may take over one review before it is taken back. Hosted reviews stop at
-// their profile's deadline; a subscription CLI is slower per call.
-export const RUNNER_DEADLINE_MS = 60 * 60_000;
-// Offers a job to the PR author's own runner: a read-only token for this one repository, which
-// expires within the hour, and the earlier review a push review builds on.
-export function selfRun(config: PilotConfig, github: GitHub, settings: ReviewSettings, runners: Runners): SelfRun {
+// How long one of this service's runners may take over a review, past the profile's own
+// deadline, and how long a member's own runner may take (a subscription CLI is slower per call).
+export const POOL_MARGIN_MS = 10 * 60_000;
+export const OWN_RUNNER_DEADLINE_MS = 60 * 60_000;
+// The router: offers each review to the PR author's own runner when the repository allows it
+// and one is online, and otherwise to this service's runners, with the repository's model
+// profile, its local checks, a read-only token for this one repository, and the earlier review
+// a push review builds on.
+export function router(config: PilotConfig, github: GitHub, runners: Runners, settings?: ReviewSettings): Dispatcher {
   return {
-    runner: (_job, author) => settings.current().selfRun ? runners.online(author) : null,
-    async run(job, runner, directory, signal, previous) {
-      runners.offer(job.id, runner.user, config.repositoryId, directory, { job: job.id, repository: config.repository, pr: job.pr,
-        token: await github.readToken(), previous: previous ? previousReview(previous) : null });
-      return runners.wait(job.id, signal, Date.now() + RUNNER_DEADLINE_MS);
+    ownRunner: author => settings?.current().selfRun ? runners.online(author) : null,
+    async offer(job, to, directory, previous) {
+      const profile = settings?.profile() ?? readProfile(config.profile);
+      const base = { job: job.id, repository: config.repository, pr: job.pr, token: await github.readToken(), previous: previous ? previousReview(previous) : null };
+      if (to === 'pool') runners.offer(job.id, POOL, config.repositoryId, directory,
+        { ...base, profile, checks: config.localChecks?.filter(check => check.repositoryId === config.repositoryId) ?? [] }, profile.deadlineMs + POOL_MARGIN_MS);
+      else runners.offer(job.id, to.user, config.repositoryId, directory, base, OWN_RUNNER_DEADLINE_MS);
     },
+    poll: job => runners.poll(job.id),
+    close: job => runners.close(job.id),
+    open: () => runners.open(config.repositoryId),
   };
 }

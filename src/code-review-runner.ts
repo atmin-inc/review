@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -7,7 +7,8 @@ import { parseArgs } from 'node:util';
 import { claudeModels, parseProfile, type Profile } from './investigation.js';
 import { claudeModel } from './models/claude-cli.js';
 import { runClaimReviewAsResult } from './claim-result.js';
-import { child, childEnvironment } from './github/runner.js';
+import { child, childEnvironment, hostedReview } from './github/runner.js';
+import type { Offer } from './github/runners.js';
 
 // atmin-code-review-runner: reviews the PRs you author with the Claude Code CLI you are signed
 // in to, on your own machine or server, and hands the result to atmin, which posts it. Your
@@ -17,15 +18,22 @@ const help = `atmin-code-review-runner — review your own PRs with your own Cla
   atmin-code-review-runner login [--server https://review.atmin.ai]
   atmin-code-review-runner setup [--model claude-sonnet-5]
   atmin-code-review-runner [start]
+  atmin-code-review-runner start --pool <name>
 
 login   signs this runner in as you, with a GitHub device code.
 setup   checks the claude CLI is installed and signed in, and picks the model.
 start   waits for reviews of PRs you author and runs them. Keep it running (tmux, launchd,
         systemd). Needs Node 24, git, gh, and claude signed in. A repository admin must turn
         on "Members' own runners" in atmin; otherwise atmin reviews those PRs itself.
+        A first Ctrl-C finishes the review in progress, a second stops at once.
+--pool  runs as one of atmin's own runners, on the service's host: any review, with the
+        service's model key. Reads ATMIN_RUNNER_POOL_TOKEN, OPENROUTER_API_KEY, TYPESAFE_API_KEY,
+        ATMIN_REVIEW_CONFIG (for the service's port) and ATMIN_RUNNER_CACHE.
 `;
 export interface RunnerConfig { server: string; token: string; login: string; cli?: 'claude'; model?: string }
-export interface Offer { job: string; repository: string; pr: number; token: string; previous: unknown }
+// How a runner reaches atmin: a member's runner by its own token; one of atmin's own runners by
+// the shared pool token and its name.
+type Connection = Pick<RunnerConfig, 'server' | 'token'> & { pool?: string };
 const configPath = () => join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'atmin', 'code-review-runner.json');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version as string;
 const say = (line: string) => process.stdout.write(`${line}\n`);
@@ -43,9 +51,9 @@ function saveConfig(config: RunnerConfig): void {
 export const profileFor = (model: string): Profile => parseProfile({ provider: 'claude-local', model, maxUsd: 0, maxTurns: 60, maxToolCalls: 200,
   maxInputTokens: 150000, maxOutputTokens: 8192, deadlineMs: 1_800_000 });
 
-async function call(config: Pick<RunnerConfig, 'server' | 'token'>, path: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<Record<string, unknown>> {
+async function call(config: Connection, path: string, body?: unknown, fetcher: typeof fetch = fetch): Promise<Record<string, unknown>> {
   const response = await fetcher(`${config.server}/api/runner/v1${path}`, { method: body === undefined ? 'GET' : 'POST',
-    headers: { 'Content-Type': 'application/json', ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}), ...(config.pool ? { 'x-atmin-runner-pool': config.pool } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(60_000) });
   const data = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) throw new Error(`atmin ${response.status}: ${typeof data.error === 'string' ? data.error : 'request failed'}`);
@@ -123,8 +131,27 @@ export function reviewWith(profile: Profile, cache: string): Review {
   };
 }
 
-// One job: heartbeat while it runs, then upload the two records or say why not.
-export async function runOffer(config: Pick<RunnerConfig, 'server' | 'token'>, offer: Offer, review: Review, signal: AbortSignal,
+// One of atmin's own runners: the same review the service ran before it had runners.
+export function poolReview(cache: string): Review {
+  return async (offer, directory, signal) => {
+    mkdirSync(cache, { recursive: true, mode: 0o700 });
+    try { await hostedReview(offer, directory, join(cache, `${offer.repository.replace('/', '__')}.git`), signal); }
+    catch { return { ok: false, reason: signal.aborted ? 'cancelled' : 'other' }; }
+    return { ok: true };
+  };
+}
+
+// Every record of a run except the source copy, which atmin's own runners send.
+const recordName = /^[a-z0-9][a-z0-9.-]{0,60}\.(json|ndjson|diff)$/;
+function records(directory: string): Record<string, string> {
+  if (!existsSync(directory)) return {};
+  return Object.fromEntries(readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && recordName.test(entry.name) && entry.name !== 'packet.json' && entry.name !== 'result.json')
+    .map(entry => [entry.name, readFileSync(join(directory, entry.name), 'utf8')]));
+}
+
+// One job: heartbeat while it runs, then upload the records or say why not.
+export async function runOffer(config: Connection, offer: Offer, review: Review, signal: AbortSignal,
   fetcher: typeof fetch = fetch, heartbeatMs = 30_000): Promise<'done' | Failure> {
   const root = mkdtempSync(join(tmpdir(), 'atmin-runner-'));
   const directory = join(root, 'run');
@@ -137,10 +164,11 @@ export async function runOffer(config: Pick<RunnerConfig, 'server' | 'token'>, o
   }, heartbeatMs);
   try {
     const outcome = await review(offer, directory, stopped.signal).catch(() => ({ ok: false as const, reason: 'other' as const }));
-    if (stopped.signal.aborted) return 'cancelled';
-    if (!outcome.ok) { await call(config, `/jobs/${offer.job}/fail`, { reason: outcome.reason }, fetcher).catch(() => {}); return outcome.reason; }
+    if (stopped.signal.aborted) { if (signal.aborted) await call(config, `/jobs/${offer.job}/fail`, { reason: 'cancelled' }, fetcher).catch(() => {}); return 'cancelled'; }
+    const extra = config.pool ? { records: records(directory) } : {};
+    if (!outcome.ok) { await call(config, `/jobs/${offer.job}/fail`, { reason: outcome.reason, ...extra }, fetcher).catch(() => {}); return outcome.reason; }
     const read = (name: string) => JSON.parse(readFileSync(join(directory, name), 'utf8'));
-    await call(config, `/jobs/${offer.job}/result`, { packet: read('packet.json'), result: read('result.json') }, fetcher);
+    await call(config, `/jobs/${offer.job}/result`, { packet: read('packet.json'), result: read('result.json'), ...extra }, fetcher);
     return 'done';
   } finally {
     clearInterval(beat); signal.removeEventListener('abort', stop);
@@ -148,37 +176,64 @@ export async function runOffer(config: Pick<RunnerConfig, 'server' | 'token'>, o
   }
 }
 
-async function start(): Promise<void> {
-  const config = readConfig();
-  if (config.cli !== 'claude' || !config.model) throw new Error('Run `atmin-code-review-runner setup` first.');
-  const profile = profileFor(config.model);
-  const cache = join(homedir(), '.cache', 'atmin', 'code-review-runner');
-  const review = reviewWith(profile, cache);
+// The service's own address, for a runner on its host.
+function localServer(): string {
+  const path = process.env.ATMIN_REVIEW_CONFIG;
+  if (!path) throw new Error('Set ATMIN_REVIEW_CONFIG, or pass --server.');
+  const { host, port } = JSON.parse(readFileSync(path, 'utf8')) as { host?: string; port?: number };
+  return `http://${!host || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host}:${port}`;
+}
+
+async function start(pool: string | undefined, server: string | undefined): Promise<void> {
+  let connection: Connection, review: Review, described: unknown, who: string;
+  if (pool) {
+    if (!/^[a-z0-9-]{1,40}$/.test(pool)) throw new Error('A pool runner name is lowercase letters, digits and dashes.');
+    const token = process.env.ATMIN_RUNNER_POOL_TOKEN;
+    if (!token) throw new Error('Set ATMIN_RUNNER_POOL_TOKEN.');
+    connection = { server: (server ?? localServer()).replace(/\/+$/, ''), token, pool };
+    review = poolReview(process.env.ATMIN_RUNNER_CACHE ?? join(homedir(), '.cache', 'atmin', 'code-review-runner', `pool-${pool}`));
+    described = {}; who = `any PR, as atmin runner ${pool}`;
+  } else {
+    const config = readConfig();
+    if (config.cli !== 'claude' || !config.model) throw new Error('Run `atmin-code-review-runner setup` first.');
+    connection = config;
+    review = reviewWith(profileFor(config.model), join(homedir(), '.cache', 'atmin', 'code-review-runner'));
+    described = { cli: 'claude', model: config.model, version }; who = `PRs by ${config.login} (Claude Code / ${config.model})`;
+  }
+  // The first signal lets the review in progress finish (a deploy restarts atmin's own runners);
+  // a second stops it at once.
   const abort = new AbortController();
-  process.once('SIGINT', () => abort.abort()); process.once('SIGTERM', () => abort.abort());
-  say(`Waiting for reviews of PRs by ${config.login} (Claude Code / ${config.model}) from ${config.server}. Ctrl-C stops.`);
-  while (!abort.signal.aborted) {
+  let stopping = false;
+  const signalled = () => {
+    if (stopping) { abort.abort(); return; }
+    stopping = true; say('Stopping after the review in progress. Signal again to stop now.');
+  };
+  process.on('SIGINT', signalled); process.on('SIGTERM', signalled);
+  say(`Waiting for reviews of ${who} from ${connection.server}.`);
+  while (!stopping) {
     let offer: Offer | null;
-    try { offer = (await call(config, '/poll', { cli: 'claude', model: config.model, version }) as { offer: Offer | null }).offer; }
+    try { offer = (await call(connection, '/poll', described) as { offer: Offer | null }).offer; }
     catch (error) {
-      if (/atmin 401/.test(String(error))) throw new Error('atmin no longer accepts this runner. Run `atmin-code-review-runner login` again.');
+      if (/atmin 401/.test(String(error))) throw new Error(pool ? 'atmin refused the pool token.' : 'atmin no longer accepts this runner. Run `atmin-code-review-runner login` again.');
       say(`Could not reach atmin (${error instanceof Error ? error.message : 'unknown'}); retrying in 15 s.`);
       await sleep(15_000); continue;
     }
     if (!offer) continue;
-    say(`Reviewing ${offer.repository}#${offer.pr}…`);
-    const outcome = await runOffer(config, offer, review, abort.signal);
-    say(outcome === 'done' ? `Sent the review of ${offer.repository}#${offer.pr} to atmin.` : `Review of ${offer.repository}#${offer.pr} did not finish (${outcome}); atmin reviews it instead.`);
+    say(`Reviewing ${offer.repository}#${offer.pr} (${offer.job})…`);
+    const outcome = await runOffer(connection, offer, review, abort.signal);
+    say(outcome === 'done' ? `Sent the review of ${offer.repository}#${offer.pr} to atmin.`
+      : `Review of ${offer.repository}#${offer.pr} did not finish (${outcome})${pool ? '' : '; atmin reviews it instead'}.`);
   }
+  process.off('SIGINT', signalled); process.off('SIGTERM', signalled);
 }
 
 export async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, strict: true,
-    options: { help: { type: 'boolean', short: 'h' }, server: { type: 'string' }, model: { type: 'string' } } });
+    options: { help: { type: 'boolean', short: 'h' }, server: { type: 'string' }, model: { type: 'string' }, pool: { type: 'string' } } });
   const [operation = 'start'] = positionals;
   if (values.help) { process.stdout.write(help); return; }
   if (operation === 'login') return login((values.server ?? 'https://review.atmin.ai').replace(/\/+$/, ''));
   if (operation === 'setup') return setup(values.model);
-  if (operation === 'start') return start();
+  if (operation === 'start') return start(values.pool, values.server);
   throw new Error('Unknown command; use --help');
 }

@@ -71,3 +71,31 @@ export function persist(fixture, result = initialResult(fixture.packet)) {
   return directory;
 }
 export const current = () => ({ status: 'current', reason: 'Fixture live check matched.', checkedAt: '2026-09-09T12:00:00.000Z' });
+
+// A runner for worker tests: `run(job, signal, previous, to)` reviews where a runner would and
+// returns a directory whose records are copied into the run directory the worker chose, or
+// throws. It delivers before the worker's next step, unless `background`, when the worker finds
+// the job still dispatched and collects on a later tick.
+export function inline(run, { background = false, own = () => null } = {}) {
+  const outcomes = new Map(), controllers = new Map(), closed = new Set(), offered = [];
+  return {
+    offered,
+    ownRunner: own,
+    async offer(job, to, directory, previous) {
+      offered.push({ job: job.id, to });
+      const controller = new AbortController();
+      controllers.set(job.id, controller); outcomes.delete(job.id); closed.delete(job.id);
+      const delivered = (async () => {
+        try {
+          const out = await run(job, controller.signal, previous, to);
+          if (out !== directory) cpSync(out, directory, { recursive: true });
+          if (!controller.signal.aborted) outcomes.set(job.id, 'done');
+        } catch { if (!controller.signal.aborted) outcomes.set(job.id, 'failed'); }
+      })();
+      if (!background) await delivered;
+    },
+    poll: job => closed.has(job.id) ? 'cancelled' : outcomes.get(job.id) ?? null,
+    close: job => { controllers.get(job.id)?.abort(); closed.add(job.id); },
+    open: () => [...controllers.keys()].filter(id => !closed.has(id)),
+  };
+}

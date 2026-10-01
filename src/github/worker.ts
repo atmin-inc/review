@@ -7,7 +7,7 @@ import { readVerification, type Verification } from '../verification.js';
 import { renderMarkdown, type ReviewPrice } from '../render.js';
 import type { PilotConfig } from './config.js';
 import { GitHubError, type GitHub, type LivePull } from './api.js';
-import { DEFAULT_MIN_FREE_DISK_MB, freeDiskMb, type Runner } from './runner.js';
+import { DEFAULT_MIN_FREE_DISK_MB, freeDiskMb } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
 import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
@@ -26,12 +26,19 @@ export function failureCause(error: unknown): string {
 }
 const diskLow = 'The review service is low on disk space, so this review did not start. A maintainer can rerun with `/atmin review` once an atmin operator frees space. No inference was started.';
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
-// Self-run: the PR author's own runner, when the repository allows it and one is online.
-export interface SelfRun {
-  runner(job: Job, author: number): RunnerRow | null;
-  run(job: Job, runner: RunnerRow, directory: string, signal: AbortSignal, previous: string | null): Promise<Outcome>;
+// Where reviews run. The worker offers each review to a runner and collects its records on a
+// later tick; it never waits on one. A runner is the PR author's own (`atmin-code-review-runner`,
+// their own CLI subscription) or one of this service's (`--pool`, this service's model key).
+export interface Dispatcher {
+  ownRunner(author: number): RunnerRow | null;
+  offer(job: Job, to: RunnerRow | 'pool', directory: string, previous: string | null): Promise<void>;
+  // How the offer ended, or null while a runner may still deliver.
+  poll(job: Job): Outcome | null;
+  // Done with a job: collected, superseded, paused or failed. A runner holding it stops.
+  close(job: Job): void;
+  // Jobs of this repository offered to a runner and not yet closed.
+  open(): string[];
 }
-class Refused extends Error { constructor(readonly reason: string) { super('refused'); } }
 const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n` : '';
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
@@ -39,20 +46,38 @@ export class Worker {
   private inline: InlineReviews;
   private outcomes: Outcomes;
   private abort: AbortController | undefined;
-  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string,
-    private price?: (job: Job) => ReviewPrice | null, private selfRun?: SelfRun) {
+  constructor(private config: PilotConfig, private store: Store, private github: GitHub, private dispatcher: Dispatcher, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string,
+    private price?: (job: Job) => ReviewPrice | null) {
     this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github); this.outcomes = new Outcomes(store, github, config.repositoryId);
   }
   stop(): void { this.abort?.abort(); }
   async tick(): Promise<boolean> {
+    // A review superseded or paused while a runner held it: the runner is told to stop, and the
+    // check and summary say what happened, as for a review this worker was running.
+    for (const id of this.dispatcher.open()) {
+      const held = this.store.get(id) ?? { id } as Job;
+      if (held.state === 'dispatched') continue;
+      this.dispatcher.close(held);
+      if (held.state === 'cancelled') await this.cancelled(held).catch(error => process.stderr.write(`atmin review: settling cancelled review ${id} failed: ${failureCause(error)}\n`));
+    }
+    for (const job of this.store.dispatched()) {
+      if (!this.store.current(job, this.owner)) continue;
+      const outcome = this.dispatcher.poll(job);
+      if (outcome === null) continue;
+      await this.guarded(job, async signal => { if (await this.collect(job, outcome, signal)) await this.publish(this.store.get(job.id), signal); });
+      return true;
+    }
     const job = this.store.next(this.owner);
     if (!job) return false;
-    // How long reviews wait for the one review slot: the signal that the service needs to run
-    // reviews in parallel.
+    // How long a review waited to be started: the signal that the service needs more workers.
     if (job.state === 'running') process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} started after ${Math.round((Date.now() - job.created) / 1000)} s in the queue\n`);
+    await this.guarded(job, signal => this.work(job, signal));
+    return true;
+  }
+  private async guarded(job: Job, step: (signal: AbortSignal) => Promise<void>): Promise<void> {
     this.abort = new AbortController();
     const monitor = setInterval(() => { if (!this.store.current(job, this.owner)) this.abort?.abort(); }, 250);
-    try { await this.work(job, this.abort.signal); }
+    try { await step(this.abort.signal); }
     catch (error) {
       const cause = failureCause(error);
       process.stderr.write(`atmin review: review ${job.id} of PR ${job.pr} failed: ${cause}\n`);
@@ -60,19 +85,19 @@ export class Worker {
       if (this.store.owns(this.owner)) await this.checks.stop(job, 'failure', 'Review failed').catch(() => {});
     } finally {
       clearInterval(monitor); this.abort = undefined;
-      if (this.store.owns(this.owner) && this.store.get(job.id).state === 'cancelled') {
-        await this.checks.stop(job, 'cancelled', 'Review superseded or paused').catch(() => {});
-        if (!this.store.enabled()) {
-          const marker = markerFor(this.config.repositoryId, job.pr);
-          const existing = await this.github.summary(job.pr, marker);
-          if (existing && this.store.owns(this.owner) && !this.store.enabled()) {
-            await this.github.update(existing.id, `${marker}\n# atmin review — review paused\n\nThe operator paused this review. No active review or completed result is claimed for this request. Previous findings are historical. After re-enabling the service, a maintainer can request a new run with \`/atmin review\`.`);
-          }
-        }
-      }
+      if (this.store.get(job.id).state === 'cancelled') { this.dispatcher.close(job); await this.cancelled(job); }
       if (this.store.owns(this.owner) && this.store.get(job.id).state === 'uncertain') await this.checks.stop(job, 'failure', 'Review publication uncertain').catch(() => {});
     }
-    return true;
+  }
+  private async cancelled(job: Job): Promise<void> {
+    if (!this.store.owns(this.owner)) return;
+    await this.checks.stop(job, 'cancelled', 'Review superseded or paused').catch(() => {});
+    if (this.store.enabled()) return;
+    const marker = markerFor(this.config.repositoryId, job.pr);
+    const existing = await this.github.summary(job.pr, marker);
+    if (existing && this.store.owns(this.owner) && !this.store.enabled()) {
+      await this.github.update(existing.id, `${marker}\n# atmin review — review paused\n\nThe operator paused this review. No active review or completed result is claimed for this request. Previous findings are historical. After re-enabling the service, a maintainer can request a new run with \`/atmin review\`.`);
+    }
   }
   private async work(job: Job, signal: AbortSignal): Promise<void> {
     const initial = await this.github.pull(job.pr);
@@ -118,71 +143,97 @@ export class Worker {
       this.store.update(job.id, { report: JSON.stringify({ initial, body: '# atmin review — interrupted\n\nReview did not finish.', check }) });
       await this.checks.publish(job, initial.headSha, { status: 'in_progress', output: { title: 'Review in progress', summary: `Reviewing head ${initial.headSha} against target ${initial.baseSha}.` } });
       if (!this.store.current(job, this.owner) || signal.aborted) return;
-      let artifact: string | null = null;
-      const preferences = this.settings?.current(), perAuthor = preferences?.maxReviewsPerAuthor ?? null, now = Date.now();
-      const authorUsed = perAuthor === null ? 0 : this.store.authorReviews(initial.author.id, month(now).start);
+      const preferences = this.settings?.current(), now = Date.now();
       const freeMb = freeDiskMb(this.config.stateDirectory), floorMb = this.config.minFreeDiskMb ?? DEFAULT_MIN_FREE_DISK_MB;
       const disk = freeMb < floorMb ? { reason: diskLow, detail: `${freeMb} MB free on the state disk, below ${floorMb} MB` } : null;
       // The author's own runner costs this service nothing, so no plan, credit or author limit applies.
-      const remote = disk ? null : this.selfRun?.runner(job, initial.author.id) ?? null;
-      const onRunner = remote !== null && this.store.reserveOnRunner(job, this.owner, runnerLabel(remote));
-      const limit = preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay;
-      const hostedRefusal = () => perAuthor !== null && authorUsed >= perAuthor ? { reason: authorLimitReached(initial.author.login, perAuthor, now), detail: `author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews` } : null;
-      const hosted = (): true | string => {
-        const refusal = hostedRefusal();
-        if (refusal) { process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: ${refusal.detail}\n`); return refusal.reason; }
-        return this.reserve(job, limit);
-      };
+      const own = disk ? null : this.dispatcher.ownRunner(initial.author.id);
+      const onOwn = own !== null && this.store.reserveOnRunner(job, this.owner, runnerLabel(own));
       if (disk) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: ${disk.detail}\n`);
-      const reserved = disk ? disk.reason : onRunner ? true : hosted();
+      const reserved = disk ? disk.reason : onOwn ? true : this.reserveHosted(job, initial, preferences, now);
       if (reserved !== true) {
-        report = `# atmin review — review not run\n\n${reserved}`;
+        if (!this.store.current(job, this.owner)) return;
+        this.store.update(job.id, { state: 'publishing', report: JSON.stringify({ initial, body: `# atmin review — review not run\n\n${reserved}${this.identity(initial, job)}`, check }) });
       } else {
-        artifact = join(this.config.stateDirectory, 'runs', job.id);
+        const artifact = join(this.config.stateDirectory, 'runs', job.id);
+        mkdirSync(artifact, { recursive: true, mode: 0o700 });
         // A crash publishes this honest interruption report; it never starts another model request.
-        this.store.update(job.id, { artifact, report: JSON.stringify({ initial,
-          body: `# atmin review — interrupted\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\``,
+        this.store.update(job.id, { artifact, report: JSON.stringify({ initial, check,
+          body: `# atmin review — interrupted\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.${this.identity(initial, job)}`,
         }) });
-        try {
-          const previous = this.store.previous(job);
-          let delivered = false;
-          if (onRunner) {
-            mkdirSync(artifact, { recursive: true, mode: 0o700 });
-            const outcome = await this.selfRun!.run(job, remote!, artifact, signal, previous);
-            if (!this.store.current(job, this.owner) || signal.aborted) return;
-            delivered = outcome === 'done';
-            process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} on runner ${remote!.id}: ${outcome}${delivered ? '' : '; reviewing on this service instead'}\n`);
-            if (!delivered) {
-              // Decision (Lors, 2026-10-01): a PR whose runner does not deliver is reviewed here.
-              rmSync(artifact, { recursive: true, force: true });
-              this.store.releaseRunner(job);
-              const fallback = hosted();
-              if (fallback !== true) throw new Refused(fallback);
-            }
-          }
-          if (!delivered) artifact = await this.run(job, signal, previous);
-          if (!this.store.current(job, this.owner) || signal.aborted) return;
-          const packet = parsePacket(JSON.parse(readFileSync(join(artifact, 'packet.json'), 'utf8')));
-          const result = parseResult(JSON.parse(readFileSync(join(artifact, 'result.json'), 'utf8')));
-          const live = await this.github.pull(job.pr);
-          if (packet.repository !== this.config.repository || packet.pr !== job.pr || compareCurrent(packet, live).status !== 'current' || live.draft || !same(initial, live)) {
-            this.cancel(job); return;
-          }
-          const assessment = assess(packet, result, compareCurrent(packet, live));
-          report = renderMarkdown(packet, result, assessment, detailsUrl);
-          check = assessmentCheck(assessment);
-        } catch (error) {
-          if (!this.store.current(job, this.owner) || signal.aborted) return;
-          if (error instanceof Refused) { artifact = null; report = `# atmin review — review not run\n\n${error.reason}`; }
-          else report = '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
-        }
+        await this.dispatcher.offer(job, own && onOwn ? own : 'pool', artifact, this.store.previous(job));
+        if (!this.store.current(job, this.owner) || signal.aborted) return;
+        this.store.update(job.id, { state: 'dispatched' });
+        process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} offered to ${own && onOwn ? `runner ${own.id}` : 'the hosted runners'}\n`);
+        // A runner may already have delivered (tests deliver at once); otherwise a later tick collects.
+        const outcome = this.dispatcher.poll(job);
+        if (outcome === null || !await this.collect(this.store.get(job.id), outcome, signal)) return;
       }
-      report += `\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\`\n`;
-      // Persist the report and its exact publication identity before any write.
-      if (!this.store.current(job, this.owner)) return;
-      this.store.update(job.id, { state: 'publishing', artifact, report: JSON.stringify({ initial, body: report, check }) });
       job = this.store.get(job.id);
     }
+    await this.publish(job, signal);
+  }
+  // Header line that ties a report to the exact commits it describes.
+  private identity(initial: LivePull, job: Job): string { return `\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\`\n`; }
+  // A hosted review counts toward the plan, credit and the repository's limits.
+  private reserveHosted(job: Job, initial: LivePull, preferences: ReturnType<ReviewSettings['current']> | undefined, now: number): true | string {
+    const perAuthor = preferences?.maxReviewsPerAuthor ?? null;
+    const authorUsed = perAuthor === null ? 0 : this.store.authorReviews(initial.author.id, month(now).start);
+    if (perAuthor !== null && authorUsed >= perAuthor) {
+      process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews\n`);
+      return authorLimitReached(initial.author.login, perAuthor, now);
+    }
+    return this.reserve(job, preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay);
+  }
+  // Turns a runner's delivery into the report to publish. Returns false while the runner may
+  // still deliver, or when the job was handed to this service's runners instead.
+  private async collect(job: Job, outcome: Outcome, signal: AbortSignal): Promise<boolean> {
+    const saved = JSON.parse(job.report!) as { initial: LivePull; check: CheckOutput };
+    const { initial } = saved;
+    let check = saved.check, report: string, refused = false;
+    if (outcome !== 'done' && job.runner) {
+      // Decision (Lors, 2026-10-01): a PR whose own runner does not deliver is reviewed by this
+      // service's runners, as any other review.
+      process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} on ${job.runner}: ${outcome}; offering it to the hosted runners\n`);
+      rmSync(job.artifact!, { recursive: true, force: true }); mkdirSync(job.artifact!, { recursive: true, mode: 0o700 });
+      this.store.releaseRunner(job);
+      const reserved = this.reserveHosted(job, initial, this.settings?.current(), Date.now());
+      if (reserved === true) {
+        await this.dispatcher.offer(this.store.get(job.id), 'pool', job.artifact!, this.store.previous(job));
+        return false;
+      }
+      report = `# atmin review — review not run\n\n${reserved}`;
+      refused = true;
+    } else if (outcome !== 'done') {
+      process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId}: hosted runner ${outcome}\n`);
+      report = outcome === 'unclaimed'
+        ? '# atmin review — review failed\n\nNo reviewer was free to take this review. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`.'
+        : '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
+    } else {
+      try {
+        const packet = parsePacket(JSON.parse(readFileSync(join(job.artifact!, 'packet.json'), 'utf8')));
+        const result = parseResult(JSON.parse(readFileSync(join(job.artifact!, 'result.json'), 'utf8')));
+        const live = await this.github.pull(job.pr);
+        if (packet.repository !== this.config.repository || packet.pr !== job.pr || compareCurrent(packet, live).status !== 'current' || live.draft || !same(initial, live)) {
+          this.cancel(job); return false;
+        }
+        const assessment = assess(packet, result, compareCurrent(packet, live));
+        const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
+        report = renderMarkdown(packet, result, assessment, detailsUrl);
+        check = assessmentCheck(assessment);
+      } catch {
+        report = '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
+      }
+    }
+    this.dispatcher.close(job);
+    if (!this.store.current(job, this.owner) || signal.aborted) return false;
+    // Persist the report and its exact publication identity before any write.
+    this.store.update(job.id, { state: 'publishing', artifact: refused ? null : job.artifact, report: JSON.stringify({ initial, body: report + this.identity(initial, job), check }) });
+    return true;
+  }
+  private async publish(job: Job, signal: AbortSignal): Promise<void> {
+    const marker = markerFor(this.config.repositoryId, job.pr);
+    const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
     const saved = JSON.parse(job.report!) as { initial: LivePull; body: string; check?: CheckOutput };
     let inline: { packet: Packet; findings: Finding[]; verification: Verification } | undefined;
     if (!same(saved.initial, await this.github.pull(job.pr))) { this.cancel(job); return; }

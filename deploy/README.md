@@ -1,6 +1,7 @@
 # Deploying atmin review
 
-One host runs the worker (webhooks, dashboard, reviews) behind Caddy. GitHub Actions deploys
+One host runs the service (webhooks, dashboard, the router) behind Caddy, and this service's
+own runners beside it, which take the reviews. GitHub Actions deploys
 every commit on `main` that passed CI; the host builds it beside the running release and
 switches back by itself if the new one does not answer `/healthz` within 30 s.
 
@@ -9,12 +10,18 @@ switches back by itself if the new one does not answer `/healthz` within 30 s.
 | `install.sh` | Run once as root on a fresh Ubuntu 24.04 host. |
 | `atmin-review.service` | `/etc/systemd/system/` (install.sh). |
 | `Caddyfile` | `/etc/caddy/Caddyfile` (install.sh); needs `ATMIN_REVIEW_PORT`. |
+| `atmin-review-runner@.service` | `/etc/systemd/system/` (release.sh, every deploy). |
 | `release.sh` | `/opt/atmin-review/release.sh`; the deploy user may run only this, as root. |
 | `../.github/workflows/deploy.yml` | Runs after "review alpha" passes on a push to `main`, or by hand with a commit. |
 
 Layout on the host: releases in `/opt/atmin-review/releases/<commit>` (five kept),
 `/opt/atmin-review/current` points at the live one, secrets and configs in `/etc/atmin-review`
 (`service.env` sets `ATMIN_REVIEW_CONFIG`), state where the pilot config says.
+
+How many reviews run at once on our model key: `ATMIN_REVIEW_RUNNERS` in `service.env`
+(default 2). Change it, then `sudo /opt/atmin-review/release.sh runners`; a runner being
+removed or restarted finishes the review it holds first. Members' own runners come on top.
+A review no runner takes within 30 minutes is reported as not run.
 
 GitHub settings (repository → Settings → Environments → `production`):
 - `DEPLOY_HOST`: the host name or address.

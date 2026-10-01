@@ -1,0 +1,37 @@
+# One of atmin review's own runners: takes any review the service offers its pool and runs it
+# with the service's model key. release.sh runs ATMIN_REVIEW_RUNNERS of them (default 2), named
+# hosted-1, hosted-2, ... It talks to the service on localhost and never touches its state.
+[Unit]
+Description=atmin review runner %i
+After=network-online.target atmin-review.service
+Wants=network-online.target
+
+[Service]
+User=atmin-review
+Group=atmin-review
+WorkingDirectory=/opt/atmin-review/current
+EnvironmentFile=/etc/atmin-review/service.env
+# Each runner keeps its own copies of the repositories it reviews.
+StateDirectory=atmin-review-runners/%i
+Environment=ATMIN_RUNNER_CACHE=/var/lib/atmin-review-runners/%i
+ExecStart=/usr/bin/node dist/runner-cli.js start --pool %i
+Restart=always
+RestartSec=5
+# A stop (a deploy) lets the review in progress finish: SIGTERM reaches only the runner, which
+# stops taking reviews; its review processes are killed only if it is still busy at the timeout.
+KillMode=mixed
+TimeoutStopSec=45min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# AF_NETLINK lets Bubblewrap set up the private network namespace for local checks.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
