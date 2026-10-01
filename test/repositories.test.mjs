@@ -28,7 +28,7 @@ test('repositories retain separate jobs/settings after restart and share a durab
     assert.ok(f.directory.reserve(entry, job, 'worker', 2));
     entry.store.update(job.id, { state: 'failed' });
   }
-  f.second.settings.save({ model: 'free', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null });
+  f.second.settings.save({ model: 'free', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false });
   f.second.store.enqueue('third', 2);
   assert.match(f.directory.reserve(f.second, f.second.store.next('worker'), 'worker', 2), /rolling 24-hour review limit/);
   assert.equal(f.first.store.db.prepare('SELECT count(*) AS n FROM jobs').get().n, 1);

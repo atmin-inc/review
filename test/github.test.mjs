@@ -847,7 +847,7 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false });
   const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
   h.store.enqueue('first-dashboard-run', 1); await worker.tick();
   h.store.enqueue('second-dashboard-run', 1); await worker.tick();
@@ -864,7 +864,7 @@ test('a PR author past the per-author monthly limit gets the reason on the PR an
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1 });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: false });
   const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
   const first = h.store.enqueue('alice-1', 1); await worker.tick();
   assert.equal(h.counts.runs, 1); assert.equal(h.store.get(first).author, 1);
@@ -882,7 +882,7 @@ test('a PR author past the per-author monthly limit gets the reason on the PR an
   h.setLive({ author: { id: 1, login: 'alice' } });
   h.store.enqueue('alice-3', 1); await worker.tick();
   assert.equal(h.counts.runs, 3);
-  for (const bad of [0, 1.5, 100_001, '2']) assert.throws(() => settings.validate({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: bad }));
+  for (const bad of [0, 1.5, 100_001, '2']) assert.throws(() => settings.validate({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: bad, selfRun: false }));
 });
 
 // Strangers' repositories share one disk. Below the configured free space no review starts,
@@ -1021,4 +1021,63 @@ test('a database from before incremental review gains the trigger column; old jo
   const store = new Store(root);
   t.after(() => store.close());
   assert.equal(store.get('old').trigger, 'event');
+});
+
+// Self-run (Lors, 2026-10-01): a PR whose author has a runner online is reviewed there and
+// published by this service, marked as such, and counted toward no plan, credit or author limit,
+// because atmin paid for no inference. A runner that does not deliver means a hosted review.
+function selfRunFake(h, outcome) {
+  const calls = [];
+  return { calls, runner: (_job, author) => author === 1 ? { id: 'r1', user: 1, login: 'alice', cli: 'claude', model: 'claude-sonnet-5' } : null,
+    run: async (job, _runner, directory) => {
+      calls.push(job.id);
+      if (outcome === 'done') {
+        const packet = { ...h.fixture.packet, headSha: h.live.headSha, baseSha: h.live.baseSha };
+        writeFileSync(join(directory, 'packet.json'), JSON.stringify(packet));
+        writeFileSync(join(directory, 'result.json'), JSON.stringify(completed(packet)));
+      }
+      return outcome;
+    } };
+}
+test('a review delivered by the author\'s runner is published, marked, and never counts against limits', async t => {
+  const h = await harness(t);
+  h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
+  const settings = new ReviewSettings(h.config, h.store);
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: true });
+  const reserved = [];
+  const self = selfRunFake(h, 'done');
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings, job => { reserved.push(job.id); return true; }, undefined, undefined, self);
+  for (const delivery of ['a', 'b']) {
+    const id = h.store.enqueue(delivery, 1); await worker.tick();
+    assert.equal(h.store.get(id).state, 'completed');
+    assert.equal(h.store.get(id).runner, "@alice's runner (Claude Code / claude-sonnet-5)");
+  }
+  assert.equal(self.calls.length, 2);
+  assert.equal(h.counts.runs, 0, 'no hosted inference');
+  assert.deepEqual(reserved, [], 'no plan or credit reservation');
+  assert.equal(h.store.authorReviews(1, 0), 0, 'the per-author limit of 1 was not used up');
+  assert.match(h.comment.body, /Ran on @alice's runner \(Claude Code \/ claude-sonnet-5\), with the author's own subscription\. atmin charged nothing/);
+});
+test('a runner that does not deliver leaves an ordinary hosted review', async t => {
+  const h = await harness(t);
+  h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
+  const settings = new ReviewSettings(h.config, h.store);
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: null, selfRun: true });
+  const reserved = [];
+  const self = selfRunFake(h, 'silent');
+  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings, job => { reserved.push(job.id); return h.store.reserve(job, 'owner', 6); }, undefined, undefined, self);
+  const id = h.store.enqueue('a', 1); await worker.tick();
+  assert.equal(self.calls.length, 1);
+  assert.equal(h.counts.runs, 1);
+  assert.deepEqual(reserved, [id], 'the hosted review reserves as any other');
+  assert.equal(h.store.get(id).runner, null);
+  assert.equal(h.store.get(id).state, 'completed');
+  assert.ok(!h.comment.body.includes('Ran on'));
+  // The fallback is subject to the same refusals as any hosted review.
+  const refusing = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings, () => 'Credit used up.', undefined, undefined, selfRunFake(h, 'unclaimed'));
+  h.setLive({ headSha: h.live.headSha });
+  const second = h.store.enqueue('b', 1, 'command'); await refusing.tick();
+  assert.equal(h.counts.runs, 1);
+  assert.match(h.comment.body, /review not run[\s\S]*Credit used up\./);
+  assert.equal(h.store.get(second).started, null, 'a refused review never counts as started');
 });

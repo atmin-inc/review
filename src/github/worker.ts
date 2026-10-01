@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parsePacket, parseResult, type Packet, type Finding } from '../contracts.js';
 import { assess } from '../assessment.js';
@@ -14,6 +14,7 @@ import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
 import type { ReviewSettings } from './settings.js';
 import { dailyLimitReached, authorLimitReached, month } from './repositories.js';
 import { InlineReviews } from './inline.js';
+import { runnerLabel, type Outcome, type RunnerRow } from './runners.js';
 import { Outcomes } from './outcomes.js';
 
 // Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
@@ -25,6 +26,13 @@ export function failureCause(error: unknown): string {
 }
 const diskLow = 'The review service is low on disk space, so this review did not start. A maintainer can rerun with `/atmin review` once an atmin operator frees space. No inference was started.';
 export const markerFor = (repo: number, pr: number): string => `<!-- atmin-review:${repo}:${pr} -->`;
+// Self-run: the PR author's own runner, when the repository allows it and one is online.
+export interface SelfRun {
+  runner(job: Job, author: number): RunnerRow | null;
+  run(job: Job, runner: RunnerRow, directory: string, signal: AbortSignal, previous: string | null): Promise<Outcome>;
+}
+class Refused extends Error { constructor(readonly reason: string) { super('refused'); } }
+const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n` : '';
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
   private checks: Checks;
@@ -32,7 +40,7 @@ export class Worker {
   private outcomes: Outcomes;
   private abort: AbortController | undefined;
   constructor(private config: PilotConfig, private store: Store, private github: GitHub, private run: Runner, readonly owner: string, private settings?: ReviewSettings, private reserve: (job: Job, limit: number) => true | string = (job, limit) => store.reserve(job, owner, limit) || dailyLimitReached, private dashboardOrigin?: string,
-    private price?: (job: Job) => ReviewPrice | null) {
+    private price?: (job: Job) => ReviewPrice | null, private selfRun?: SelfRun) {
     this.checks = new Checks(store, github); this.inline = new InlineReviews(store, github); this.outcomes = new Outcomes(store, github, config.repositoryId);
   }
   stop(): void { this.abort?.abort(); }
@@ -111,11 +119,19 @@ export class Worker {
       const preferences = this.settings?.current(), perAuthor = preferences?.maxReviewsPerAuthor ?? null, now = Date.now();
       const authorUsed = perAuthor === null ? 0 : this.store.authorReviews(initial.author.id, month(now).start);
       const freeMb = freeDiskMb(this.config.stateDirectory), floorMb = this.config.minFreeDiskMb ?? DEFAULT_MIN_FREE_DISK_MB;
-      const refusal = freeMb < floorMb ? { reason: diskLow, detail: `${freeMb} MB free on the state disk, below ${floorMb} MB` }
-        : perAuthor !== null && authorUsed >= perAuthor ? { reason: authorLimitReached(initial.author.login, perAuthor, now), detail: `author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews` }
-        : null;
-      if (refusal) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: ${refusal.detail}\n`);
-      const reserved = refusal ? refusal.reason : this.reserve(job, preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay);
+      const disk = freeMb < floorMb ? { reason: diskLow, detail: `${freeMb} MB free on the state disk, below ${floorMb} MB` } : null;
+      // The author's own runner costs this service nothing, so no plan, credit or author limit applies.
+      const remote = disk ? null : this.selfRun?.runner(job, initial.author.id) ?? null;
+      const onRunner = remote !== null && this.store.reserveOnRunner(job, this.owner, runnerLabel(remote));
+      const limit = preferences?.maxReviewsPerDay ?? this.config.maxReviewsPerDay;
+      const hostedRefusal = () => perAuthor !== null && authorUsed >= perAuthor ? { reason: authorLimitReached(initial.author.login, perAuthor, now), detail: `author ${initial.author.id} used ${authorUsed} of ${perAuthor} monthly reviews` } : null;
+      const hosted = (): true | string => {
+        const refusal = hostedRefusal();
+        if (refusal) { process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: ${refusal.detail}\n`); return refusal.reason; }
+        return this.reserve(job, limit);
+      };
+      if (disk) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} not started: ${disk.detail}\n`);
+      const reserved = disk ? disk.reason : onRunner ? true : hosted();
       if (reserved !== true) {
         report = `# atmin review — review not run\n\n${reserved}`;
       } else {
@@ -125,7 +141,23 @@ export class Worker {
           body: `# atmin review — interrupted\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\``,
         }) });
         try {
-          artifact = await this.run(job, signal, this.store.previous(job));
+          const previous = this.store.previous(job);
+          let delivered = false;
+          if (onRunner) {
+            mkdirSync(artifact, { recursive: true, mode: 0o700 });
+            const outcome = await this.selfRun!.run(job, remote!, artifact, signal, previous);
+            if (!this.store.current(job, this.owner) || signal.aborted) return;
+            delivered = outcome === 'done';
+            process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} on runner ${remote!.id}: ${outcome}${delivered ? '' : '; reviewing on this service instead'}\n`);
+            if (!delivered) {
+              // Decision (Lors, 2026-10-01): a PR whose runner does not deliver is reviewed here.
+              rmSync(artifact, { recursive: true, force: true });
+              this.store.releaseRunner(job);
+              const fallback = hosted();
+              if (fallback !== true) throw new Refused(fallback);
+            }
+          }
+          if (!delivered) artifact = await this.run(job, signal, previous);
           if (!this.store.current(job, this.owner) || signal.aborted) return;
           const packet = parsePacket(JSON.parse(readFileSync(join(artifact, 'packet.json'), 'utf8')));
           const result = parseResult(JSON.parse(readFileSync(join(artifact, 'result.json'), 'utf8')));
@@ -136,9 +168,10 @@ export class Worker {
           const assessment = assess(packet, result, compareCurrent(packet, live));
           report = renderMarkdown(packet, result, assessment, detailsUrl);
           check = assessmentCheck(assessment);
-        } catch {
+        } catch (error) {
           if (!this.store.current(job, this.owner) || signal.aborted) return;
-          report = '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
+          if (error instanceof Refused) { artifact = null; report = `# atmin review — review not run\n\n${error.reason}`; }
+          else report = '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
         }
       }
       report += `\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\`\n`;
@@ -164,7 +197,7 @@ export class Worker {
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       writeFileSync(join(job.artifact, 'validation.json'), JSON.stringify({ headSha: packet.headSha, baseSha: packet.baseSha,
         checkedAt: new Date().toISOString(), checks: [...ci, ...verification.checks] }, null, 2), { mode: 0o600 });
-      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification, this.price?.(job) ?? undefined)}\nRun: \`${job.id}\`\n`;
+      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification, this.price?.(job) ?? undefined)}${ranOn(job)}\nRun: \`${job.id}\`\n`;
       saved.check = assessmentCheck(assessment);
       this.store.update(job.id, { report: JSON.stringify(saved) });
     }

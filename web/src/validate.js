@@ -21,7 +21,7 @@ export function validateSettings(form, models, limits) {
   if (maxReviewsPerAuthor !== null && !(maxReviewsPerAuthor >= 1 && maxReviewsPerAuthor <= 100000)) {
     errors.maxReviewsPerAuthor = 'Enter a whole number from 1 to 100,000, or leave it blank for no limit.';
   }
-  return { errors, value: { model: form.model, maxUsd, maxReviewsPerDay, maxReviewsPerAuthor } };
+  return { errors, value: { model: form.model, maxUsd, maxReviewsPerDay, maxReviewsPerAuthor, selfRun: form.selfRun === true } };
 }
 
 export const planFields = [

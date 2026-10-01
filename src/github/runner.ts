@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { parsePacket } from '../contracts.js';
 import { readProfile } from '../run.js';
 import { previousReview } from '../claim-result.js';
+import type { SelfRun } from './worker.js';
+import type { Runners } from './runners.js';
 import type { PilotConfig } from './config.js';
 import type { GitHub } from './api.js';
 import type { ReviewSettings } from './settings.js';
@@ -116,5 +118,21 @@ export function engineRunner(config: PilotConfig, github: GitHub, settings?: Rev
       // Publication, CI refreshes, push reviews and the dashboard read the JSON records beside it.
       rmSync(join(directory, 'source.git'), { recursive: true, force: true });
     }
+  };
+}
+
+// How long a runner may take over one review before it is taken back. Hosted reviews stop at
+// their profile's deadline; a subscription CLI is slower per call.
+export const RUNNER_DEADLINE_MS = 60 * 60_000;
+// Offers a job to the PR author's own runner: a read-only token for this one repository, which
+// expires within the hour, and the earlier review a push review builds on.
+export function selfRun(config: PilotConfig, github: GitHub, settings: ReviewSettings, runners: Runners): SelfRun {
+  return {
+    runner: (_job, author) => settings.current().selfRun ? runners.online(author) : null,
+    async run(job, runner, directory, signal, previous) {
+      runners.offer(job.id, runner.user, config.repositoryId, directory, { job: job.id, repository: config.repository, pr: job.pr,
+        token: await github.readToken(), previous: previous ? previousReview(previous) : null });
+      return runners.wait(job.id, signal, Date.now() + RUNNER_DEADLINE_MS);
+    },
   };
 }
