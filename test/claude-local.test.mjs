@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { claudeModel } from '../benchmarks/claude-model.mjs';
+import { claudeModel } from '../dist/models/claude-cli.js';
 import { parseProfile } from '../dist/investigation.js';
 import { runClaimReview } from '../dist/claim-run.js';
 import { repository, persist } from './helpers.mjs';

@@ -10,7 +10,8 @@ import { ablate, runClaimReview } from './claim-run.js';
 import { runClaimReviewAsResult } from './claim-result.js';
 import { renderClaimReview } from './render-claim.js';
 import { renderContribution } from './ablation.js';
-import { accountedUsd } from './investigation.js';
+import { accountedUsd, subscription, type Profile } from './investigation.js';
+import { claudeModel } from './models/claude-cli.js';
 import { costReport } from './cost-report.js';
 
 const help = `atmin review — source investigation and evidence tools
@@ -27,7 +28,8 @@ prepare uses read-only GitHub/Git access and writes a private snapshot.
 render validates all evidence references against captured Git objects.
 --check-current checks live head/target; without it freshness is unverified.
 review runs the claim pipeline (below) and renders it as the GitHub worker does; rung 3 is
-Jev when TYPESAFE_API_KEY is set. investigate runs the older single-pass engine on a
+Jev when TYPESAFE_API_KEY is set. A claude-local profile (profiles/martian-claude-sonnet.json)
+runs it on the Claude Code CLI you are signed in to, with its tools off, at no API cost. investigate runs the older single-pass engine on a
 prepared directory, with bounded reads and usage reservations.
 claim-review runs the claim lifecycle: a wide pass emits falsifiable claims, a separate
 pass settles each one against the frozen revision, and the verdict is composed from what
@@ -52,6 +54,13 @@ recorded model answers on both sides so the difference is that rung alone, and r
 what it contributed. It spends nothing and changes nothing.
 No repository scripts, GitHub writes or merge approvals. Required execution remains not-run.
 `;
+
+// On the user's own machine, a subscription profile runs through the CLI they signed in to.
+function localModel(profile: Profile) {
+  if (!subscription(profile)) return undefined;
+  if (profile.provider === 'claude-local') return claudeModel(profile);
+  throw new Error('Only Claude Code (claude-local) runs from this command so far');
+}
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, strict: true,
@@ -96,7 +105,8 @@ async function main(): Promise<void> {
     try {
       if (operation === 'review') {
         // The claim pipeline, the same run the GitHub worker publishes.
-        const { investigation } = await runClaimReviewAsResult(directory, profile, controller.signal);
+        const model = localModel(profile);
+        const { investigation } = await runClaimReviewAsResult(directory, profile, controller.signal, model).finally(() => model?.close());
         const { packet, result } = loadReview(directory);
         process.stdout.write(renderMarkdown(packet, result, assess(packet, result, checkCurrent(packet))));
         process.stderr.write(`Private review artifacts: ${directory}\n`);
