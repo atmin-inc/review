@@ -423,7 +423,7 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   const buy = `${origin}/billing?installation=99`;
   assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[0])), `**This review is free:** 1 of 1 free reviews in ${month}. Later reviews this month need review credit, which a repository admin can [buy](${buy}).`);
   assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[1])), `**This review costs $0.05**. It is review 2 in ${month}, after 1 free. It was paid from review credit, which has $0.00 left. Reviews stop until a repository admin [buys credit](${buy}).`);
-  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[3])), `**This review’s price is not known yet** because its model cost has not settled. It is review 4 in ${month}, after 1 free.`);
+  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[3])), `**This review’s price is not known yet** because its cost has not settled. It is review 4 in ${month}, after 1 free.`);
 
   assert.equal(owner.plan.custom, true); assert.equal(owner.plan.updatedBy, 8);
   // Customers see their plan, usage and estimate, but not recorded cost.

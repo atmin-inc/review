@@ -8,18 +8,13 @@ import { Switch } from './ui/switch.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
 import { Figure, Notice, PageHeader } from './components.jsx';
 import { count, credit, money, monthName, plural, usd, utcDate } from './format.js';
-import { routeHref } from './route.js';
+import { routeHref, selfHostUrl } from './route.js';
 import { UsageNotice } from './usage.jsx';
 
 const kinds = { purchase: 'Credit bought', 'top-up': 'Auto top-up', grant: 'Added by atmin' };
 const kindLabel = row => (row.kind === 'grant' && row.usd < 0 ? 'Removed by atmin' : kinds[row.kind] ?? row.kind);
 // Turning auto top-up on starts at this amount; the admin can pick another.
 const defaultTopUp = 25;
-
-function price(plan) {
-  const multiplier = `model cost × ${plan.multiplier}`;
-  return plan.minimumUsd > 0 ? `${multiplier}, at least ${money(plan.minimumUsd)}` : multiplier;
-}
 
 // What is left, and buying more on Stripe's Checkout page. Stripe returns here with
 // ?checkout=<session>, and the server checks Stripe took the payment before adding the credit.
@@ -137,7 +132,6 @@ function PlanCard({ installation }) {
     <CardContent className="grid gap-4">
       <dl className="facts">
         <div><dt>Free reviews</dt><dd><Figure>{count(plan.freeReviews)}</Figure> a month</dd></div>
-        <div><dt>Each review after that</dt><dd>{price(plan)}</dd></div>
         <div><dt>Review limit</dt><dd>{plan.monthlyReviews ? <><Figure>{count(plan.monthlyReviews)}</Figure> a month</> : 'Reviews off'}</dd></div>
         <div><dt>Paid from credit in {monthName(usage.month)}</dt><dd><Figure>{usd(usage.estimatedUsd)}</Figure></dd></div>
       </dl>
@@ -212,7 +206,10 @@ export function BillingPage({ installation, checkout, patchInstallation }) {
     return <PageHeader title="Billing">Credit cannot be bought on this atmin service. {account} gets its free reviews each month, and atmin can add credit.</PageHeader>;
   }
   return <>
-    <PageHeader title="Billing">{account} gets {plural(plan.freeReviews, 'free review')} a month. Reviews after that are paid from prepaid credit.</PageHeader>
+    <PageHeader title="Billing">
+      {account} gets {plural(plan.freeReviews, 'free review')} a month. Reviews after that are paid from prepaid credit.
+      Or <a className="link" href={selfHostUrl} target="_blank" rel="noreferrer" onClick={() => console.info(`atmin review: self-host link opened from billing for installation ${installation.id}`)}>run atmin review yourself</a>: it is open source, and you pay only your own model provider.
+    </PageHeader>
     <div className="grid grid-cols-1 gap-4">
       <UsageNotice installation={installation}/>
       <div className="usage-grid">
