@@ -1,39 +1,35 @@
 import { Card, CardContent, CardHeader } from './ui/card.jsx';
 import { Figure, Link, Notice, PageHeader, Progress } from './components.jsx';
-import { count, money, monthName, plural, usd, utcDate } from './format.js';
+import { count, credit, monthName, plural, usd, utcDate } from './format.js';
 import { routeHref } from './route.js';
 
-// Shown wherever reviews are not running because of the organization's plan or billing. `link`
-// adds a link to the page that explains it: Billing for the card, Usage otherwise.
+// Below this, credit is shown as running low, as the PR comment does (render.ts `lowCreditUsd`).
+const lowCreditUsd = 2;
+
+// Shown wherever reviews are not running, or soon will not, because of the organization's plan
+// or credit. `link` adds a link to the page that explains it: Billing for credit, Usage otherwise.
 export function UsageNotice({ installation, link = false }) {
-  const { plan, usage, account, billing } = installation;
+  const { plan, usage, account, billing, creditUsd } = installation;
   const to = (view, label) => link && <Link className="link whitespace-nowrap" href={routeHref({ view, installation: installation.id })}>{label}</Link>;
   if (plan.monthlyReviews === 0) {
     return <Notice action={to('usage', 'View usage')}>Reviews are turned off for {account}. Contact atmin to turn them on.</Notice>;
   }
-  // An operator-set plan keeps running while an invoice is unpaid; the default plan does not.
-  if (billing?.unpaid) {
-    return <Notice tone="error" action={to('billing', 'Go to billing')}>
-      {account}’s card did not pay the invoice for {monthName(billing.unpaid)}. {billing.needsCard
-        ? <>Until a repository admin pays it or adds a new card on the Billing page, reviews stop after the {plural(plan.freeReviews, 'free review')} each month.</>
-        : 'A repository admin can pay it or add a new card on the Billing page.'}
-    </Notice>;
-  }
-  if (usage.reviews >= plan.monthlyReviews && billing?.needsCard) {
-    return <Notice action={to('billing', 'Add a card')}>
-      {account} used its {count(plan.freeReviews)} free reviews for {monthName(usage.month)}. A repository admin can add a card on the Billing page to keep reviewing; otherwise reviews resume on {utcDate(usage.resetsAt)}.
-    </Notice>;
-  }
-  // A card that has not paid much yet stops at its tier's monthly spending limit.
-  const ceiling = billing?.card && !billing.needsCard ? billing.spending.monthlyUsd : null;
-  if (ceiling !== null && usage.estimatedUsd >= ceiling) {
-    return <Notice action={to('billing', 'Go to billing')}>
-      {account} reached its {money(ceiling)} spending limit for {monthName(usage.month)}. Reviews resume on {utcDate(usage.resetsAt)}, or sooner if atmin raises the limit.
-    </Notice>;
-  }
   if (usage.reviews >= plan.monthlyReviews) {
     return <Notice action={to('usage', 'View usage')}>
       {account} used all {count(plan.monthlyReviews)} reviews for {monthName(usage.month)}. Until reviews resume on {utcDate(usage.resetsAt)}, pull requests get a “review not run” comment instead.
+    </Notice>;
+  }
+  if (usage.reviews < plan.freeReviews) return null;
+  const free = plan.freeReviews ? <>used its {count(plan.freeReviews)} free reviews for {monthName(usage.month)} and </> : null;
+  if (creditUsd <= 0) {
+    return <Notice action={billing && to('billing', 'Buy credit')}>
+      {account} {free}has no review credit left. {billing ? 'A repository admin can buy credit to keep reviewing' : 'Contact atmin to add credit'}{plan.freeReviews ? `; otherwise free reviews start again on ${utcDate(usage.resetsAt)}` : ''}.
+    </Notice>;
+  }
+  // Auto top-up refills it before it runs out, unless it stopped.
+  if (creditUsd < lowCreditUsd && !(billing?.topUp.usd && !billing.topUp.failed)) {
+    return <Notice action={billing && to('billing', 'Buy credit')}>
+      {account} has {credit(creditUsd)} of review credit left. Reviews past the free ones stop when it runs out.
     </Notice>;
   }
   return null;
@@ -67,13 +63,13 @@ export function UsagePage({ installation }) {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><h2 className="panel-title">Estimated charges</h2></CardHeader>
+          <CardHeader><h2 className="panel-title">Paid from credit</h2></CardHeader>
           <CardContent className="grid gap-4">
             <p><Figure className="text-[28px] leading-none">{usd(usage.estimatedUsd)}</Figure></p>
-            <p className="text-muted-foreground">An estimate for reviews beyond the {plural(plan.freeReviews, 'free review')} this month.</p>
-            {installation.billing && <Link className="link justify-self-start" href={routeHref({ view: 'billing', installation: installation.id })}>Card, limit and invoices</Link>}
+            <p className="text-muted-foreground">For reviews beyond the {plural(plan.freeReviews, 'free review')} this month. <Figure>{credit(installation.creditUsd)}</Figure> of credit left.</p>
+            {installation.billing && <Link className="link justify-self-start" href={routeHref({ view: 'billing', installation: installation.id })}>Buy credit and set auto top-up</Link>}
             {usage.unknownCostReviews > 0 && <p className="text-[13px] text-muted-foreground">
-              The estimate leaves out {plural(usage.unknownCostReviews, 'review')} whose cost is not settled yet.
+              Leaves out {plural(usage.unknownCostReviews, 'review')} whose cost is not settled yet; each is paid once it settles.
             </p>}
           </CardContent>
         </Card>

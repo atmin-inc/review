@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { usd, money, monthName, utcDate, share, runCost, plural } from '../src/format.js';
+import { usd, money, credit, monthName, utcDate, share, runCost, plural } from '../src/format.js';
 import { toWoff2, readTables } from '../scripts/woff2.mjs';
 import { brotliDecompressSync } from 'node:zlib';
 
@@ -22,6 +22,13 @@ test('prices and limits read as whole dollars when they are, cents otherwise', (
   assert.equal(money(1000), '$1,000');
   assert.equal(money(0.05), '$0.05');
   assert.equal(money(5.98), '$5.98');
+});
+
+test('credit balances always read to the cent, including one the last review took below zero', () => {
+  // A balance of "$25" next to "$24.40" reads as a different kind of number.
+  assert.equal(credit(25), '$25.00');
+  assert.equal(credit(0.4), '$0.40');
+  assert.equal(credit(-0.25), '-$0.25');
 });
 
 test('unknown cost is never shown as zero', () => {

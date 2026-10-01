@@ -56,13 +56,15 @@ async function setup(t, hosted = false, operators = [], stripe) {
   const repositories = hosted ? new Repositories(config, store, models, 'test-owner', origin) : undefined;
   // `stripe` is a fake Stripe's state; its answers are the ones billing checks.
   const billing = stripe && new Billing(new Stripe('sk_test_fake', async (url, init) => {
-    const path = new URL(url).pathname.replace(/^\/v1/, '');
+    const path = new URL(url).pathname.replace(/^\/v1/, ''), params = Object.fromEntries(new URLSearchParams(init.body ?? ''));
     (stripe.calls ??= []).push(`${init.method} ${path}`);
+    const receipt_url = 'https://pay.stripe.com/receipts/payment/test_1';
     if (init.method === 'POST' && path === '/customers') return Response.json({ id: 'cus_test1' });
-    if (init.method === 'POST' && path === '/checkout/sessions') return Response.json({ url: 'https://checkout.stripe.com/c/pay/cs_test_abc' });
-    if (init.method === 'GET' && path === '/checkout/sessions/cs_test_abc') return Response.json({ customer: { id: stripe.customer ?? 'cus_test1', email: 'billing@owner.test' }, mode: 'setup', status: 'complete',
-      setup_intent: { status: 'succeeded', payment_method: { id: 'pm_test1', card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } } } });
-    if (init.method === 'POST' && path === '/customers/cus_test1') return Response.json({ id: 'cus_test1' });
+    if (init.method === 'POST' && path === '/checkout/sessions') return Response.json({ id: 'cs_test_abc', url: 'https://checkout.stripe.com/c/pay/cs_test_abc' });
+    if (init.method === 'GET' && path === '/checkout/sessions/cs_test_abc') return Response.json({ customer: { id: stripe.customer ?? 'cus_test1', email: 'billing@owner.test' }, mode: 'payment', status: 'complete',
+      payment_status: 'paid', amount_total: 2500, currency: 'usd', payment_intent: { status: 'succeeded', payment_method: { id: 'pm_test1', card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } }, latest_charge: { receipt_url } } });
+    if (init.method === 'POST' && path === '/payment_intents') return Response.json({ id: 'pi_test1', amount: Number(params.amount), status: 'requires_confirmation' });
+    if (init.method === 'POST' && path === '/payment_intents/pi_test1/confirm') return Response.json({ id: 'pi_test1', status: 'succeeded', latest_charge: { receipt_url } });
     throw new Error('Unexpected Stripe endpoint');
   }), repositories, origin);
   const handler = dashboard(config, { origin, clientId: 'client-id', clientSecret: 'private-secret', models, operators, appSlug: 'atmin-review' }, store, settings, fetcher, repositories,
@@ -284,11 +286,11 @@ test('any installation connects its own repositories, up to ten, without an oper
   assert.equal(session.operator, false);
   assert.deepEqual(session.connections.installations.map(i => [i.id, i.account, i.manageUrl]), [
     [99, 'owner', 'https://github.com/organizations/owner/settings/installations/99'], [77, 'other', 'https://github.com/settings/installations/77']]);
-  assert.deepEqual(session.connections.installations[1].plan, { freeReviews: 20, monthlyReviews: 20, multiplier: 2, minimumUsd: .05, custom: false });
-  // Without a Stripe key no card can be added, so the free reviews are the month's limit.
-  assert.equal(session.connections.installations[1].billing, null);
-  assert.equal((await f.post('billing/checkout?installation=77', {}, cookie)).status, 404);
-  assert.equal(session.connections.installations[1].usage.remaining, 20);
+  assert.deepEqual(session.connections.installations[1].plan, { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05, custom: false });
+  // Without a Stripe key no credit can be bought; past the free reviews only credit atmin adds pays.
+  assert.deepEqual([session.connections.installations[1].billing, session.connections.installations[1].creditUsd], [null, 0]);
+  assert.equal((await f.post('billing/checkout?installation=77', { usd: 25 }, cookie)).status, 404);
+  assert.equal(session.connections.installations[1].usage.remaining, 1000);
   assert.deepEqual(session.connections.repositories.map(r => [r.id, r.installationId, r.connected]), [[42, 99, true], [55, 77, false]]);
   // Every review fetches the full history onto a disk all customers share, so a repository
   // over 2 GB on GitHub does not connect (mason-v1 is 760 MB there; its copy is about 175 MB).
@@ -325,47 +327,54 @@ test('any installation connects its own repositories, up to ten, without an oper
   assert.equal(reopened.entries.get(1001).config.installationId, 77); reopened.close();
 });
 
-test('a repository admin adds the organization\'s card through Stripe Checkout, which lifts the free-review limit', async t => {
+test('a repository admin buys the organization\'s credit through Stripe Checkout and sets auto top-up', async t => {
   const stripe = {}, f = await setup(t, true, [8], stripe); f.state.installations = [99, 77];
   let cookie = await f.login();
   let [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
-  // The Billing page shows the price terms and how far a new card may run before it has paid.
-  const newCard = { paidUsd: 0, monthlyUsd: 50, next: { paidUsd: 10, monthlyUsd: 250 } };
-  assert.deepEqual([owner.plan, owner.billing], [{ freeReviews: 20, monthlyReviews: 20, multiplier: 2, minimumUsd: .05, custom: false },
-    { card: null, expires: null, email: null, needsCard: true, unpaid: null, invoices: [], spending: newCard }]);
-  // The card pays for every repository in the organization, so a non-admin, a foreign origin, an
+  // The Billing page shows the price terms, the credit, what it can be bought in, and auto top-up.
+  const none = { card: null, expires: null, email: null, amounts: [10, 25, 50, 100], topUp: { usd: null, belowUsd: 5, failed: null }, history: [] };
+  assert.deepEqual([owner.plan, owner.creditUsd, owner.billing], [{ freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05, custom: false }, 0, none]);
+  // Credit pays for every repository in the organization, so a non-admin, a foreign origin, an
   // organization with no connected repository and an unknown one are all refused before Stripe.
-  assert.equal((await f.post('billing/checkout?installation=99', {}, cookie, { Origin: 'https://evil.test' })).status, 403);
-  let refused = await f.post('billing/checkout?installation=77', {}, cookie);
-  assert.deepEqual([refused.status, (await refused.json()).error], [403, 'Only an admin of a repository connected in other can manage its card.']);
-  assert.equal((await f.post('billing/checkout?installation=12345', {}, cookie)).status, 404);
+  assert.equal((await f.post('billing/checkout?installation=99', { usd: 25 }, cookie, { Origin: 'https://evil.test' })).status, 403);
+  let refused = await f.post('billing/checkout?installation=77', { usd: 25 }, cookie);
+  assert.deepEqual([refused.status, (await refused.json()).error], [403, 'Only an admin of a repository connected in other can manage its billing.']);
+  assert.equal((await f.post('billing/checkout?installation=12345', { usd: 25 }, cookie)).status, 404);
   f.state.admin = false;
-  assert.equal((await f.post('billing/checkout?installation=99', {}, cookie)).status, 403);
-  assert.equal(stripe.calls, undefined);
+  assert.equal((await f.post('billing/checkout?installation=99', { usd: 25 }, cookie)).status, 403);
   f.state.admin = true;
-  const started = await f.post('billing/checkout?installation=99', {}, cookie);
+  // Only the amounts on sale; auto top-up needs the card a purchase saves.
+  for (const bad of [{}, { usd: 12 }, { usd: '25' }, { usd: 25, installation: 77 }]) assert.equal((await f.post('billing/checkout?installation=99', bad, cookie)).status, 400);
+  refused = await f.post('billing/top-up?installation=99', { usd: 10 }, cookie);
+  assert.deepEqual([refused.status, (await refused.json()).error], [409, 'Buy credit once first; that saves the card auto top-up charges.']);
+  assert.equal(stripe.calls, undefined);
+  const started = await f.post('billing/checkout?installation=99', { usd: 25 }, cookie);
   assert.deepEqual([started.status, await started.json()], [200, { url: 'https://checkout.stripe.com/c/pay/cs_test_abc' }]);
   assert.equal((await f.post('billing/confirm?installation=99', { session: 1 }, cookie)).status, 400);
-  // A checkout that saved a card for someone else is not this organization's card.
+  // A checkout paid by someone else's customer is not this organization's credit.
   stripe.customer = 'cus_other';
   refused = await f.post('billing/confirm?installation=99', { session: 'cs_test_abc' }, cookie);
-  assert.deepEqual([refused.status, (await refused.json()).error], [409, 'Stripe did not save a card for this checkout. Add the card again.']);
+  assert.deepEqual([refused.status, (await refused.json()).error], [409, 'Stripe has not confirmed this payment. If you paid, the credit is added within the hour.']);
   delete stripe.customer;
   const confirmed = await (await f.post('billing/confirm?installation=99', { session: 'cs_test_abc' }, cookie)).json();
-  const saved = { card: 'Visa ending 4242', expires: '12/2030', email: 'billing@owner.test', needsCard: false, unpaid: null, invoices: [], spending: newCard };
-  assert.deepEqual([confirmed.card, confirmed.plan, confirmed.billing], ['Visa ending 4242', { freeReviews: 20, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05, custom: false }, saved]);
+  const purchase = { kind: 'purchase', usd: 25, date: confirmed.billing.history[0]?.date, receipt: 'https://pay.stripe.com/receipts/payment/test_1' };
+  const saved = { ...none, card: 'Visa ending 4242', expires: '12/2030', email: 'billing@owner.test', history: [purchase] };
+  assert.deepEqual([confirmed.addedUsd, confirmed.card, confirmed.creditUsd, confirmed.billing], [25, 'Visa ending 4242', 25, saved]);
   [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
-  assert.deepEqual(owner.billing, saved);
-  // Invoices show newest first with Stripe's page for each; one still being created does not.
-  f.repositories.startInvoice(99, '2026-08', 0, 3, 'nothing-due');
-  f.repositories.startInvoice(99, '2026-09', 412, 40, 'creating'); f.repositories.finishInvoice(99, '2026-09', 'in_test99', 'https://invoice.stripe.com/i/acct_1/test_99');
-  f.repositories.settleInvoice(99, '2026-09', 'failed', 'https://invoice.stripe.com/i/acct_1/test_99', Date.now());
-  f.repositories.startInvoice(99, '2026-10', 100, 25, 'creating');
-  [owner] = (await (await f.get('/api/review/v1/session', cookie)).json()).connections.installations;
-  assert.deepEqual([owner.plan.monthlyReviews, owner.billing.needsCard, owner.billing.unpaid, owner.billing.invoices], [20, true, '2026-09', [
-    { month: '2026-09', amountCents: 412, reviews: 40, state: 'failed', url: 'https://invoice.stripe.com/i/acct_1/test_99' },
-    { month: '2026-08', amountCents: 0, reviews: 3, state: 'nothing-due', url: null }]]);
-  assert.deepEqual(stripe.calls, ['POST /customers', 'POST /checkout/sessions', 'GET /checkout/sessions/cs_test_abc', 'GET /checkout/sessions/cs_test_abc', 'POST /customers/cus_test1']);
+  assert.deepEqual([owner.creditUsd, owner.billing], [25, saved]);
+  // Auto top-up: on with credit above $5 buys nothing yet; off again; amounts must be on sale.
+  for (const bad of [{ usd: 7 }, { usd: '10' }, {}]) assert.equal((await f.post('billing/top-up?installation=99', bad, cookie)).status, 400);
+  let set = await (await f.post('billing/top-up?installation=99', { usd: 10 }, cookie)).json();
+  assert.deepEqual([set.creditUsd, set.billing.topUp], [25, { usd: 10, belowUsd: 5, failed: null }]);
+  set = await (await f.post('billing/top-up?installation=99', { usd: null }, cookie)).json();
+  assert.equal(set.billing.topUp.usd, null);
+  // Turned on below $5, it buys the amount straight away. An operator's grant shows without its note.
+  f.repositories.grant(99, -21, 'operator-only note', 8);
+  set = await (await f.post('billing/top-up?installation=99', { usd: 10 }, cookie)).json();
+  assert.equal(set.creditUsd, 14);
+  assert.deepEqual(set.billing.history.map(({ date, ...row }) => row), [{ kind: 'top-up', usd: 10, receipt: 'https://pay.stripe.com/receipts/payment/test_1' },
+    { kind: 'grant', usd: -21, receipt: null }, { kind: 'purchase', usd: 25, receipt: 'https://pay.stripe.com/receipts/payment/test_1' }]);
+  assert.deepEqual(stripe.calls, ['POST /customers', 'POST /checkout/sessions', 'GET /checkout/sessions/cs_test_abc', 'GET /checkout/sessions/cs_test_abc', 'POST /payment_intents', 'POST /payment_intents/pi_test1/confirm']);
 });
 
 test('the admin panel is operator-only, lists every installation, and plan changes are validated', async t => {
@@ -397,8 +406,8 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   assert.deepEqual(admin.installations.map(i => [i.id, i.account, i.accountType, i.suspended, i.removed]),
     [[99, 'owner', 'Organization', false, false], [77, 'other', 'User', true, false], [300, 'gone', null, false, true]]);
   const owner = admin.installations[0];
-  // The limit in force: an operator's plan as set; the default plan stops at its free reviews without a card.
-  assert.deepEqual(admin.installations.map(i => [i.limit, i.card, i.unpaid]), [[5, null, null], [20, null, null], [20, null, null]]);
+  // Credit, after the settled paid reviews are taken from it (.05 + .20); one review can take it below zero.
+  assert.deepEqual(admin.installations.map(i => [i.creditUsd, i.card, i.topUpUsd, i.topUpFailed]), [[-.25, null, null, null], [0, null, null, null], [0, null, null, null]]);
   assert.deepEqual(owner.usage, { month: owner.usage.month, resetsAt: owner.usage.resetsAt, reviews: 4, remaining: 1, knownUsd: .24, estimatedUsd: .25, unknownCostReviews: 1 });
   assert.deepEqual(owner.repositories, [{ id: 42, name: 'owner/repo', enabled: true, reviews: 4, outcomes: {
     merged: { pulls: 1, findings: 2, changed: 1, unchanged: 1, unknown: 0, up: 1, down: 0, replies: 0 },
@@ -409,8 +418,11 @@ test('the admin panel is operator-only, lists every installation, and plan chang
     [[0, true, 0], [1, false, .05], [2, false, .2], [3, false, null]]);
   assert.equal(reviewPrice(f.repositories, 99, { ...jobs[0], started: null }), null);
   const month = new Date().toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[0])), `**This review is free:** 1 of 1 free reviews in ${month}.`);
-  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[1])), `**This review costs $0.05**. It is review 2 in ${month}, after 1 free.`);
+  // With no credit left, the last free review says later ones need it, and a paid one that
+  // spent the last of it says reviews stop; both link to where it is bought.
+  const buy = `${origin}/billing?installation=99`;
+  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[0])), `**This review is free:** 1 of 1 free reviews in ${month}. Later reviews this month need review credit, which a repository admin can [buy](${buy}).`);
+  assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[1])), `**This review costs $0.05**. It is review 2 in ${month}, after 1 free. It was paid from review credit, which has $0.00 left. Reviews stop until a repository admin [buys credit](${buy}).`);
   assert.equal(priceLine(reviewPrice(f.repositories, 99, jobs[3])), `**This review’s price is not known yet** because its model cost has not settled. It is review 4 in ${month}, after 1 free.`);
 
   assert.equal(owner.plan.custom, true); assert.equal(owner.plan.updatedBy, 8);
@@ -429,6 +441,15 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   assert.equal(saved.status, 200); assert.equal((await saved.json()).usage.remaining, 500);
   assert.deepEqual(f.repositories.plan(77).plan, { freeReviews: 20, monthlyReviews: 500, multiplier: 1.1, minimumUsd: 0 });
   assert.equal(f.repositories.plan(77).updatedBy, 8);
+  // Operators add or take credit with a note the customer does not see.
+  for (const bad of [{ usd: 0, note: 'x' }, { usd: 5 }, { usd: 5, note: 'x', installation: 77 }, { usd: 1001, note: 'x' }]) {
+    assert.equal((await f.post('admin/credit?installation=99', bad, cookie)).status, 400);
+  }
+  assert.equal((await f.post('admin/credit?installation=12345', { usd: 5, note: 'pilot' }, cookie)).status, 404);
+  assert.deepEqual(await (await f.post('admin/credit?installation=99', { usd: 5, note: 'pilot' }, cookie)).json(), { creditUsd: 4.75 });
+  f.state.userId = 7; const stranger = await f.login(); f.state.userId = 8;
+  assert.equal((await f.post('admin/credit?installation=99', { usd: 5, note: 'pilot' }, stranger)).status, 403);
+  assert.equal(f.repositories.balance(99), 4.75);
   // A revoked operator token ends the session even though the operator list still names the user.
   f.state.revoked = true;
   assert.equal((await f.get('/api/review/v1/admin', cookie)).status, 403);

@@ -2,7 +2,7 @@
 // /?repository=<id>#review/<runId>; those links must keep opening the same review.
 const repositoryId = /^[1-9][0-9]{0,15}$/;
 const runId = /^[a-zA-Z0-9-]{1,100}$/;
-// Stripe Checkout returns to /billing with its session ID once a card is saved.
+// Stripe Checkout returns to /billing with its session ID once credit is paid for.
 const checkoutId = /^cs_(test|live)_[A-Za-z0-9]{1,250}$/;
 
 export const signinMessages = {

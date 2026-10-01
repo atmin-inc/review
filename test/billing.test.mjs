@@ -6,37 +6,60 @@ import { tmpdir } from 'node:os';
 import { Store } from '../dist/github/store.js';
 import { Repositories, month } from '../dist/github/repositories.js';
 import { Billing, Stripe, StripeError } from '../dist/github/billing.js';
+import { chargeCredit } from '../dist/github/dashboard-view.js';
 import { readProfile } from '../dist/run.js';
+import { priceLine } from '../dist/render.js';
 
 const origin = 'https://review.example.test';
 const profile = resolve('profiles/smoke-openrouter-free.json');
 const models = [{ id: 'free', label: 'Free', profile: readProfile(profile) }];
+const receipt = 'https://pay.stripe.com/receipts/payment/test_1';
 
-// A fake Stripe that answers the calls billing makes and records each one.
-function fakeStripe(state = {}) {
-  state.calls = [];
-  const fetcher = async (url, init) => {
+// A fake Stripe that answers the calls billing makes and records each one. Like Stripe, it
+// returns the same PaymentIntent for a repeated idempotency key and pays an intent only once.
+function fakeStripe(state) {
+  state.calls = []; state.intents = new Map(); state.keys = new Map();
+  const card = method => ({ id: method, card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } });
+  const paid = (id, cents) => ({ id, customer: { id: 'cus_test1', email: 'billing@owner.test' }, mode: 'payment', status: 'complete', payment_status: 'paid', amount_total: cents, currency: 'usd',
+    payment_intent: { status: 'succeeded', payment_method: card(state.method ?? 'pm_test1'), latest_charge: { receipt_url: receipt } } });
+  return async (url, init) => {
     assert.equal(init.redirect, 'error'); assert.ok(init.signal);
     assert.equal(init.headers.Authorization, 'Bearer sk_test_fake');
-    const { pathname, searchParams } = new URL(url), path = pathname.replace(/^\/v1/, '');
-    const params = Object.fromEntries(init.method === 'GET' ? searchParams : new URLSearchParams(init.body));
-    state.calls.push({ method: init.method, path, params, key: init.headers['Idempotency-Key'] ?? null });
-    const fail = state.fail?.[`${init.method} ${path}`];
-    if (fail) return Response.json({ error: { type: 'card_error', code: fail, message: 'Test failure.' } }, { status: 402 });
-    if (init.method === 'POST' && path === '/customers') return Response.json({ id: 'cus_test1' });
-    if (init.method === 'POST' && path === '/checkout/sessions') return Response.json({ id: 'cs_test_abc', url: state.sessionUrl ?? 'https://checkout.stripe.com/c/pay/cs_test_abc' });
-    if (init.method === 'GET' && path.startsWith('/checkout/sessions/')) return Response.json(state.session ?? { customer: { id: 'cus_test1', email: 'billing@owner.test' }, mode: 'setup', status: 'complete',
-      setup_intent: { status: 'succeeded', payment_method: { id: state.method ?? 'pm_test1', card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } } } });
-    if (init.method === 'POST' && path.startsWith('/customers/')) return Response.json({ id: path.slice(11) });
-    if (init.method === 'POST' && path === '/invoices') return Response.json({ id: `in_test${params['metadata[installation]']}` });
-    if (init.method === 'POST' && path === '/invoiceitems') return Response.json({ id: 'ii_test1' });
-    if (init.method === 'POST' && /^\/invoices\/in_\w+\/finalize$/.test(path)) return Response.json({ id: path.split('/')[2], status: 'open', attempt_count: 0, hosted_invoice_url: `https://invoice.stripe.com/i/acct_1/${path.split('/')[2]}` });
-    // `state.invoices` holds what Stripe says about each invoice now; paying one marks it paid.
-    if (init.method === 'GET' && /^\/invoices\/in_\w+$/.test(path)) return Response.json(state.invoices?.[path.split('/')[2]] ?? { id: path.split('/')[2], status: 'open', attempt_count: 0 });
-    if (init.method === 'POST' && /^\/invoices\/in_\w+\/pay$/.test(path)) return Response.json({ ...(state.invoices ??= {})[path.split('/')[2]], id: path.split('/')[2], status: 'paid' });
-    throw new Error(`Unexpected Stripe call ${init.method} ${path}`);
+    const { pathname, searchParams } = new URL(url), path = pathname.replace(/^\/v1/, ''), request = `${init.method} ${path}`;
+    const params = Object.fromEntries(init.method === 'GET' ? searchParams : new URLSearchParams(init.body)), key = init.headers['Idempotency-Key'] ?? null;
+    state.calls.push({ method: init.method, path, params, key });
+    if (state.fail?.[request]) return Response.json({ error: { type: 'card_error', code: state.fail[request], message: 'Test failure.' } }, { status: 402 });
+    // `lost` is a request Stripe carries out whose response never arrives.
+    const lost = () => { if (state.lost === request) { delete state.lost; throw new TypeError('fetch failed'); } };
+    if (request === 'POST /customers') return Response.json({ id: 'cus_test1' });
+    if (request === 'POST /checkout/sessions') {
+      const id = `cs_test_${state.calls.filter(call => call.path === '/checkout/sessions').length}`;
+      return Response.json({ id, url: state.sessionUrl ?? `https://checkout.stripe.com/c/pay/${id}` });
+    }
+    if (init.method === 'GET' && path.startsWith('/checkout/sessions/')) {
+      const id = path.split('/')[3];
+      return Response.json(state.sessions?.[id] ?? paid(id, state.amount ?? 2500));
+    }
+    if (request === 'POST /payment_intents') {
+      let intent = state.intents.get(state.keys.get(key));
+      if (!intent) {
+        intent = { id: `pi_test${state.intents.size + 1}`, amount: Number(params.amount), currency: params.currency, customer: params.customer, payment_method: params.payment_method, status: 'requires_confirmation', latest_charge: null };
+        state.intents.set(intent.id, intent); state.keys.set(key, intent.id);
+      }
+      lost();
+      return Response.json(intent);
+    }
+    const confirm = path.match(/^\/payment_intents\/(pi_\w+)\/confirm$/);
+    if (init.method === 'POST' && confirm) {
+      const intent = state.intents.get(confirm[1]);
+      if (intent.status !== 'requires_confirmation') return Response.json({ error: { type: 'invalid_request_error', code: 'payment_intent_unexpected_state' } }, { status: 400 });
+      Object.assign(intent, { status: 'succeeded', latest_charge: { receipt_url: receipt } });
+      lost();
+      return Response.json(intent);
+    }
+    if (init.method === 'GET' && path.startsWith('/payment_intents/')) return Response.json(state.intents.get(path.split('/')[2]));
+    throw new Error(`Unexpected Stripe call ${request}`);
   };
-  return fetcher;
 }
 
 function setup(t) {
@@ -46,187 +69,213 @@ function setup(t) {
   const repositories = new Repositories(config, store, models, 'worker', origin), state = {};
   const billing = new Billing(new Stripe('sk_test_fake', fakeStripe(state)), repositories, origin);
   t.after(() => { repositories.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
-  // A started review with a receipt of the given recorded cost; null is a cost that never settled.
+  // A started review with a receipt of the given recorded cost; null is a cost not settled yet.
   let n = 0;
   const review = (entry, started, usd) => {
     entry.store.enable(true);
     const id = entry.store.enqueue(`delivery-${++n}`, n), directory = join(root, `run-${n}`);
     mkdirSync(directory);
-    writeFileSync(join(directory, 'receipt.json'), JSON.stringify({ profile: models[0].profile, finishedAt: 'now', calls: [{ meteredUsd: usd }] }));
+    const write = cost => writeFileSync(join(directory, 'receipt.json'), JSON.stringify({ profile: models[0].profile, finishedAt: 'now', calls: [{ meteredUsd: cost }] }));
+    write(usd);
     entry.store.db.prepare("UPDATE jobs SET state='completed', started=?, artifact=? WHERE id=?").run(started, directory, id);
+    return { id, settle: write };
   };
-  return { root, repositories, billing, state, review, first: repositories.entries.get(42) };
+  const first = repositories.entries.get(42);
+  const attempt = () => { first.store.enqueue(`attempt-${++n}`, n); return repositories.reserve(first, first.store.next('worker'), 'worker', 100); };
+  const card = () => { repositories.setCustomer(99, 'cus_test1', 7); repositories.setCard(99, 'pm_test1', 'Visa ending 4242', '12/2030', 'billing@owner.test', 7); };
+  return { root, repositories, billing, state, review, attempt, card, first };
 }
 
-test('a card is saved through Checkout in setup mode, and only a completed checkout of this customer counts', async t => {
+test('credit is bought on a Checkout page in US dollars that saves the card, and is added once, only for a paid checkout of this organization', async t => {
   const f = setup(t);
-  const url = await f.billing.checkout(99, 'owner', 7);
-  assert.equal(url, 'https://checkout.stripe.com/c/pay/cs_test_abc');
+  assert.equal(await f.billing.checkout(99, 'owner', 2500, 7), 'https://checkout.stripe.com/c/pay/cs_test_1');
   const [customer, session] = f.state.calls;
   // A retried first checkout must not create a second customer.
-  assert.deepEqual([customer.method, customer.path, customer.key, customer.params.name, customer.params['metadata[installation]']], ['POST', '/customers', 'atmin-customer-99', 'owner', '99']);
-  assert.equal(session.params.mode, 'setup'); assert.equal(session.params.customer, 'cus_test1');
+  assert.deepEqual([customer.path, customer.key, customer.params.name, customer.params['metadata[installation]']], ['/customers', 'atmin-customer-99', 'owner', '99']);
+  // The account's default currency is CAD; the price is US dollars. Paying saves the card for
+  // top-ups charged while nobody is on the page.
+  assert.deepEqual([session.params.mode, session.params.customer, session.params['line_items[0][price_data][unit_amount]'], session.params['line_items[0][price_data][currency]'], session.params['payment_intent_data[setup_future_usage]']],
+    ['payment', 'cus_test1', '2500', 'usd', 'off_session']);
   assert.equal(session.params.success_url, `${origin}/billing?installation=99&checkout={CHECKOUT_SESSION_ID}`);
   assert.equal(session.params.cancel_url, `${origin}/billing?installation=99`);
-  await f.billing.checkout(99, 'owner', 7);
-  assert.equal(f.state.calls.filter(call => call.path === '/customers').length, 1);
-  // Only Stripe's own Checkout page is a place to send the browser.
+  // Only the amounts on sale, and only Stripe's own page.
+  await assert.rejects(f.billing.checkout(99, 'owner', 1234, 7), { status: 400 });
   f.state.sessionUrl = 'https://evil.test/pay';
-  await assert.rejects(f.billing.checkout(99, 'owner', 7), StripeError);
+  await assert.rejects(f.billing.checkout(99, 'owner', 1000, 7), StripeError);
+  delete f.state.sessionUrl;
+  assert.equal(f.state.calls.filter(call => call.path === '/customers').length, 1);
 
-  // Returning from Checkout proves nothing by itself: the session must be complete, saved a
-  // card, and belong to this installation's customer.
+  // Returning from Checkout proves nothing by itself: the session must be one atmin started for
+  // this organization, and Stripe must have taken the amount sold from this customer.
   await assert.rejects(f.billing.confirm(99, 'not-a-session', 7), { status: 400 });
-  await assert.rejects(f.billing.confirm(77, 'cs_test_abc', 7), { status: 400 });
-  for (const session of [{ customer: { id: 'cus_other' }, mode: 'setup', status: 'complete', setup_intent: { status: 'succeeded', payment_method: { id: 'pm_test1', card: { brand: 'visa', last4: '4242' } } } },
-    { customer: { id: 'cus_test1' }, mode: 'setup', status: 'open', setup_intent: { status: 'requires_payment_method', payment_method: null } },
-    { customer: { id: 'cus_test1' }, mode: 'payment', status: 'complete', setup_intent: null }]) {
-    f.state.session = session;
-    await assert.rejects(f.billing.confirm(99, 'cs_test_abc', 7), { status: 409 });
+  await assert.rejects(f.billing.confirm(77, 'cs_test_1', 7), { status: 400 });
+  await assert.rejects(f.billing.confirm(99, 'cs_test_999', 7), { status: 400 });
+  const base = { customer: { id: 'cus_test1' }, mode: 'payment', status: 'complete', payment_status: 'paid', amount_total: 2500, currency: 'usd', payment_intent: { status: 'succeeded' } };
+  for (const unpaid of [{ status: 'open', payment_status: 'unpaid' }, { payment_status: 'unpaid' }, { customer: { id: 'cus_other' } }, { amount_total: 1000 }, { currency: 'cad' }, { payment_intent: { status: 'processing' } }]) {
+    f.state.sessions = { cs_test_1: { ...base, ...unpaid } };
+    await assert.rejects(f.billing.confirm(99, 'cs_test_1', 7), { status: 409 });
   }
-  assert.equal(f.repositories.billing(99).card, null); assert.equal(f.repositories.limit(99).needsCard, true);
-  delete f.state.session;
-  assert.equal(await f.billing.confirm(99, 'cs_test_abc', 7), 'Visa ending 4242');
-  const fetched = f.state.calls.at(-2), made = f.state.calls.at(-1);
-  assert.deepEqual([fetched.params['expand[0]'], fetched.params['expand[1]']], ['setup_intent.payment_method', 'customer']);
-  // Invoices charge the customer's default card, so the saved card becomes it.
-  assert.deepEqual([made.path, made.params['invoice_settings[default_payment_method]']], ['/customers/cus_test1', 'pm_test1']);
+  assert.equal(f.repositories.balance(99), 0); assert.equal(f.repositories.billing(99).card, null);
+  // A paid checkout that does not match what was sold is marked failed, so the hourly check stops asking.
+  assert.equal(f.repositories.payment('cs_test_1').state, 'failed');
+  delete f.state.sessions;
+  assert.deepEqual(await f.billing.confirm(99, 'cs_test_1', 7), { usd: 25, card: 'Visa ending 4242' });
+  assert.equal(f.repositories.balance(99), 25);
+  assert.deepEqual(f.repositories.creditHistory(99).map(({ reference, kind, usd, by, receipt: link }) => ({ reference, kind, usd, by, link })),
+    [{ reference: 'cs_test_1', kind: 'purchase', usd: 25, by: 7, link: receipt }]);
   // Checkout puts the address it collected on the customer; Stripe sends receipts there.
-  assert.deepEqual(f.repositories.billing(99), { customer: 'cus_test1', paymentMethod: 'pm_test1', card: 'Visa ending 4242', expires: '12/2030', email: 'billing@owner.test', updated: f.repositories.billing(99).updated, updatedBy: 7 });
-  assert.equal(f.repositories.limit(99).needsCard, false);
+  assert.deepEqual(f.repositories.billing(99), { customer: 'cus_test1', paymentMethod: 'pm_test1', card: 'Visa ending 4242', expires: '12/2030', email: 'billing@owner.test',
+    topUpCents: null, topUpFailed: null, updated: f.repositories.billing(99).updated, updatedBy: 7 });
+  // Reloading the return page adds nothing more and does not ask Stripe again.
+  const asked = f.state.calls.length;
+  assert.deepEqual(await f.billing.confirm(99, 'cs_test_1', 7), { usd: 25, card: 'Visa ending 4242' });
+  assert.equal(f.state.calls.length, asked); assert.equal(f.repositories.balance(99), 25);
   // Stripe errors name the step and code, never the key.
   f.state.fail = { 'POST /checkout/sessions': 'api_key_expired' };
-  await assert.rejects(f.billing.checkout(99, 'owner', 7), error => error instanceof StripeError && error.status === 402
+  await assert.rejects(f.billing.checkout(99, 'owner', 1000, 7), error => error instanceof StripeError && error.status === 402
     && error.message === 'Stripe 402 api_key_expired on POST /checkout/sessions: Test failure.' && !error.message.includes('sk_test'));
 });
 
-test('each installation with a card is invoiced once for the month before, at the price the PR comments showed', async t => {
+test('a buyer who closes the page after paying is still credited by the hourly check, once, and an unpaid checkout expires', async t => {
   const f = setup(t);
-  const now = Date.UTC(2026, 9, 2, 3), august = Date.UTC(2026, 7, 10), october = Date.UTC(2026, 9, 1, 12);
-  f.repositories.setPlan(99, { freeReviews: 1, monthlyReviews: 10, multiplier: 2, minimumUsd: .05 }, 8);
-  f.repositories.setCustomer(99, 'cus_test1', 7); f.repositories.setCard(99, 'pm_test1', 'Visa ending 4242', '12/2030', 'billing@owner.test', 7);
-  // September: free, max(.10 x 2, .05) = .20, max(.01 x 2, .05) = .05, and one whose cost never settled.
-  [.10, .10, .01, null].forEach((usd, i) => f.review(f.first, Date.UTC(2026, 8, 3) + i, usd));
-  // Reviews outside September are not on its invoice.
-  f.review(f.first, august, 1); f.review(f.first, october, 1);
-  // A second organization with a card and no reviews owes nothing and is not invoiced.
-  const other = f.repositories.connect(55, 'other/app', 77);
-  f.repositories.setCustomer(77, 'cus_other', 7); f.repositories.setCard(77, 'pm_other', 'Visa ending 1881', '01/2031', null, 7);
+  await f.billing.checkout(99, 'owner', 2500, 7); await f.billing.checkout(99, 'owner', 1000, 7); await f.billing.checkout(99, 'owner', 5000, 7);
+  f.state.sessions = { cs_test_2: { status: 'expired' }, cs_test_3: { status: 'open', payment_status: 'unpaid' } };
+  await f.billing.reconcile();
+  assert.equal(f.repositories.balance(99), 25);
+  assert.deepEqual(['cs_test_1', 'cs_test_2', 'cs_test_3'].map(id => f.repositories.payment(id).state), ['paid', 'expired', 'open']);
+  // The buyer comes back after all: nothing is added twice.
+  assert.deepEqual(await f.billing.confirm(99, 'cs_test_1', 7), { usd: 25, card: 'Visa ending 4242' });
+  assert.equal(f.repositories.balance(99), 25);
+  // Settled checkouts are not asked about again; the open one is, until Stripe settles it.
+  const asked = () => f.state.calls.filter(call => call.method === 'GET').map(call => call.path.split('/')[3]);
+  const before = asked().length;
+  await f.billing.reconcile();
+  assert.deepEqual(asked().slice(before), ['cs_test_3']);
+});
 
-  // Usage is final only once the month is over and its last reviews settled, so the first day waits.
-  assert.deepEqual(await f.billing.invoice(Date.UTC(2026, 9, 1, 23)), []);
+test('each review past the free ones is paid from credit once, at the price its comment showed, and none starts at zero credit', t => {
+  const f = setup(t), now = Date.now(), { start } = month(now);
+  // 20 free reviews, whatever they cost.
+  const free = Array.from({ length: 20 }, (_, i) => f.review(f.first, start + i, 5));
+  assert.match(f.attempt(), /has no review credit left/);
+  f.repositories.grant(99, 1, 'test credit', 8);
+  // Any credit above zero starts a review: max(.30 x 2, .05) = .60 is taken once it settles, and
+  // taking it again, as every check of the balance does, changes nothing.
+  assert.equal(f.attempt(), true);
+  f.review(f.first, start + 20, .3);
+  for (let i = 0; i < 3; i++) chargeCredit(f.repositories, 99, now);
+  assert.equal(f.repositories.balance(99), .4);
+  // The review that starts on the last of the credit may take it below zero; then nothing starts.
+  assert.equal(f.attempt(), true);
+  f.review(f.first, start + 21, 1);
+  chargeCredit(f.repositories, 99, now);
+  assert.equal(Math.round(f.repositories.balance(99) * 100) / 100, -1.6);
+  assert.match(f.attempt(), /has no review credit left/);
+  // A review whose cost has not settled is not guessed at; it is taken when it settles.
+  f.repositories.grant(99, 10, 'test credit', 8);
+  const pending = f.review(f.first, start + 22, null);
+  chargeCredit(f.repositories, 99, now);
+  assert.equal(Math.round(f.repositories.balance(99) * 100) / 100, 8.4);
+  pending.settle(.01);
+  chargeCredit(f.repositories, 99, now);
+  assert.equal(Math.round(f.repositories.balance(99) * 100) / 100, 8.35);
+  // A plan changed later does not price a review again: the 20 free ones stay free.
+  f.repositories.setPlan(99, { freeReviews: 5, monthlyReviews: 1000, multiplier: 3, minimumUsd: .05 }, 8);
+  chargeCredit(f.repositories, 99, now);
+  assert.equal(Math.round(f.repositories.balance(99) * 100) / 100, 8.35);
+  assert.ok(free.every(({ id }) => f.repositories.credited(`review-${id}`)));
+});
+
+test('reviews from before credit replaced monthly invoices are never taken from credit', t => {
+  const f = setup(t);
+  f.repositories.setPlan(99, { freeReviews: 0, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, 8);
+  f.repositories.grant(99, 5, 'test credit', 8);
+  const september = f.review(f.first, Date.UTC(2026, 8, 30, 23), 1), october = f.review(f.first, Date.UTC(2026, 9, 1, 1), 1);
+  chargeCredit(f.repositories, 99, Date.UTC(2026, 9, 2));
+  assert.equal(f.repositories.balance(99), 3);
+  assert.deepEqual([f.repositories.credited(`review-${september.id}`), f.repositories.credited(`review-${october.id}`)], [false, true]);
+});
+
+test('auto top-up charges the saved card the chosen amount below $5, once even when a response is lost, and stops when the card fails', async t => {
+  const f = setup(t);
+  f.card(); f.repositories.grant(99, 6, 'test credit', 8);
+  f.repositories.setTopUp(99, 2500, 7);
+  await f.billing.topUp();
   assert.equal(f.state.calls.length, 0);
-  assert.deepEqual(await f.billing.invoice(now), ['in_test99']);
-  const [invoice, item, finalize] = f.state.calls;
-  // Prices are in US dollars whatever the Stripe account's default currency; Stripe refuses a USD
-  // item on an invoice that defaulted to CAD. The draft waits until its item is on it.
-  assert.deepEqual([invoice.path, invoice.params.customer, invoice.params.currency, invoice.params.collection_method, invoice.params.auto_advance, invoice.params.pending_invoice_items_behavior, invoice.key],
-    ['/invoices', 'cus_test1', 'usd', 'charge_automatically', 'false', 'exclude', 'atmin-invoice-99-2026-09']);
-  assert.deepEqual([item.path, item.params.invoice, item.params.amount, item.params.currency, item.params.description, item.key],
-    ['/invoiceitems', 'in_test99', '25', 'usd', '4 reviews in September 2026: 1 free, 2 billed, 1 not billed because their cost never settled', 'atmin-item-99-2026-09']);
-  assert.deepEqual([finalize.path, finalize.params.auto_advance, finalize.key], ['/invoices/in_test99/finalize', 'true', 'atmin-finalize-99-2026-09']);
-  assert.deepEqual(f.repositories.invoice(99, '2026-09'), { invoice: 'in_test99', amountCents: 25, state: 'finalized' });
-  assert.equal(f.repositories.invoices(99)[0].url, 'https://invoice.stripe.com/i/acct_1/in_test99');
-  assert.deepEqual(f.repositories.invoice(77, '2026-09'), { invoice: null, amountCents: 0, state: 'nothing-due' });
-  // The hourly loop calls this again; nobody is billed twice.
-  assert.deepEqual(await f.billing.invoice(now + 3_600_000), []);
-  assert.equal(f.state.calls.length, 3);
+  f.repositories.grant(99, -2, 'test debit', 8);
+  await f.billing.topUp();
+  // Made unconfirmed under an idempotency key, then confirmed off-session: in US dollars, for the
+  // chosen amount, on the saved card.
+  const [create, confirm] = f.state.calls;
+  assert.deepEqual([create.path, create.key, create.params.amount, create.params.currency, create.params.customer, create.params.payment_method, create.params.confirm],
+    ['/payment_intents', 'atmin-topup-99-1', '2500', 'usd', 'cus_test1', 'pm_test1', undefined]);
+  assert.deepEqual([confirm.path, confirm.params.off_session, confirm.key], ['/payment_intents/pi_test1/confirm', 'true', 'atmin-topup-99-1-confirm']);
+  assert.equal(f.repositories.balance(99), 29);
+  assert.deepEqual(f.repositories.creditHistory(99)[0], { ...f.repositories.creditHistory(99)[0], reference: 'atmin-topup-99-1', kind: 'top-up', usd: 25, receipt });
+  await f.billing.topUp();
+  assert.equal(f.state.calls.length, 2);
 
-  // A failure midway leaves the month for an operator instead of retrying into a double charge.
-  f.review(other, Date.UTC(2026, 9, 5), .10);
-  f.repositories.setPlan(77, { freeReviews: 0, monthlyReviews: 10, multiplier: 2, minimumUsd: .05 }, 8);
-  f.state.fail = { 'POST /invoices/in_test77/finalize': 'invoice_finalization_error' };
-  assert.deepEqual(await f.billing.invoice(Date.UTC(2026, 10, 2, 3)), []);
-  assert.equal(f.repositories.invoice(99, '2026-10').state, 'nothing-due');
-  assert.deepEqual(f.repositories.invoice(77, '2026-10'), { invoice: null, amountCents: 20, state: 'creating' });
+  // Stripe made the intent but the answer was lost: asking again with the same key gets the
+  // same intent, so one charge.
+  f.repositories.grant(99, -26, 'test debit', 8);
+  f.state.lost = 'POST /payment_intents';
+  await f.billing.topUp();
+  assert.deepEqual([f.repositories.payment('atmin-topup-99-2').state, f.repositories.payment('atmin-topup-99-2').intent, f.repositories.balance(99)], ['open', null, 3]);
+  await f.billing.topUp();
+  assert.deepEqual([f.state.intents.size, f.repositories.balance(99)], [2, 28]);
+  // Stripe charged the card but the answer was lost: the next check reads the intent and
+  // credits it without confirming it again.
+  f.repositories.grant(99, -25, 'test debit', 8);
+  f.state.lost = 'POST /payment_intents/pi_test3/confirm';
+  await f.billing.topUp();
+  assert.deepEqual([f.repositories.payment('atmin-topup-99-3').state, f.repositories.balance(99)], ['open', 3]);
+  await f.billing.reconcile();
+  assert.deepEqual([f.repositories.payment('atmin-topup-99-3').state, f.repositories.balance(99)], ['paid', 28]);
+  assert.equal(f.state.calls.filter(call => call.path === '/payment_intents/pi_test3/confirm').length, 1);
+  assert.equal(f.state.intents.size, 3);
+
+  // A declined card stops auto top-up, says why, and nothing charges it again.
+  f.repositories.grant(99, -25, 'test debit', 8);
+  f.state.fail = { 'POST /payment_intents/pi_test4/confirm': 'card_declined' };
+  await f.billing.topUp();
+  assert.deepEqual([f.repositories.payment('atmin-topup-99-4').state, f.repositories.billing(99).topUpFailed, f.repositories.balance(99)], ['failed', 'The card was declined.', 3]);
+  assert.deepEqual(f.repositories.toppedUp(), []);
   const calls = f.state.calls.length;
-  delete f.state.fail;
-  assert.deepEqual(await f.billing.invoice(Date.UTC(2026, 10, 2, 4)), []);
+  await f.billing.topUp(); await f.billing.reconcile();
   assert.equal(f.state.calls.length, calls);
-});
-
-test('a charge the card fails stops the default plan at its free reviews until the invoice is paid, and a new card pays it', async t => {
-  const f = setup(t), now = Date.UTC(2026, 9, 2, 3);
-  f.repositories.setCustomer(99, 'cus_test1', 7); f.repositories.setCard(99, 'pm_test1', 'Visa ending 4242', '12/2030', 'billing@owner.test', 7);
-  for (let i = 0; i < 25; i++) f.review(f.first, Date.UTC(2026, 8, 3) + i, .10);
-  assert.deepEqual(await f.billing.invoice(now), ['in_test99']);
-  const url = 'https://invoice.stripe.com/i/acct_1/in_test99', checks = () => f.state.calls.filter(call => call.method === 'GET' && call.path === '/invoices/in_test99').length;
-  // Stripe charges the card about an hour after finalizing; until then nothing is owed.
-  await f.billing.refresh(now + 1000);
-  assert.deepEqual([f.repositories.invoices(99)[0].state, f.repositories.limit(99).limit], ['finalized', 1000]);
-  // A declined charge leaves the invoice open with an attempt: the default plan falls back to the
-  // free reviews, the same as having no card, and the hourly check keeps asking.
-  f.state.invoices = { in_test99: { id: 'in_test99', status: 'open', attempt_count: 1, hosted_invoice_url: url } };
-  await f.billing.refresh(now + 3_600_000);
-  assert.deepEqual(f.repositories.invoices(99)[0], { month: '2026-09', invoice: 'in_test99', amountCents: 100, reviews: 25, state: 'failed', url });
-  assert.deepEqual(f.repositories.limit(99), { plan: f.repositories.plan(99).plan, limit: 20, needsCard: true, unpaid: '2026-09' });
-  // Paid on Stripe's page, or by one of Stripe's retries: the limit lifts on the next check.
-  f.state.invoices.in_test99 = { id: 'in_test99', status: 'paid', attempt_count: 2, hosted_invoice_url: url };
-  await f.billing.refresh(now + 7_200_000);
-  assert.deepEqual([f.repositories.invoices(99)[0].state, f.repositories.limit(99).limit], ['paid', 1000]);
-  // A paid invoice is settled; nothing asks about it again.
-  const asked = checks();
-  await f.billing.refresh(now + 10_800_000);
-  assert.equal(checks(), asked);
-
-  // Again, but the admin replaces the card: the new one is charged for the invoice at once.
-  f.repositories.settleInvoice(99, '2026-09', 'failed', url, now);
-  f.state.method = 'pm_test2';
-  await f.billing.confirm(99, 'cs_test_abc', 7);
-  const pay = f.state.calls.at(-1);
-  assert.deepEqual([pay.method, pay.path, pay.params.payment_method, pay.key], ['POST', '/invoices/in_test99/pay', 'pm_test2', 'atmin-pay-in_test99-pm_test2']);
-  assert.deepEqual([f.repositories.invoices(99)[0].state, f.repositories.limit(99).unpaid], ['paid', null]);
-  // A new card that is declined too is still saved; the invoice stays owed.
-  f.repositories.settleInvoice(99, '2026-09', 'uncollectible', url, now);
-  f.state.method = 'pm_test3'; f.state.fail = { 'POST /invoices/in_test99/pay': 'card_declined' };
-  assert.equal(await f.billing.confirm(99, 'cs_test_abc', 7), 'Visa ending 4242');
-  assert.deepEqual([f.repositories.billing(99).paymentMethod, f.repositories.limit(99).unpaid], ['pm_test3', '2026-09']);
+  // Turning it on again tries once more; a bank that wants the card holder stops it again.
+  f.state.fail = { 'POST /payment_intents/pi_test5/confirm': 'authentication_required' };
+  f.repositories.setTopUp(99, 1000, 7);
+  await f.billing.topUp();
+  assert.equal(f.repositories.billing(99).topUpFailed, 'The card’s bank asked the card holder to approve the charge.');
+  // A purchase saves a card that just paid, so auto top-up runs again.
   delete f.state.fail;
-
-  // An operator voiding the invoice in Stripe ends what is owed; a status billing does not know,
-  // a failed check and a page that is not Stripe's change nothing.
-  f.state.invoices.in_test99 = { id: 'in_test99', status: 'void', hosted_invoice_url: 'https://evil.test/pay' };
-  await f.billing.refresh(now + 14_400_000);
-  assert.deepEqual([f.repositories.invoices(99)[0].state, f.repositories.invoices(99)[0].url, f.repositories.limit(99).limit], ['void', null, 1000]);
-  f.repositories.settleInvoice(99, '2026-09', 'failed', url, now);
-  f.state.invoices.in_test99 = { id: 'in_test99', status: 'draft' };
-  await f.billing.refresh(now + 18_000_000);
-  f.state.fail = { 'GET /invoices/in_test99': 'rate_limit' };
-  await f.billing.refresh(now + 21_600_000);
-  assert.deepEqual([f.repositories.invoices(99)[0].state, f.repositories.invoices(99)[0].url], ['failed', url]);
+  await f.billing.checkout(99, 'owner', 1000, 7); f.state.amount = 1000; f.state.method = 'pm_test2';
+  await f.billing.confirm(99, 'cs_test_1', 7);
+  assert.deepEqual([f.repositories.billing(99).topUpFailed, f.repositories.toppedUp(), f.repositories.balance(99)], [null, [99], 13]);
 });
 
-test('a card that has not paid yet runs up charges only to its tier\'s ceiling, which rises with what the organization has paid', async t => {
-  // A stolen or empty card is only found out when the first invoice is charged, after the month
-  // ends, so what a card that never paid can run up is what atmin can lose to it.
-  const f = setup(t), now = Date.now(), { start, end } = month(now);
-  f.repositories.setCustomer(99, 'cus_test1', 7); f.repositories.setCard(99, 'pm_test1', 'Visa ending 4242', '12/2030', 'billing@owner.test', 7);
-  let n = 1000;
-  const attempt = () => { f.first.store.enqueue(`attempt-${++n}`, n); return f.repositories.reserve(f.first, f.first.store.next('worker'), 'worker', 100); };
-  const paid = (month, cents, state = 'paid') => { f.repositories.startInvoice(99, month, cents, 1, 'creating'); f.repositories.finishInvoice(99, month, `in_${month.replace('-', '')}`, null); f.repositories.settleInvoice(99, month, state, null, now); };
-  assert.deepEqual(f.repositories.spending(99), { paidUsd: 0, monthlyUsd: 50, next: { paidUsd: 10, monthlyUsd: 250 } });
-  // 20 free reviews, then 24 at $1 of cost x 2: $48 charged, under the $50 ceiling.
-  for (let i = 0; i < 44; i++) f.review(f.first, start + i, i < 20 ? 5 : 1);
-  assert.equal(attempt(), true);
-  f.review(f.first, start + 44, 1);
-  const label = new Date(start).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  const refused = `This organization’s charges reached its $50 monthly spending limit for ${label}. The limit rises to $250 a month once the organization has paid $10 in total. A repository admin can see the limit and invoices on the atmin dashboard (${origin}/billing?installation=99). Reviews resume on ${new Date(end).toISOString().slice(0, 10)}, or sooner if atmin raises the limit. No inference was started.`;
-  assert.equal(attempt(), refused);
-  // Invoices of a few cents, or ones the card did not pay, are not standing.
-  paid('2026-01', 999); paid('2026-02', 5000, 'failed'); paid('2026-03', 5000, 'uncollectible'); paid('2026-04', 5000, 'void');
-  assert.deepEqual(f.repositories.spending(99), { paidUsd: 9.99, monthlyUsd: 50, next: { paidUsd: 10, monthlyUsd: 250 } });
-  // A failed invoice also stops the card at the free reviews; void it to test the ceiling alone.
-  for (const month of ['2026-02', '2026-03']) f.repositories.settleInvoice(99, month, 'void', null, now);
-  assert.equal(attempt(), refused);
-  paid('2026-05', 1);
-  assert.deepEqual(f.repositories.spending(99), { paidUsd: 10, monthlyUsd: 250, next: { paidUsd: 250, monthlyUsd: null } });
-  assert.equal(attempt(), true);
-  // $250 paid leaves only the plan's review limit.
-  paid('2026-06', 24_000);
-  assert.deepEqual(f.repositories.spending(99), { paidUsd: 250, monthlyUsd: null, next: null });
-  f.review(f.first, start + 45, 200);
-  assert.equal(attempt(), true);
-  // An operator's plan has no ceiling, paid or not.
-  f.repositories.setPlan(77, { freeReviews: 0, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, 8);
-  assert.deepEqual(f.repositories.spending(77), { paidUsd: 0, monthlyUsd: null, next: null });
+test('operators add or take credit with a note, within bounds', t => {
+  const f = setup(t);
+  for (const [usd, note] of [[0, 'x'], [NaN, 'x'], [1000.01, 'x'], [-1000.01, 'x'], ['5', 'x'], [5, ''], [5, ' '], [5, 'x'.repeat(201)], [5, undefined]]) {
+    assert.throws(() => f.repositories.grant(99, usd, note, 8), /Invalid grant/);
+  }
+  assert.equal(f.repositories.grant(99, 12.5, ' Mason pilot ', 8), 12.5);
+  assert.equal(f.repositories.grant(99, -2.5, 'correction', 8), 10);
+  assert.deepEqual(f.repositories.creditHistory(99).map(({ kind, usd, by, note }) => [kind, usd, by, note]), [['grant', -2.5, 8, 'correction'], ['grant', 12.5, 8, 'Mason pilot']]);
+});
+
+test('the PR comment says what credit is left and warns when it runs low or out, unless auto top-up refills it', () => {
+  const url = `${origin}/billing?installation=99`, paid = { month: '2026-10', index: 24, freeReviews: 20, free: false, usd: .1 };
+  const line = credit => priceLine({ ...paid, credit }), head = '**This review costs $0.10**. It is review 25 in October 2026, after 20 free.';
+  assert.equal(line({ usd: 12.3, topUp: false, url }), `${head} It was paid from review credit, which has $12.30 left.`);
+  assert.equal(line({ usd: 1.99, topUp: false, url }), `${head} It was paid from review credit, which has $1.99 left. Credit is running low; a repository admin can [buy more](${url}).`);
+  // Below zero reads as none left; without Stripe there is nowhere to link.
+  assert.equal(line({ usd: -.04, topUp: false }), `${head} It was paid from review credit, which has $0.00 left. Reviews stop until atmin adds credit.`);
+  assert.equal(line({ usd: 1.99, topUp: true, url }), `${head} It was paid from review credit, which has $1.99 left.`);
+  // Free reviews mention credit only on the last one, and only when there is none.
+  const free = { month: '2026-10', index: 18, freeReviews: 20, free: true, usd: 0 };
+  assert.equal(priceLine({ ...free, credit: { usd: 0, topUp: false, url } }), '**This review is free:** 19 of 20 free reviews in October 2026.');
+  assert.equal(priceLine({ ...free, index: 19, credit: { usd: 3, topUp: false, url } }), '**This review is free:** 20 of 20 free reviews in October 2026.');
+  assert.equal(priceLine({ ...free, index: 19, credit: { usd: 0, topUp: true, url } }), '**This review is free:** 20 of 20 free reviews in October 2026.');
 });

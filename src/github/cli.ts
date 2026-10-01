@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     ? readDashboardConfig(process.env.REVIEW_DASHBOARD_CONFIG, requiredEnv('GITHUB_OAUTH_CLIENT_SECRET')) : undefined;
   const owner = randomUUID();
   if (!store.acquire(owner)) throw new Error('A pilot service already owns this state directory');
-  // Cards and monthly invoices need a Stripe key; without one the default plan stops at its free reviews.
+  // Buying credit needs a Stripe key; without one, reviews past the free ones run only on credit an operator adds.
   const repositories = dashboardConfig ? new Repositories(config, store, dashboardConfig.models, owner, process.env.STRIPE_SECRET_KEY ? dashboardConfig.origin : undefined) : undefined;
   const billing = repositories && dashboardConfig && process.env.STRIPE_SECRET_KEY ? new Billing(new Stripe(process.env.STRIPE_SECRET_KEY), repositories, dashboardConfig.origin) : undefined;
   const initial: Repository = repositories?.entries.get(config.repositoryId) ?? { config, store, settings: new ReviewSettings(config, store) };
@@ -91,8 +91,8 @@ async function main(): Promise<void> {
           try { expireRuns(entry.config, entry.store); }
           catch (error) { process.stderr.write(`atmin review: deleting old run records in repository ${entry.config.repositoryId} failed: ${failureCause(error)}\n`); }
         }
-        if (billing) await billing.invoice().catch(error => process.stderr.write(`atmin review: monthly invoicing failed: ${failureCause(error)}\n`));
-        if (billing) await billing.refresh().catch(error => process.stderr.write(`atmin review: checking invoices with Stripe failed: ${failureCause(error)}\n`));
+        if (billing) await billing.reconcile().catch(error => process.stderr.write(`atmin review: checking credit payments with Stripe failed: ${failureCause(error)}\n`));
+        if (billing) await billing.topUp().catch(error => process.stderr.write(`atmin review: auto top-up failed: ${failureCause(error)}\n`));
       }
       const ready = [...entries.values()];
       let worked = false;
@@ -100,6 +100,8 @@ async function main(): Promise<void> {
         const entry = ready[cursor++ % ready.length]!;
         if (await runtime(entry).worker.tick()) { worked = true; break; }
       }
+      // A finished review may have taken credit below the auto top-up threshold.
+      if (worked && billing) await billing.topUp().catch(error => process.stderr.write(`atmin review: auto top-up failed: ${failureCause(error)}\n`));
       if (!worked && !stopping) await new Promise(done => setTimeout(done, 500));
     }
   } finally {
