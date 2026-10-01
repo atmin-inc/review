@@ -11,9 +11,9 @@ alpha: model quality and severity calibration are still being measured.
 On macOS or Linux:
 
 ```sh
-brew install atmin-inc/tap/atmin
+brew install atmin-inc/tap/atmin-review
 gh auth login
-cp "$(brew --prefix atmin-inc/tap/atmin)/share/atmin/profiles/smoke-openrouter-free.json" ./review-profile.json
+cp "$(brew --prefix atmin-inc/tap/atmin-review)/share/atmin-review/profiles/smoke-openrouter-free.json" ./review-profile.json
 ```
 
 Set `OPENROUTER_API_KEY` in your environment, then run:
@@ -23,10 +23,12 @@ atmin review https://github.com/OWNER/REPO/pull/123 \
   --profile ./review-profile.json --out ./private-review
 ```
 
-Homebrew installs Node, Git and the GitHub CLI. The
-[tap documentation](https://github.com/atmin-inc/homebrew-tap) also explains how
-to coexist with another `atmin` installation. All commands below are available
-through `atmin-review` and `atmin-review-github` without the `npx` prefix.
+Homebrew installs Node, Git, the GitHub CLI and the `atmin` command. `atmin <tool>`
+runs the installed `atmin-<tool>` binary, so other atmin tools sit beside this one:
+`atmin review …` runs `atmin-review`, and `atmin code-review-runner …` runs your own
+review runner. All commands below are available as `atmin review` (or
+`atmin-review`) without the `npx` prefix. If you installed the older
+`atmin-inc/tap/atmin` formula, run `brew uninstall atmin` first.
 
 ### npm
 
@@ -34,7 +36,7 @@ Requires Node 24 or newer, Git, and an authenticated GitHub CLI (`gh auth login`
 Install the versioned release in a fresh directory:
 
 ```sh
-npm install @atmin.ai/review@0.1.0-alpha.2
+npm install @atmin.ai/review@0.1.0-alpha.3
 npx atmin-review --help
 cp node_modules/@atmin.ai/review/profiles/smoke-openrouter-free.json ./review-profile.json
 ```

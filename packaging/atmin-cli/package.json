@@ -1,0 +1,11 @@
+{
+  "name": "@atmin.ai/cli",
+  "version": "0.1.0",
+  "description": "atmin: one command for every atmin tool (atmin review, atmin code-review-runner, ...)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "atmin": "atmin.mjs" },
+  "files": ["atmin.mjs", "lib.mjs", "README.md"],
+  "engines": { "node": ">=24.0.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/atmin-inc/review.git", "directory": "packaging/atmin-cli" }
+}
