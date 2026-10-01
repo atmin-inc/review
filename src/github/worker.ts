@@ -47,6 +47,9 @@ export class Worker {
   async tick(): Promise<boolean> {
     const job = this.store.next(this.owner);
     if (!job) return false;
+    // How long reviews wait for the one review slot: the signal that the service needs to run
+    // reviews in parallel.
+    if (job.state === 'running') process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} started after ${Math.round((Date.now() - job.created) / 1000)} s in the queue\n`);
     this.abort = new AbortController();
     const monitor = setInterval(() => { if (!this.store.current(job, this.owner)) this.abort?.abort(); }, 250);
     try { await this.work(job, this.abort.signal); }

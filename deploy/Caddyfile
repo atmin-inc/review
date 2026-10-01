@@ -1,0 +1,5 @@
+# TLS and the public name. The worker listens on 127.0.0.1 at the port in pilot.json.
+review.atmin.ai {
+	encode gzip
+	reverse_proxy 127.0.0.1:{$ATMIN_REVIEW_PORT}
+}

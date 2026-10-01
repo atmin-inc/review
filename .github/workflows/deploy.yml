@@ -1,0 +1,45 @@
+name: deploy
+# Deploys main to review.atmin.ai once CI ("review alpha") passed on it. The host's
+# release.sh builds the commit, switches to it, and switches back if it does not come up healthy.
+on:
+  workflow_run:
+    workflows: ['review alpha']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to deploy (40 characters)
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+    steps:
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Not a commit sha: $SHA"; exit 1; }
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy && chmod 0600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -o StrictHostKeyChecking=yes "deploy@$DEPLOY_HOST" sudo /opt/atmin-review/release.sh "$SHA"
+      - name: Check the public site
+        run: |
+          for i in 1 2 3 4 5; do
+            if [ "$(curl -fsS --max-time 5 https://review.atmin.ai/healthz)" = ok ]; then exit 0; fi
+            sleep 5
+          done
+          echo "https://review.atmin.ai/healthz is not ok"; exit 1
