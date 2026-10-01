@@ -65,7 +65,7 @@ const transport = temperature === undefined ? globalThis.fetch : (url, options) 
 // does not reach it, because the CLI has no such setting.
 if (temperature !== undefined && profile.provider === 'claude-local') throw new Error('--temperature is not available for claude-local');
 const model = profile.provider === 'claude-local'
-  ? (await import('./claude-model.mjs')).claudeModel(profile) : openRouterModel(profile, undefined, transport);
+  ? (await import('../dist/models/claude-cli.js')).claudeModel(profile) : openRouterModel(profile, undefined, transport);
 for (let n = 1; n <= samples; n++) {
   const dir = join(outDir, `${id}-r${n}`);
   if (existsSync(join(dir, 'verification.json'))) continue; // resumable
