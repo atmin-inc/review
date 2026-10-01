@@ -48,7 +48,7 @@ function Sidebar({ session, installation, route, onSignOut }) {
   const links = [
     { href: routeHref({ view: 'repositories', installation: installation.id }), label: 'Repositories', icon: FolderGit2, active: route.view === 'repositories' || route.view === 'repository' },
     { href: routeHref({ view: 'usage', installation: installation.id }), label: 'Usage', icon: Gauge, active: route.view === 'usage' },
-    // Only when atmin has a Stripe key; without one no organization has a card or invoices.
+    // Only when atmin has a Stripe key; without one no credit can be bought.
     ...(installation.billing ? [{ href: routeHref({ view: 'billing', installation: installation.id }), label: 'Billing', icon: CreditCard, active: route.view === 'billing' }] : []),
     ...(session.operator ? [{ href: '/admin', label: 'Admin', icon: Shield, active: route.view === 'admin' }] : []),
   ];

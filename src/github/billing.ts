@@ -1,5 +1,5 @@
-import { month, unpaidStates, type InvoiceState, type Repositories } from './repositories.js';
-import { monthlyUsage } from './dashboard-view.js';
+import type { PaymentRecord, Repositories } from './repositories.js';
+import { chargeCredit } from './dashboard-view.js';
 
 // A failed Stripe call names its method, path, Stripe's error code and Stripe's own sentence
 // (Stripe masks keys in it), never the rest of the body, so a log line says why a step broke.
@@ -23,125 +23,145 @@ export class Stripe {
   }
 }
 
+// Credit is sold in these amounts, in US cents, and auto top-up buys one of them whenever an
+// organization's credit falls below `topUpBelowUsd`.
+export const creditAmounts = [1000, 2500, 5000, 10000];
+export const topUpBelowUsd = 5;
+
 const id = (prefix: string) => new RegExp(`^${prefix}_[A-Za-z0-9_]{1,250}$`);
+const checkoutId = /^cs_(test|live)_[A-Za-z0-9]{1,250}$/;
 const brands: Record<string, string> = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', discover: 'Discover', diners: 'Diners Club', jcb: 'JCB', unionpay: 'UnionPay' };
 const log = (line: string) => process.stderr.write(`atmin review: ${line}\n`);
-// Stripe's page for one invoice, where the customer sees it and can pay it; nothing else is linked.
-const hostedUrl = (value: unknown) => typeof value === 'string' && value.startsWith('https://invoice.stripe.com/') && value.length <= 2048 ? value : null;
-// Stripe's invoice status, in the words the worker acts on. An open invoice that Stripe has
-// tried to charge failed on the card, and Stripe may still retry it.
-function invoiceState(invoice: { status?: unknown; attempt_count?: unknown }): InvoiceState | null {
-  if (invoice.status === 'paid' || invoice.status === 'void' || invoice.status === 'uncollectible') return invoice.status;
-  if (invoice.status === 'open') return Number(invoice.attempt_count) > 0 ? 'failed' : 'finalized';
-  return null;
+const failure = (error: unknown) => error instanceof Error ? error.message.slice(0, 200) : 'non-error thrown';
+// Stripe's receipt page for one charge; nothing else is linked.
+const receiptUrl = (value: unknown) => typeof value === 'string' && value.startsWith('https://pay.stripe.com/receipts/') && value.length <= 2048 ? value : null;
+// A saved card as the Billing page names it, or null for anything else.
+function cardOf(method: any): { id: string; card: string; expires: string } | null {
+  if (!id('pm').test(method?.id) || typeof method.card?.last4 !== 'string' || !/^\d{4}$/.test(method.card.last4) || !Number.isInteger(method.card.exp_month) || method.card.exp_month < 1
+    || method.card.exp_month > 12 || !Number.isInteger(method.card.exp_year) || method.card.exp_year < 2000 || method.card.exp_year > 2200) return null;
+  return { id: method.id, card: `${brands[method.card.brand] ?? 'Card'} ending ${method.card.last4}`, expires: `${String(method.card.exp_month).padStart(2, '0')}/${method.card.exp_year}` };
 }
+// Why a top-up failed, in words for the Billing page, from Stripe's error code.
+const topUpFailure = (code: string) => code === 'authentication_required' || code === 'requires_action' ? 'The card’s bank asked the card holder to approve the charge.'
+  : code === 'expired_card' ? 'The card has expired.' : code === 'card_declined' || code === 'requires_payment_method' ? 'The card was declined.' : 'Stripe could not charge the card.';
 
-// Cards and monthly invoices through Stripe. A card is saved with Checkout in setup mode, so
-// nothing is charged then. On the second day of each UTC month, each installation with a card
-// is invoiced once for the month before, in US dollars, at the price the PR comments showed
-// under the plan in force when the invoice is made. Stripe charges the card and emails the
-// receipt, or the failed-payment notice, to the address entered in Checkout; the worker asks
-// Stripe hourly how each open invoice stands (see `refresh`), and a failed one stops the
-// default plan at its free reviews until it is paid.
+// Prepaid review credit through Stripe, in US dollars. An admin buys credit on a Checkout page,
+// which also saves the card for auto top-up; the purchase is credited when the browser returns
+// (`confirm`), or by the hourly check (`reconcile`) when it never does. With auto top-up on, the
+// saved card is charged off-session whenever credit falls below $5 (`topUp`); a charge the card
+// does not pay stops auto top-up until an admin buys credit or turns it on again. Each payment is
+// a row written before Stripe is asked to take it, and a top-up is created unconfirmed, recorded,
+// then confirmed, so a retried or interrupted payment never charges twice. Stripe emails the
+// receipt to the address entered in Checkout.
 export class Billing {
   constructor(private stripe: Stripe, private repositories: Repositories, private origin: string) {}
-  // The Checkout page for saving a card; the browser is sent there.
-  async checkout(installation: number, account: string, by: number): Promise<string> {
-    let customer = this.repositories.billing(installation)?.customer;
-    if (!customer) {
-      const created = await this.stripe.call('POST', '/customers', { name: account, 'metadata[installation]': String(installation), 'metadata[account]': account }, `atmin-customer-${installation}`);
-      if (!id('cus').test(created.id)) throw new StripeError(200, 'POST /customers', 'invalid customer');
-      customer = created.id as string;
-      this.repositories.setCustomer(installation, customer, by);
-      log(`Stripe customer ${customer} created for installation ${installation} by GitHub user ${by}`);
-    }
-    const page = `${this.origin}/billing?installation=${installation}`;
-    const session = await this.stripe.call('POST', '/checkout/sessions', { mode: 'setup', customer, 'payment_method_types[0]': 'card',
+  private async customer(installation: number, account: string, by: number): Promise<string> {
+    const existing = this.repositories.billing(installation)?.customer;
+    if (existing) return existing;
+    const created = await this.stripe.call('POST', '/customers', { name: account, 'metadata[installation]': String(installation), 'metadata[account]': account }, `atmin-customer-${installation}`);
+    if (!id('cus').test(created.id)) throw new StripeError(200, 'POST /customers', 'invalid customer');
+    this.repositories.setCustomer(installation, created.id, by);
+    log(`Stripe customer ${created.id} created for installation ${installation} by GitHub user ${by}`);
+    return created.id;
+  }
+  // The Checkout page for buying `cents` of credit; the browser is sent there.
+  async checkout(installation: number, account: string, cents: number, by: number): Promise<string> {
+    if (!creditAmounts.includes(cents)) throw new StripeError(400, 'checkout', 'invalid amount');
+    const customer = await this.customer(installation, account, by), page = `${this.origin}/billing?installation=${installation}`;
+    // The account's default currency (CAD for atmin) must not decide the price's.
+    const session = await this.stripe.call('POST', '/checkout/sessions', { mode: 'payment', customer, 'payment_method_types[0]': 'card',
+      'line_items[0][quantity]': '1', 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(cents),
+      'line_items[0][price_data][product_data][name]': 'atmin review credit', 'payment_intent_data[setup_future_usage]': 'off_session',
+      'payment_intent_data[description]': `atmin review credit for ${account}`, 'payment_intent_data[metadata][installation]': String(installation),
       success_url: `${page}&checkout={CHECKOUT_SESSION_ID}`, cancel_url: page, 'metadata[installation]': String(installation) });
-    if (typeof session.url !== 'string' || !session.url.startsWith('https://checkout.stripe.com/')) throw new StripeError(200, 'POST /checkout/sessions', 'invalid session');
-    log(`card checkout started for installation ${installation} by GitHub user ${by}`);
+    if (!checkoutId.test(session.id) || typeof session.url !== 'string' || !session.url.startsWith('https://checkout.stripe.com/')) throw new StripeError(200, 'POST /checkout/sessions', 'invalid session');
+    this.repositories.startPayment(session.id, installation, 'checkout', cents, by);
+    log(`credit checkout ${session.id} for ${cents} cents started for installation ${installation} by GitHub user ${by}`);
     return session.url;
   }
-  // After Checkout returns: the session must belong to this installation's customer and have
-  // saved a card, which becomes the customer's default for invoices. Any invoice the old card
-  // failed to pay is charged to the new one straight away.
-  async confirm(installation: number, session: string, by: number): Promise<string> {
-    const record = this.repositories.billing(installation);
-    if (!record || !/^cs_(test|live)_[A-Za-z0-9]{1,250}$/.test(session)) throw new StripeError(400, 'confirm', 'unknown checkout');
-    const found = await this.stripe.call('GET', `/checkout/sessions/${session}`, { 'expand[0]': 'setup_intent.payment_method', 'expand[1]': 'customer' });
-    const method = found.setup_intent?.payment_method;
-    if (found.customer?.id !== record.customer || found.mode !== 'setup' || found.status !== 'complete' || found.setup_intent?.status !== 'succeeded'
-      || !id('pm').test(method?.id) || typeof method.card?.last4 !== 'string' || !/^\d{4}$/.test(method.card.last4)
-      || !Number.isInteger(method.card.exp_month) || method.card.exp_month < 1 || method.card.exp_month > 12 || !Number.isInteger(method.card.exp_year) || method.card.exp_year < 2000 || method.card.exp_year > 2200) throw new StripeError(409, `GET /checkout/sessions/${session}`, 'checkout not complete');
-    await this.stripe.call('POST', `/customers/${record.customer}`, { 'invoice_settings[default_payment_method]': method.id }, `atmin-default-${method.id}`);
-    const card = `${brands[method.card.brand] ?? 'Card'} ending ${method.card.last4}`, expires = `${String(method.card.exp_month).padStart(2, '0')}/${method.card.exp_year}`;
+  // After Checkout returns: credits the purchase if Stripe took the payment, and says how much
+  // was added and which card was saved. Returning twice adds nothing more.
+  async confirm(installation: number, session: string, by: number): Promise<{ usd: number; card: string | null }> {
+    const row = checkoutId.test(session) ? this.repositories.payment(session) : null;
+    if (!row || row.installation !== installation || row.kind !== 'checkout') throw new StripeError(400, 'confirm', 'unknown checkout');
+    if (row.state !== 'paid' && !await this.settleCheckout(row, by)) throw new StripeError(409, `GET /checkout/sessions/${session}`, 'checkout not paid');
+    return { usd: row.cents / 100, card: this.repositories.billing(installation)?.card ?? null };
+  }
+  // Asks Stripe how one checkout stands; true once it is paid and credited.
+  private async settleCheckout(row: PaymentRecord, by: number | null): Promise<boolean> {
+    const found = await this.stripe.call('GET', `/checkout/sessions/${row.reference}`, { 'expand[0]': 'payment_intent.payment_method', 'expand[1]': 'payment_intent.latest_charge', 'expand[2]': 'customer' });
+    if (found.status === 'expired') { this.repositories.finishPayment(row.reference, 'expired'); log(`credit checkout ${row.reference} for installation ${row.installation} expired unpaid`); return false; }
+    if (found.status !== 'complete' || found.payment_status !== 'paid') return false;
+    const intent = found.payment_intent;
+    if (found.customer?.id !== this.repositories.billing(row.installation)?.customer || found.mode !== 'payment' || found.amount_total !== row.cents || found.currency !== 'usd' || intent?.status !== 'succeeded') {
+      // Not expected from Stripe; marked failed so the hourly check stops asking, and logged once.
+      this.repositories.finishPayment(row.reference, 'failed');
+      log(`credit checkout ${row.reference} for installation ${row.installation} is paid but does not match what was sold (customer, amount, currency or payment); marked failed and nothing added, check it in Stripe`);
+      return false;
+    }
+    this.repositories.addCredit(row.installation, row.reference, 'purchase', row.cents * 10_000, row.by, null, receiptUrl(intent.latest_charge?.receipt_url));
+    this.repositories.finishPayment(row.reference, 'paid');
+    const card = cardOf(intent.payment_method);
     // Checkout puts the address it collected on a customer that had none.
     const email = typeof found.customer.email === 'string' && found.customer.email.length <= 512 ? found.customer.email : null;
-    this.repositories.setCard(installation, method.id, card, expires, email, by);
-    log(`card ${method.id} saved for installation ${installation} by GitHub user ${by}; ${email ? 'Stripe has an email for receipts' : 'Stripe has no email for this customer, so it sends no receipts'}`);
-    await this.payUnpaid(installation, method.id);
-    return card;
+    if (card) this.repositories.setCard(row.installation, card.id, card.card, card.expires, email, by);
+    log(`credit checkout ${row.reference} paid: ${row.cents} cents added to installation ${row.installation}${card ? `; card ${card.id} saved for auto top-up` : '; no card saved'}`);
+    return true;
   }
-  // Charges each invoice the installation still owes to `paymentMethod`. The card is saved
-  // either way: a declined or failed charge leaves the invoice owed, the Billing page still shows
-  // it, and the hourly check picks up whatever Stripe does next.
-  async payUnpaid(installation: number, paymentMethod: string): Promise<void> {
-    for (const row of this.repositories.invoices(installation).filter(row => row.invoice && unpaidStates.includes(row.state))) {
+  // Hourly: settles every checkout and top-up whose outcome is not known yet, so a buyer who
+  // closed the page after paying is still credited.
+  async reconcile(): Promise<void> {
+    for (const row of this.repositories.openPayments()) {
+      try { if (row.kind === 'checkout') await this.settleCheckout(row, row.by); else await this.settleTopUp(row); }
+      catch (error) { log(`checking ${row.kind} ${row.reference} for installation ${row.installation} failed: ${failure(error)}`); }
+    }
+  }
+  // Buys the chosen amount for each installation with auto top-up on whose credit is below $5,
+  // or moves on a top-up still open. Called after each review, hourly, and when an admin turns
+  // auto top-up on (`only`).
+  async topUp(only?: number, now = Date.now()): Promise<void> {
+    for (const installation of this.repositories.toppedUp().filter(i => only === undefined || i === only)) {
       try {
-        const paid = await this.stripe.call('POST', `/invoices/${row.invoice}/pay`, { payment_method: paymentMethod }, `atmin-pay-${row.invoice}-${paymentMethod}`);
-        this.settle(installation, row.month, row.state, paid, Date.now());
-      } catch (error) {
-        log(`invoice ${row.invoice} for installation ${installation} for ${row.month} is still unpaid after charging the new card: ${error instanceof Error ? error.message.slice(0, 200) : 'non-error thrown'}`);
-      }
+        const open = this.repositories.openPayments().find(row => row.installation === installation && row.kind === 'top-up');
+        if (open) { await this.settleTopUp(open); continue; }
+        chargeCredit(this.repositories, installation, now);
+        if (this.repositories.balance(installation) >= topUpBelowUsd) continue;
+        const reference = `atmin-topup-${installation}-${this.repositories.topUpCount(installation) + 1}`;
+        this.repositories.startPayment(reference, installation, 'top-up', this.repositories.billing(installation)!.topUpCents!, null);
+        await this.settleTopUp(this.repositories.payment(reference)!);
+      } catch (error) { log(`auto top-up for installation ${installation} failed and is retried later: ${failure(error)}`); }
     }
   }
-  // Asks Stripe how each invoice it has not settled stands, and records any change: paid, a
-  // charge that failed, or an invoice marked uncollectible or void in Stripe. Called hourly.
-  async refresh(now = Date.now()): Promise<void> {
-    for (const row of this.repositories.outstanding()) {
-      try { this.settle(row.installation, row.month, row.state, await this.stripe.call('GET', `/invoices/${row.invoice}`), now); }
-      catch (error) { log(`checking invoice ${row.invoice} for installation ${row.installation} failed: ${error instanceof Error ? error.message.slice(0, 200) : 'non-error thrown'}`); }
-    }
-  }
-  private settle(installation: number, name: string, before: InvoiceState, invoice: { id?: unknown; status?: unknown; attempt_count?: unknown; hosted_invoice_url?: unknown }, now: number): void {
-    const state = invoiceState(invoice);
-    if (!state) { log(`invoice ${String(invoice.id)} for installation ${installation} for ${name} has status ${String(invoice.status)}, which billing does not handle; left as ${before}`); return; }
-    this.repositories.settleInvoice(installation, name, state, hostedUrl(invoice.hosted_invoice_url), now);
-    if (state !== before) log(`invoice ${String(invoice.id)} for installation ${installation} for ${name} went from ${before} to ${state}${state === 'failed' ? ` after ${Number(invoice.attempt_count)} charge attempt(s)` : ''}`);
-  }
-  // Bills the month before `now`, from its second day. Returns the invoices created.
-  async invoice(now = Date.now()): Promise<string[]> {
-    const current = month(now);
-    if (now < current.start + 86_400_000) return [];
-    const previous = current.start - 1, name = month(previous).name, created: string[] = [];
-    for (const installation of this.repositories.billed()) {
-      const existing = this.repositories.invoice(installation, name);
-      if (existing) {
-        if (existing.state === 'creating') log(`invoice for installation ${installation} for ${name} was interrupted; check Stripe for customer ${this.repositories.billing(installation)!.customer} before billing by hand`);
-        continue;
+  // One step at a time: make the PaymentIntent unconfirmed (an idempotent call), record it,
+  // confirm it off-session, and credit it once Stripe says it succeeded. A PaymentIntent is paid
+  // at most once, so asking again after an interruption cannot charge twice.
+  private async settleTopUp(row: PaymentRecord): Promise<void> {
+    const record = this.repositories.billing(row.installation)!;
+    let intent = row.intent ? await this.stripe.call('GET', `/payment_intents/${row.intent}`, { 'expand[0]': 'latest_charge' }) : null;
+    try {
+      if (!intent) {
+        intent = await this.stripe.call('POST', '/payment_intents', { amount: String(row.cents), currency: 'usd', customer: record.customer, payment_method: record.paymentMethod!,
+          description: 'atmin review credit, auto top-up', 'metadata[installation]': String(row.installation), 'metadata[reference]': row.reference }, row.reference);
+        if (!id('pi').test(intent.id) || intent.amount !== row.cents) throw new StripeError(200, 'POST /payment_intents', 'invalid payment intent');
+        this.repositories.setPaymentIntent(row.reference, intent.id);
       }
-      const { plan } = this.repositories.limit(installation), usage = monthlyUsage(this.repositories, installation, previous);
-      const cents = Math.round(usage.estimatedUsd * 100), billed = Math.max(0, usage.reviews - plan.freeReviews) - usage.unknownCostReviews;
-      if (!cents) { this.repositories.startInvoice(installation, name, 0, usage.reviews, 'nothing-due'); continue; }
-      this.repositories.startInvoice(installation, name, cents, usage.reviews, 'creating');
-      try {
-        const customer = this.repositories.billing(installation)!.customer, label = new Date(`${name}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-        // The account's default currency (CAD for atmin) must not decide the invoice's. The draft
-        // does not advance by itself, so a failure before finalizing never sends an empty invoice.
-        const invoice = await this.stripe.call('POST', '/invoices', { customer, currency: 'usd', collection_method: 'charge_automatically', auto_advance: 'false', pending_invoice_items_behavior: 'exclude',
-          description: `atmin review, ${label}`, 'metadata[installation]': String(installation), 'metadata[month]': name }, `atmin-invoice-${installation}-${name}`);
-        if (!id('in').test(invoice.id)) throw new StripeError(200, 'POST /invoices', 'invalid invoice');
-        await this.stripe.call('POST', '/invoiceitems', { customer, invoice: invoice.id, amount: String(cents), currency: 'usd',
-          description: `${usage.reviews} reviews in ${label}: ${plan.freeReviews} free, ${billed} billed${usage.unknownCostReviews ? `, ${usage.unknownCostReviews} not billed because their cost never settled` : ''}` }, `atmin-item-${installation}-${name}`);
-        // Finalizing hands collection to Stripe, which charges the default card.
-        const finalized = await this.stripe.call('POST', `/invoices/${invoice.id}/finalize`, { auto_advance: 'true' }, `atmin-finalize-${installation}-${name}`);
-        this.repositories.finishInvoice(installation, name, invoice.id, hostedUrl(finalized.hosted_invoice_url));
-        log(`invoice ${invoice.id} of ${cents} cents for ${usage.reviews} reviews in ${name} finalized for installation ${installation}`);
-        created.push(invoice.id);
-      } catch (error) {
-        log(`invoice for installation ${installation} for ${name} failed and is left for an operator: ${error instanceof Error ? error.message.slice(0, 200) : 'non-error thrown'}`);
-      }
+      if (intent.status === 'requires_confirmation') intent = await this.stripe.call('POST', `/payment_intents/${intent.id}/confirm`, { off_session: 'true', 'expand[0]': 'latest_charge' }, `${row.reference}-confirm`);
+    } catch (error) {
+      // 402: the card did not pay. 400: Stripe refused the request, such as a card since removed.
+      if (error instanceof StripeError && [400, 402].includes(error.status)) return this.failTopUp(row, error.code);
+      throw error;
     }
-    return created;
+    if (intent.status === 'succeeded') {
+      this.repositories.addCredit(row.installation, row.reference, 'top-up', row.cents * 10_000, null, null, receiptUrl(intent.latest_charge?.receipt_url));
+      this.repositories.finishPayment(row.reference, 'paid');
+      log(`auto top-up ${intent.id} paid: ${row.cents} cents added to installation ${row.installation}`);
+    } else if (['requires_payment_method', 'requires_action', 'canceled'].includes(intent.status)) {
+      this.failTopUp(row, typeof intent.last_payment_error?.code === 'string' ? intent.last_payment_error.code : intent.status);
+    } // Anything else, such as 'processing', is asked about again by the hourly check.
+  }
+  private failTopUp(row: PaymentRecord, code: string): void {
+    this.repositories.finishPayment(row.reference, 'failed');
+    this.repositories.failTopUp(row.installation, topUpFailure(code));
+    log(`auto top-up ${row.reference} of ${row.cents} cents for installation ${row.installation} failed with ${code}; auto top-up stopped until an admin buys credit or turns it on again`);
   }
 }

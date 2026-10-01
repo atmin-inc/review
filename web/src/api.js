@@ -54,9 +54,11 @@ export const api = {
   connect: repository => request('POST', `${base}/connect?${repo(repository)}`, {}),
   setEnabled: (repository, enabled) => request('POST', `${base}/enabled?${repo(repository)}`, { enabled }),
   saveSettings: (repository, settings) => request('POST', `${base}/settings?${repo(repository)}`, settings),
-  billingCheckout: installation => request('POST', `${base}/billing/checkout?installation=${encodeURIComponent(installation)}`, {}),
+  billingCheckout: (installation, usd) => request('POST', `${base}/billing/checkout?installation=${encodeURIComponent(installation)}`, { usd }),
+  billingTopUp: (installation, usd) => request('POST', `${base}/billing/top-up?installation=${encodeURIComponent(installation)}`, { usd }),
   billingConfirm: (installation, session) => request('POST', `${base}/billing/confirm?installation=${encodeURIComponent(installation)}`, { session }),
   logout: () => request('POST', `${base}/logout`, {}),
   admin: () => request('GET', `${base}/admin`),
   savePlan: (installation, plan) => request('POST', `${base}/admin/plan?installation=${encodeURIComponent(installation)}`, plan),
+  addCredit: (installation, value) => request('POST', `${base}/admin/credit?installation=${encodeURIComponent(installation)}`, value),
 };

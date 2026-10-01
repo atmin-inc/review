@@ -34,12 +34,24 @@ export function renderFinding(packet: Packet, f: Finding, showFix = true): strin
   return [...lines, '</details>', ''].join('\n');
 }
 // What this review costs the organization under its plan; see `reviewPrice` in src/github.
-export interface ReviewPrice { month: string; index: number; freeReviews: number; free: boolean; usd: number | null; }
+// `credit` is what the organization has left once this review is paid, whether auto top-up will
+// refill it, and the Billing page where credit is bought (absent when it cannot be).
+export interface ReviewPrice { month: string; index: number; freeReviews: number; free: boolean; usd: number | null; credit?: { usd: number; topUp: boolean; url?: string | undefined }; }
+// Below this, a paid review's line warns that credit is running out, unless auto top-up is on.
+export const lowCreditUsd = 2;
 export function priceLine(price: ReviewPrice): string {
   const name = new Date(`${price.month}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  if (price.free) return `**This review is free:** ${price.index + 1} of ${price.freeReviews} free reviews in ${name}.`;
-  const cost = price.usd === null ? 'This review’s price is not known yet** because its model cost has not settled' : `This review costs $${price.usd.toFixed(3).replace(/0$/, '')}**`;
-  return `**${cost}. It is review ${price.index + 1} in ${name}, after ${price.freeReviews} free.`;
+  const credit = price.credit, url = credit?.url;
+  if (price.free) {
+    const last = price.index + 1 === price.freeReviews && credit && credit.usd <= 0 && !credit.topUp;
+    return `**This review is free:** ${price.index + 1} of ${price.freeReviews} free reviews in ${name}.${last ? ` Later reviews this month need review credit, which ${url ? `a repository admin can [buy](${url})` : 'atmin can add'}.` : ''}`;
+  }
+  if (price.usd === null) return `**This review’s price is not known yet** because its model cost has not settled. It is review ${price.index + 1} in ${name}, after ${price.freeReviews} free.`;
+  const left = credit ? ` It was paid from review credit, which has $${Math.max(0, credit.usd).toFixed(2)} left.` : '';
+  const warning = !credit || credit.topUp ? ''
+    : credit.usd <= 0 ? ` Reviews stop until ${url ? `a repository admin [buys credit](${url})` : 'atmin adds credit'}.`
+    : credit.usd < lowCreditUsd ? ` Credit is running low; ${url ? `a repository admin can [buy more](${url})` : 'atmin can add more'}.` : '';
+  return `**This review costs $${price.usd.toFixed(3).replace(/0$/, '')}**. It is review ${price.index + 1} in ${name}, after ${price.freeReviews} free.${left}${warning}`;
 }
 export function renderMarkdown(packet: Packet, result: Result, assessment: Assessment, detailsUrl?: string, verification?: Verification, price?: ReviewPrice): string {
   const e = escapeMarkdown;

@@ -13,6 +13,8 @@ export const count = value => new Intl.NumberFormat('en-US').format(value);
 // Prices and limits: whole dollars without cents, anything else to the cent.
 const moneyFormats = [0, 2].map(digits => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: digits, maximumFractionDigits: digits }));
 export const money = value => moneyFormats[Number.isInteger(value) ? 0 : 1].format(value);
+// Credit balances and amounts: always to the cent.
+export const credit = value => moneyFormats[1].format(value);
 
 export const plural = (value, one, many = `${one}s`) => `${count(value)} ${value === 1 ? one : many}`;
 

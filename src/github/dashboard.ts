@@ -5,9 +5,9 @@ import type { Store } from './store.js';
 import { perInstallation, maxRepositories, defaultPlan, type Repositories } from './repositories.js';
 import type { DashboardConfig, ReviewSettings } from './settings.js';
 import { appJwt } from './api.js';
-import { StripeError, type Billing } from './billing.js';
+import { StripeError, creditAmounts, topUpBelowUsd, type Billing } from './billing.js';
 
-import { history, pullViews, readReview, livePulls, latestJobs, verifiedRepositories, monthlyUsage } from './dashboard-view.js';
+import { history, pullViews, readReview, livePulls, latestJobs, verifiedRepositories, monthlyUsage, chargeCredit } from './dashboard-view.js';
 import { outcomeSummary } from './outcomes.js';
 export { history } from './dashboard-view.js';
 
@@ -36,8 +36,8 @@ const accountType = (value: unknown) => typeof value === 'string' && /^[A-Za-z]{
 const manageUrl = (i: Installation) => `https://github.com/${i.accountType === 'Organization' ? `organizations/${encodeURIComponent(i.account)}/` : ''}settings/installations/${i.id}`;
 
 // `app` lets operators list every installation of the App; without it there is no admin panel.
-// `billing` is set when a Stripe key is configured; without it no card can be added, so the
-// default plan stops at its free reviews.
+// `billing` is set when a Stripe key is configured; without it no credit can be bought, so
+// reviews past the free ones run only on credit an operator adds.
 export function dashboard(config: PilotConfig, options: DashboardConfig, store: Store, settings: ReviewSettings, fetcher: typeof fetch = fetch, repositories?: Repositories, app?: { id: string; key: string }, billing?: Billing) {
   // ponytail: one process, bounded in-memory sessions (five per GitHub user); restart signs everyone
   // out. Tokens never touch disk. Add shared encrypted sessions only with multiple web workers.
@@ -120,19 +120,21 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     }
     throw new Error('App exceeds installation listing limit');
   };
+  // Credit is read after charging the installation's settled reviews, so it is current.
+  const credit = (installation: number) => { chargeCredit(repositories!, installation); return repositories!.balance(installation); };
   const customer = (installation: number) => {
-    const { plan, limit, needsCard, unpaid } = repositories!.limit(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
-    const record = repositories!.billing(installation), custom = repositories!.plan(installation).updatedAt !== null;
-    // The last year of invoices; one still being created is an operator's to resolve, not shown.
-    const invoices = repositories!.invoices(installation).filter(row => row.state !== 'creating').slice(0, 12)
-      .map(({ month, amountCents, reviews, state, url }) => ({ month, amountCents, reviews, state, url }));
-    return { plan: { freeReviews: plan.freeReviews, monthlyReviews: limit, multiplier: plan.multiplier, minimumUsd: plan.minimumUsd, custom }, usage,
-      billing: billing ? { card: record?.card ?? null, expires: record?.expires ?? null, email: record?.email ?? null, needsCard, unpaid, invoices, spending: repositories!.spending(installation) } : null };
+    const { plan, updatedAt } = repositories!.plan(installation), { perRepository, knownUsd, ...usage } = monthlyUsage(repositories!, installation);
+    const creditUsd = credit(installation), record = repositories!.billing(installation);
+    // A grant's note is the operator's; the organization sees only that atmin added or took credit.
+    const credits = repositories!.creditHistory(installation).map(({ kind, usd, created, receipt }) => ({ kind, usd, date: new Date(created).toISOString(), receipt }));
+    return { plan: { ...plan, custom: updatedAt !== null }, usage, creditUsd,
+      billing: billing ? { card: record?.card ?? null, expires: record?.expires ?? null, email: record?.email ?? null, amounts: creditAmounts.map(cents => cents / 100),
+        topUp: { usd: record?.topUpCents ? record.topUpCents / 100 : null, belowUsd: topUpBelowUsd, failed: record?.topUpFailed ?? null }, history: credits } : null };
   };
   const adminView = (installation: number) => {
-    const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation);
+    const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation), record = repositories!.billing(installation);
     return { plan: { ...plan, custom: updatedAt !== null, updatedAt: updatedAt === null ? null : new Date(updatedAt).toISOString(), updatedBy }, usage,
-      limit: repositories!.limit(installation).limit, card: repositories!.billing(installation)?.card ?? null, unpaid: repositories!.limit(installation).unpaid, spending: repositories!.spending(installation),
+      creditUsd: credit(installation), card: record?.card ?? null, topUpUsd: record?.topUpCents ? record.topUpCents / 100 : null, topUpFailed: record?.topUpFailed ?? null,
       storage: { mb: Math.round(Object.values(repositories!.stored(installation)).reduce((a, b) => a + b, 0) / 1024 ** 2), limitMb: repositories!.storageLimitMb() },
       repositories: repositories!.of(installation).map(entry => ({ id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled(), reviews: perRepository.get(entry.config.repositoryId) ?? 0, outcomes: outcomeSummary(entry.store) })) };
   };
@@ -230,6 +232,20 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
           const { plan, usage } = adminView(Number(target));
           json(response, 200, { plan, usage }); return true;
         }
+        if (request.method === 'POST' && url.pathname === '/api/review/v1/admin/credit') {
+          const target = url.searchParams.get('installation');
+          if (url.searchParams.getAll('installation').length !== 1 || !/^[1-9][0-9]{0,15}$/.test(target ?? '') || !known.has(Number(target))) {
+            json(response, 404, { error: 'Installation not found.' }); return true;
+          }
+          const read = await body(request);
+          if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
+          const value = 'value' in read ? read.value as { usd?: unknown; note?: unknown } : null;
+          try {
+            if (!value || typeof value !== 'object' || Object.keys(value).some(key => !['usd', 'note'].includes(key))) throw new Error('Invalid grant');
+            repositories.grant(Number(target), value.usd, value.note, session.user.id);
+          } catch { json(response, 400, { error: 'Add or take between $0.01 and $1,000, with a note of up to 200 characters.' }); return true; }
+          json(response, 200, { creditUsd: adminView(Number(target)).creditUsd }); return true;
+        }
         json(response, 404, { error: 'Not found.' }); return true;
       }
       let { config, store, settings } = initial;
@@ -262,27 +278,44 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
           process.stderr.write(`atmin review: repository ${candidate.id} connected from installation ${candidate.installationId} by GitHub user ${session.user.id}\n`);
           json(response, 200, { repository: { id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled() } }); return true;
         }
-        if (request.method === 'POST' && ['/api/review/v1/billing/checkout', '/api/review/v1/billing/confirm'].includes(url.pathname)) {
+        if (request.method === 'POST' && ['/api/review/v1/billing/checkout', '/api/review/v1/billing/confirm', '/api/review/v1/billing/top-up'].includes(url.pathname)) {
           const target = url.searchParams.get('installation'), installation = owned.find(i => String(i.id) === target);
           if (!billing || url.searchParams.getAll('installation').length !== 1 || !installation) { json(response, 404, { error: 'Organization not found.' }); return true; }
-          // The card pays for the organization's reviews, so an admin of one of its connected repositories manages it.
+          // Credit pays for the organization's reviews, so an admin of one of its connected repositories manages it.
           let admin = operator(session.user);
           for (const entry of repositories.of(installation.id)) {
             if (admin) break;
             try { await authorize(session.token, entry.config); admin = true; }
             catch (error) { if (!(error instanceof Denied)) throw error; }
           }
-          if (!admin) { json(response, 403, { error: `Only an admin of a repository connected in ${installation.account} can manage its card.` }); return true; }
-          if (url.pathname.endsWith('/checkout')) { json(response, 200, { url: await billing.checkout(installation.id, installation.account, session.user.id) }); return true; }
+          if (!admin) { json(response, 403, { error: `Only an admin of a repository connected in ${installation.account} can manage its billing.` }); return true; }
           const read = await body(request);
           if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
-          const value = 'value' in read ? read.value as { session?: unknown } : null;
-          if (!value || typeof value !== 'object' || Object.keys(value).length !== 1 || typeof value.session !== 'string') { json(response, 400, { error: 'Invalid checkout.' }); return true; }
-          try { json(response, 200, { card: await billing.confirm(installation.id, value.session, session.user.id), ...customer(installation.id) }); }
-          catch (error) {
+          const value = 'value' in read && read.value && typeof read.value === 'object' && !Array.isArray(read.value) ? read.value as Record<string, unknown> : null;
+          const only = (key: string) => value !== null && Object.keys(value).length === 1 && key in value;
+          // Amounts arrive in dollars and must be ones credit is sold in.
+          const cents = only('usd') && typeof value!.usd === 'number' && creditAmounts.includes(value!.usd * 100) ? value!.usd * 100 : null;
+          if (url.pathname.endsWith('/checkout')) {
+            if (cents === null) { json(response, 400, { error: 'Choose an amount of credit.' }); return true; }
+            json(response, 200, { url: await billing.checkout(installation.id, installation.account, cents, session.user.id) }); return true;
+          }
+          if (url.pathname.endsWith('/top-up')) {
+            const off = only('usd') && value!.usd === null;
+            if (!off && cents === null) { json(response, 400, { error: 'Choose an amount for auto top-up.' }); return true; }
+            if (!off && !repositories.billing(installation.id)?.paymentMethod) { json(response, 409, { error: 'Buy credit once first; that saves the card auto top-up charges.' }); return true; }
+            repositories.setTopUp(installation.id, off ? null : cents, session.user.id);
+            // Turned on below the threshold, it buys credit now rather than after the next review.
+            if (!off) await billing.topUp(installation.id);
+            json(response, 200, customer(installation.id)); return true;
+          }
+          if (!only('session') || typeof value!.session !== 'string') { json(response, 400, { error: 'Invalid checkout.' }); return true; }
+          try {
+            const added = await billing.confirm(installation.id, value!.session, session.user.id);
+            json(response, 200, { addedUsd: added.usd, card: added.card, ...customer(installation.id) });
+          } catch (error) {
             if (!(error instanceof StripeError) || ![400, 409].includes(error.status)) throw error;
-            process.stderr.write(`atmin review: card for installation ${installation.id} not saved: ${error.message}\n`);
-            json(response, 409, { error: 'Stripe did not save a card for this checkout. Add the card again.' });
+            process.stderr.write(`atmin review: credit for installation ${installation.id} not added on return from Checkout: ${error.message}\n`);
+            json(response, 409, { error: 'Stripe has not confirmed this payment. If you paid, the credit is added within the hour.' });
           }
           return true;
         }

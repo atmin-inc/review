@@ -230,37 +230,28 @@ once inference starts, failed runs included. Past the limit the PR gets a "revie
 run" comment with the reason and no model call is made. The daily `maxReviewsPerDay`
 cap still applies to every installation together.
 
-With `STRIPE_SECRET_KEY` set, an administrator of a connected repository adds the
-organization's card on the Billing page through Stripe Checkout in setup mode, which charges
-nothing. With a card on file the default plan allows 1,000 reviews a month; without one, or
-without a key, reviews stop at the free ones and the PR comment links to the Billing page. On
-the 2nd of each UTC month the worker invoices each installation with a card, in US dollars,
-for the month before at the plan's price, and Stripe charges the card. Each month is invoiced
-at most once: its row in the `invoices` table is written before the first Stripe call. A row
-left in state `creating` means invoicing stopped midway; the worker logs it every hour until an
-operator checks the customer's invoices in Stripe, finishes or voids that month's there, and
-sets the row to `finalized` (or deletes it to have the worker invoice the month again).
+With `STRIPE_SECRET_KEY` set, reviews past the free ones are paid from prepaid credit. An
+administrator of a connected repository buys credit on the Billing page through Stripe
+Checkout, $10, $25, $50 or $100 in US dollars, and it does not expire. Each review past the
+free ones takes its price from the credit once its cost settles: one row per review in the
+`credit` table, written once, so a later plan change never prices it again. Once the free
+reviews are used, a review starts only while credit is above zero, so the last one can take it
+slightly below and the next purchase covers that. At zero the PR comment says so and links to
+the Billing page; each paid review's comment says what credit is left and warns below $2.
+Without a key nobody can buy credit, and past the free reviews only credit an operator adds
+pays. Reviews that started before 2026-10-01 are never charged.
 
-A card is only tested when its first invoice is charged, after the month ends, so the default
-plan also caps each month's charges by what the organization has paid in total
-(`spendingTiers` in `src/github/repositories.ts`): $50 a month until it has paid $10, $250
-until it has paid $250, then only the 1,000-review limit. Paid means invoices Stripe marked
-paid. A card that never pays therefore costs at most $50 of charges, at most half that in model
-cost at the default ×2. The ceiling is checked before each review, so one review can take a
-month past it; past it the PR comment says so and links to the Billing page. Plans an
-operator sets have no ceiling.
-
-Every hour the worker asks Stripe how each unsettled invoice stands. When Stripe has tried
-the card and failed, the row becomes `failed`, and the default plan stops at its free reviews
-again, as if there were no card, until the invoice is paid. The Billing page names the unpaid
-month and links to Stripe's page for the invoice, where it can be paid. Saving a new card
-charges it for any unpaid invoice straight away. A paid invoice lifts the limit on the next
-check, and so does one an operator voids in Stripe. Plans an operator sets are not gated.
-Checkout records the address it collects on the Stripe customer, and Stripe sends receipts
-and failed-payment notices there, if two settings are on in the Stripe dashboard:
-Settings > Emails > Successful payments, and Settings > Billing > Subscriptions and emails >
-Send emails when card payments fail (with the link set to a Stripe-hosted page). Smart
-Retries in the same place decide whether Stripe charges the card again after a failure.
+A purchase is credited when the browser comes back from Checkout, once the worker has checked
+with Stripe that this organization's customer paid the amount sold; if the buyer closes the
+page first, the hourly check credits it. Paying saves the card. With auto top-up on, the
+worker charges that card the chosen amount off-session whenever credit falls below $5,
+checked after each review and hourly. A top-up's PaymentIntent is created unconfirmed under
+an idempotency key, recorded in the `payments` table, then confirmed, so an interrupted
+top-up is finished by reading it back, never by charging again. A card that declines, or
+whose bank wants the card holder to approve the charge, stops auto top-up until an admin buys
+credit or turns it on again. Stripe emails receipts to the address entered in Checkout when
+Settings > Emails > Successful payments is on in the Stripe dashboard. The `invoices` table
+of the earlier monthly-invoice release is left as it is.
 
 `operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
 by someone else. Operators get `/admin`, which lists every installation of the App (read
@@ -268,7 +259,8 @@ with the App's credentials) with its repositories, reviews this month, model cos
 billing and margin, and changes a plan: `freeReviews`, `monthlyReviews` (0 turns
 reviews off), `multiplier` and `minimumUsd`. Billing for each review past the free ones
 is the larger of its cost times the multiplier and the minimum. An operator-set plan
-applies as set, card or not; with a card it is invoiced like any other.
+applies as set; past its free reviews it is paid from credit like any other. Operators also
+add credit to an organization, or take it away, with a note the organization does not see.
 On OpenRouter, cost is the amount OpenRouter reports billing for each call, not a rate
 card estimate; on OpenAI directly, it is priced from the call's usage, cache writes
 included. A call whose charge or cache writes are not reported stays unsettled and is left

@@ -10,14 +10,14 @@ import { Input } from './ui/input.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table.jsx';
 import { AutoHeight } from './ui/auto-height.jsx';
 import { Field, Figure, Loading, Notice, PageHeader, Progress } from './components.jsx';
-import { count, money, monthName, usd } from './format.js';
+import { count, credit, money, usd } from './format.js';
 import { planFields, validatePlan } from './validate.js';
 
 const operatorOnly = 'Operator access is required.';
 const accountKind = type => (type === 'User' ? 'Personal account' : 'Organization');
 const planValue = (field, value) => (field.kind === 'usd' ? usd(value) : field.kind === 'multiplier' ? `${value}×` : count(value));
 
-// `limit` is the limit in force: the default plan stops at its free reviews until a card is on file.
+// `limit` is the plan's monthly review limit.
 function Reviews({ usage, limit }) {
   return <><Figure>{count(usage.reviews)}</Figure> <span className="text-muted-foreground">/ {limit ? <Figure>{count(limit)}</Figure> : 'off'}</span></>;
 }
@@ -92,7 +92,63 @@ function PlanDialog({ installation, defaults, onClose, onSaved }) {
   </Dialog>;
 }
 
-function Customers({ data, onEdit }) {
+// Adds credit to an organization, or takes it away with a negative amount; the note is for
+// operators and is not shown to the organization.
+function CreditDialog({ installation, onClose, onSaved }) {
+  const prefix = useId();
+  const [form, setForm] = useState({ usd: '', note: '' });
+  const [status, setStatus] = useState({ pending: false, submitted: false, error: null });
+  const amount = Number(form.usd), note = form.note.trim();
+  const errors = {
+    ...(!form.usd.trim() || !Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 1000 ? { usd: 'Enter an amount between -1000 and 1000, not zero.' } : {}),
+    ...(!note || note.length > 200 ? { note: 'Say why, in up to 200 characters.' } : {}),
+  };
+  const shown = status.submitted ? errors : {};
+
+  async function submit(event) {
+    event.preventDefault();
+    const invalid = Object.keys(errors)[0];
+    if (invalid) {
+      setStatus({ pending: false, submitted: true, error: null });
+      document.getElementById(`${prefix}-${invalid}`)?.focus();
+      return;
+    }
+    setStatus({ pending: true, submitted: true, error: null });
+    try {
+      await api.addCredit(installation.id, { usd: amount, note });
+      console.info(`atmin review: ${amount} USD of credit added to installation ${installation.id}`);
+      onSaved();
+    } catch (failure) {
+      setStatus({ pending: false, submitted: true, error: failure.message });
+    }
+  }
+
+  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Add credit for {installation.account}</DialogTitle>
+        <DialogDescription>It has <Figure>{credit(installation.creditUsd)}</Figure> now. A negative amount takes credit away.</DialogDescription>
+      </DialogHeader>
+      <form id={`${prefix}-form`} noValidate onSubmit={submit}>
+        <Field id={`${prefix}-usd`} label="Amount in US dollars" error={shown.usd}>
+          <Input id={`${prefix}-usd`} inputMode="decimal" autoComplete="off" aria-invalid={shown.usd ? true : undefined} aria-describedby={`${prefix}-usd-message`}
+            value={form.usd} onChange={event => setForm(current => ({ ...current, usd: event.target.value }))}/>
+        </Field>
+        <Field id={`${prefix}-note`} label="Note" help="For operators only." error={shown.note}>
+          <Input id={`${prefix}-note`} autoComplete="off" aria-invalid={shown.note ? true : undefined} aria-describedby={`${prefix}-note-message`}
+            value={form.note} onChange={event => setForm(current => ({ ...current, note: event.target.value }))}/>
+        </Field>
+        {status.error && <Notice tone="error">{status.error}</Notice>}
+      </form>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button type="submit" form={`${prefix}-form`} disabled={status.pending}>{status.pending ? 'Saving…' : 'Save credit'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
+function Customers({ data, onEdit, onCredit }) {
   const [open, setOpen] = useState(() => new Set());
   const toggle = id => setOpen(current => {
     const next = new Set(current);
@@ -102,7 +158,7 @@ function Customers({ data, onEdit }) {
   return <Card className="panel">
     <CardHeader className="panel-toolbar border-b">
       <h2 className="panel-title">Organizations</h2>
-      <p className="text-[13px] text-muted-foreground">This month so far. Cost is what the model provider billed for each call. Billing applies the plan to reviews past the free allowance, and margin is billing minus cost.</p>
+      <p className="text-[13px] text-muted-foreground">This month so far. Cost is what the model provider billed for each call. Billing applies the plan to reviews past the free allowance, paid from credit, and margin is billing minus cost.</p>
     </CardHeader>
     <AutoHeight>
       <Table className="panel-table">
@@ -138,11 +194,14 @@ function Customers({ data, onEdit }) {
                     {installation.suspended && <Badge variant="outline">Suspended</Badge>}
                   </div>
                   <div className="text-[13px] text-muted-foreground">{accountKind(installation.accountType)}</div>
-                  <div className="text-[13px] md:hidden"><Reviews usage={usage} limit={installation.limit}/> reviews</div>
-                  <Button variant="outline" size="sm" className="mt-2 md:hidden" onClick={() => onEdit(installation)}>Edit plan</Button>
+                  <div className="text-[13px] md:hidden"><Reviews usage={usage} limit={plan.monthlyReviews}/> reviews</div>
+                  <div className="mt-2 flex flex-wrap gap-2 md:hidden">
+                    <Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button>
+                    <Button variant="outline" size="sm" onClick={() => onCredit(installation)}>Add credit</Button>
+                  </div>
                 </TableCell>
                 <TableCell className="text-right max-md:hidden"><Figure>{repositories.length}</Figure></TableCell>
-                <TableCell className="text-right max-md:hidden"><Reviews usage={usage} limit={installation.limit}/></TableCell>
+                <TableCell className="text-right max-md:hidden"><Reviews usage={usage} limit={plan.monthlyReviews}/></TableCell>
                 <TableCell className="text-right max-md:hidden"><Figure>{usd(usage.knownUsd)}</Figure></TableCell>
                 <TableCell className="text-right">
                   <Figure>{usd(usage.estimatedUsd)}</Figure>
@@ -152,16 +211,19 @@ function Customers({ data, onEdit }) {
                 <TableCell className="max-md:hidden">
                   <PlanSummary plan={plan}/>
                   {plan.custom && <div className="text-[13px] text-muted-foreground">Custom{plan.updatedBy ? ` · set by ${plan.updatedBy}` : ''}</div>}
-                  <div className="text-[13px] text-muted-foreground">{installation.card ?? (plan.custom ? 'No card' : 'No card, stops at free reviews')}</div>
-                  {installation.card && installation.spending.monthlyUsd !== null && <div className={`text-[13px] ${usage.estimatedUsd >= installation.spending.monthlyUsd ? 'text-destructive' : 'text-muted-foreground'}`}>
-                    <Figure>{money(installation.spending.monthlyUsd)}</Figure> a month limit, <Figure>{money(installation.spending.paidUsd)}</Figure> paid
-                  </div>}
-                  {installation.unpaid && <div className="text-[13px] text-destructive">Invoice for {monthName(installation.unpaid)} unpaid{plan.custom ? '' : ', stops at free reviews'}</div>}
+                  <div className={`text-[13px] ${installation.creditUsd <= 0 && usage.reviews >= plan.freeReviews ? 'text-destructive' : 'text-muted-foreground'}`}><Figure>{credit(installation.creditUsd)}</Figure> credit</div>
+                  <div className="text-[13px] text-muted-foreground">{installation.card ?? 'No card'}{installation.topUpUsd ? <>, auto top-up <Figure>{money(installation.topUpUsd)}</Figure></> : ''}</div>
+                  {installation.topUpFailed && <div className="text-[13px] text-destructive">Auto top-up stopped: {installation.topUpFailed}</div>}
                   <div className={`text-[13px] ${installation.storage.mb > installation.storage.limitMb ? 'text-destructive' : 'text-muted-foreground'}`}>
                     <Figure>{count(installation.storage.mb)}</Figure> of <Figure>{count(installation.storage.limitMb)}</Figure> MB stored
                   </div>
                 </TableCell>
-                <TableCell className="text-right max-md:hidden"><Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button></TableCell>
+                <TableCell className="text-right max-md:hidden">
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button>
+                    <Button variant="outline" size="sm" onClick={() => onCredit(installation)}>Add credit</Button>
+                  </div>
+                </TableCell>
               </TableRow>
               {expanded && <TableRow id={`repositories-${installation.id}`} className="hover:bg-transparent">
                 <TableCell colSpan={9} className="bg-muted/40 py-3 whitespace-normal">
@@ -189,10 +251,11 @@ function Customers({ data, onEdit }) {
 function Operator() {
   const admin = useResource('admin', () => api.admin());
   const [editing, setEditing] = useState(null);
+  const [crediting, setCrediting] = useState(null);
   const data = admin.data;
   const error = admin.error && (admin.error.status === 403 ? operatorOnly : admin.error.message);
   return <>
-    <PageHeader title="Admin">Plans, usage, cost and billing for each organization that installed atmin review.</PageHeader>
+    <PageHeader title="Admin">Plans, usage, cost and credit for each organization that installed atmin review.</PageHeader>
     <div className="grid grid-cols-1 gap-4">
       {error && <Notice tone="error">{error}</Notice>}
       {!data && admin.loading && <Loading>Loading organizations</Loading>}
@@ -208,11 +271,12 @@ function Operator() {
             <p className="text-[13px] text-muted-foreground">The global backstop counts reviews started in the last 24 hours across every organization.</p>
           </CardContent>
         </Card>
-        <Customers data={data} onEdit={setEditing}/>
+        <Customers data={data} onEdit={setEditing} onCredit={setCrediting}/>
       </>}
     </div>
     {editing && data && <PlanDialog installation={editing} defaults={data.defaults} onClose={() => setEditing(null)}
       onSaved={() => { setEditing(null); admin.reload(); }}/>}
+    {crediting && <CreditDialog installation={crediting} onClose={() => setCrediting(null)} onSaved={() => { setCrediting(null); admin.reload(); }}/>}
   </>;
 }
 
