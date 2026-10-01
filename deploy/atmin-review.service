@@ -1,4 +1,5 @@
-# The atmin review worker: webhooks, dashboard, and one review at a time.
+# The atmin review service: webhooks, dashboard, and the router that offers reviews to runners
+# (atmin-review-runner@.service, and members' own runners).
 # Installed by deploy/install.sh; deploy/release.sh switches /opt/atmin-review/current and restarts it.
 [Unit]
 Description=atmin review

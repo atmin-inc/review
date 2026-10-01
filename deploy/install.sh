@@ -44,7 +44,9 @@ cat <<NEXT
 Installed. Before the first deploy:
   1. Put the pilot config, the GitHub App private key and the dashboard config under /etc/atmin-review
      (group atmin-review, mode 0640), and write /etc/atmin-review/service.env (mode 0640) with
-     ATMIN_REVIEW_CONFIG=<pilot config path>, the keys the service already uses, and nothing else.
+     ATMIN_REVIEW_CONFIG=<pilot config path>, the keys the service already uses,
+     ATMIN_RUNNER_POOL_TOKEN=\$(openssl rand -hex 32) (the service and its runners share it), and
+     optionally ATMIN_REVIEW_RUNNERS=<count> (default 2: reviews that can run at once on our key).
   2. Set ATMIN_REVIEW_PORT=<pilot config port> for Caddy: systemctl edit caddy, then [Service] Environment=ATMIN_REVIEW_PORT=...
      and systemctl restart caddy.
   3. Add the GitHub Actions deploy key to /home/deploy/.ssh/authorized_keys.

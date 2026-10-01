@@ -42,6 +42,7 @@ export function share(used, limit) {
 export const runStates = {
   queued: { label: 'Queued', mark: 'waiting' },
   running: { label: 'Running', mark: 'running' },
+  dispatched: { label: 'Reviewing', mark: 'running' },
   publishing: { label: 'Publishing', mark: 'running' },
   completed: { label: 'Completed', mark: 'complete' },
   failed: { label: 'Failed', mark: 'failed' },

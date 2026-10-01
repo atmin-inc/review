@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync, verify } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,10 +16,10 @@ import { capture } from '../dist/snapshot.js';
 import { Worker, markerFor, failureCause } from '../dist/github/worker.js';
 import { AppGitHub, GitHubError, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
-import { childEnvironment, engineRunner, expireRuns, trimSourceCache } from '../dist/github/runner.js';
+import { childEnvironment, hostedReview, expireRuns, trimSourceCache } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
 import { outcomeSummary } from '../dist/github/outcomes.js';
-import { repository, completed, finding, current } from './helpers.mjs';
+import { repository, completed, finding, current, inline } from './helpers.mjs';
 
 const secret = 'a local test secret with more than 32 bytes';
 function state(t) {
@@ -61,7 +61,7 @@ async function harness(t, findings = []) {
     return directory;
   };
   s.store.enable(true); assert.equal(s.store.acquire('owner'), true);
-  const worker = new Worker(s.config, s.store, github, runner, 'owner');
+  const worker = new Worker(s.config, s.store, github, inline(runner), 'owner');
   return { ...s, fixture, checks, reviews, github, runner, worker, setLive: changes => { live = { ...live, ...changes }; }, get live() { return live; }, get comment() { return comment; }, get counts() { return { runs, creates, updates }; } };
 }
 async function http(t, h) {
@@ -153,7 +153,7 @@ test('draft / closed PRs skip inference using canonical state, not event orderin
 test('the published review says what it costs the organization', async t => {
   const h = await harness(t);
   const asked = [];
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', undefined, undefined, undefined,
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'owner', undefined, undefined, undefined,
     job => { asked.push(job); return { month: '2026-09', index: 20, freeReviews: 20, free: false, usd: 0.0425 }; });
   const id = h.store.enqueue('priced', 1);
   await worker.tick();
@@ -166,16 +166,21 @@ test('new push aborts active investigation and only replacement work can publish
   const h = await harness(t);
   let started; const ready = new Promise(done => { started = done; });
   let aborted = false;
-  const runner = async (_job, signal) => { started(); await new Promise(done => signal.addEventListener('abort', () => { aborted = true; done(); }, { once: true })); throw new Error('cancelled'); };
-  const worker = new Worker(h.config, h.store, h.github, runner, 'owner');
+  const runner = async (job, signal) => {
+    if (job.id !== id) return h.runner(job, signal);
+    started(); await new Promise(done => signal.addEventListener('abort', () => { aborted = true; done(); }, { once: true })); throw new Error('cancelled');
+  };
+  const worker = new Worker(h.config, h.store, h.github, inline(runner, { background: true }), 'owner');
   const id = h.store.enqueue('first', 1);
-  const running = worker.tick(); await ready;
+  await worker.tick(); await ready;
+  assert.equal(h.store.get(id).state, 'dispatched', 'the worker does not wait on the runner');
   h.store.enqueue('replacement', 1);
-  await running;
+  await worker.tick();
   assert.equal(h.checks[0].conclusion, 'cancelled');
   assert.equal(aborted, true); assert.equal(h.store.get(id).state, 'cancelled');
   assert.equal(h.counts.creates, 0);
-  await h.worker.tick(); assert.equal(h.counts.creates, 1);
+  // The same tick offered the replacement, which a later tick collects and publishes.
+  await worker.tick(); assert.equal(h.counts.creates, 1);
 });
 
 test('pausing an active rerun replaces the pending summary and cancels its check', async t => {
@@ -186,10 +191,10 @@ test('pausing an active rerun replaces the pending summary and cancels its check
     started(); await new Promise(done => signal.addEventListener('abort', done, {once: true}));
     throw new Error('cancelled');
   };
-  const worker = new Worker(h.config, h.store, h.github, runner, 'owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(runner, { background: true }), 'owner');
   const id = h.store.enqueue('rerun', 1);
-  const running = worker.tick(); await ready;
-  h.store.enable(false); await running;
+  await worker.tick(); await ready;
+  h.store.enable(false); await worker.tick();
   assert.equal(h.store.get(id).state, 'cancelled');
   assert.equal(h.checks[1].conclusion, 'cancelled');
   assert.match(h.comment.body, /review paused/);
@@ -199,7 +204,7 @@ test('pausing an active rerun replaces the pending summary and cancels its check
 test('target branch changes before publication suppress the obsolete report', async t => {
   const h = await harness(t);
   const runner = async (job, signal) => { const path = await h.runner(job, signal); h.setLive({ baseSha: 'b'.repeat(40) }); return path; };
-  const worker = new Worker(h.config, h.store, h.github, runner, 'owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(runner), 'owner');
   const id = h.store.enqueue('first', 1); await worker.tick();
   assert.equal(h.store.get(id).state, 'cancelled'); assert.equal(h.counts.creates, 0);
 });
@@ -240,7 +245,7 @@ test('persisted publishing state survives a worker restart without another model
   // Simulate a crash after the report was saved and before the HTTP publication began.
   h.store.update(id, { state: 'publishing' }); h.store.release('owner');
   assert.equal(h.store.acquire('replacement'), true);
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'replacement');
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'replacement');
   await worker.tick();
   assert.equal(h.counts.runs, 1); assert.equal(h.counts.creates, 1);
 });
@@ -286,7 +291,7 @@ test('worker crash during inference publishes saved interruption state without r
   const job = h.store.next('owner'); h.store.reserve(job, 'owner', 6);
   h.store.update(id, { report: JSON.stringify({ initial: h.live, body: '# atmin review — interrupted\nNo completed review is claimed.' }) });
   h.store.release('owner'); assert.equal(h.store.acquire('new-owner'), true);
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'new-owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'new-owner');
   await worker.tick();
   assert.equal(h.counts.runs, 0); assert.match(h.comment.body, /interrupted/);
 });
@@ -294,7 +299,7 @@ test('worker crash during inference publishes saved interruption state without r
 test('lost worker lease fences publication even when an uncooperative runner returns', async t => {
   const h = await harness(t);
   const runner = async (job, signal) => { const directory = await h.runner(job, signal); h.store.release('owner'); h.store.acquire('replacement'); return directory; };
-  const worker = new Worker(h.config, h.store, h.github, runner, 'owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(runner), 'owner');
   h.store.enqueue('first', 1); await worker.tick();
   assert.equal(h.counts.creates, 0);
 });
@@ -308,7 +313,7 @@ test('partial results remain visibly incomplete in the GitHub summary', async t 
     writeFileSync(join(directory, 'result.json'), JSON.stringify(result));
     return directory;
   };
-  const worker = new Worker(h.config, h.store, h.github, runner, 'owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(runner), 'owner');
   h.store.enqueue('first', 1); await worker.tick();
   assert.match(h.comment.body, /Review incomplete/); assert.match(h.comment.body, /not-run/);
   assert.equal(h.checks[0].conclusion, 'failure');
@@ -316,7 +321,7 @@ test('partial results remain visibly incomplete in the GitHub summary', async t 
 
 test('engine failures publish an honest failure summary; no successful review is invented', async t => {
   const h = await harness(t);
-  const worker = new Worker(h.config, h.store, h.github, async () => { throw new Error('secret-provider-body'); }, 'owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(async () => { throw new Error('secret-provider-body'); }), 'owner');
   h.store.enqueue('one', 1); await worker.tick();
   assert.equal(h.checks[0].conclusion, 'failure');
   assert.match(h.comment.body, /review failed/); assert.doesNotMatch(h.comment.body, /secret-provider-body/);
@@ -339,13 +344,13 @@ test('child environments omit controller secrets and separate source/model crede
 test('a run keeps its review records but not its copy of the repository, whether or not it finished', async t => {
   const root = mkdtempSync(join(tmpdir(), 'atmin-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const config = { repository: 'o/r', stateDirectory: root, profile: fileURLToPath(new URL('../profiles/review-luna-openrouter.json', import.meta.url)) };
+  const profile = JSON.parse(readFileSync(new URL('../profiles/review-luna-openrouter.json', import.meta.url), 'utf8'));
   const run = join(root, 'runs', 'job-1');
   mkdirSync(join(run, 'source.git', 'objects'), { recursive: true });
   writeFileSync(join(run, 'source.git', 'objects', 'pack'), 'history');
   writeFileSync(join(run, 'packet.json'), '{}');
   const stopped = new AbortController(); stopped.abort();
-  await assert.rejects(engineRunner(config, { readToken: async () => 'read-token' })({ id: 'job-1', pr: 1 }, stopped.signal), /cancelled/);
+  await assert.rejects(hostedReview({ job: 'job-1', repository: 'o/r', pr: 1, token: 'read-token', previous: null, profile }, run, join(root, 'cache.git'), stopped.signal, {}), /cancelled/);
   assert.equal(existsSync(join(run, 'source.git')), false);
   assert.equal(existsSync(join(run, 'packet.json')), true);
 });
@@ -394,7 +399,7 @@ test('compiled pilot CLI starts paused, serves a signed ping and shuts down clea
     stateDirectory: join(root, 'state'), host: '127.0.0.1', port, maxReviewsPerDay: 6, minFreeDiskMb: 0 }));
   const key = join(root, 'fake.pem'); writeFileSync(key, 'offline fixture; no API calls are permitted');
   const cli = fileURLToPath(new URL('../dist/github/cli.js', import.meta.url));
-  const env = childEnvironment(root, { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: key, GITHUB_WEBHOOK_SECRET: secret });
+  const env = childEnvironment(root, { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: key, GITHUB_WEBHOOK_SECRET: secret, ATMIN_RUNNER_POOL_TOKEN: 'p'.repeat(32) });
   const proc = spawn(process.execPath, [cli, 'serve', config], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); });
   const startup = await Promise.race([once(proc.stdout, 'data'), once(proc, 'exit').then(() => { throw new Error('Service exited before listening'); })]);
@@ -634,7 +639,7 @@ test('CI arriving during publication survives until a second pass, including a w
   h.store.enqueue('source', 1); await h.worker.tick();
   assert.equal(h.checks[0].status, 'in_progress');
   h.store.release('owner'); assert.equal(h.store.acquire('replacement'), true);
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'replacement');
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'replacement');
   assert.equal(await worker.tick(), true);
   assert.equal(h.checks[0].conclusion, 'success'); assert.equal(h.counts.runs, 1);
   assert.equal(await worker.tick(), false);
@@ -848,7 +853,7 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
   settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false });
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'owner', settings);
   h.store.enqueue('first-dashboard-run', 1); await worker.tick();
   h.store.enqueue('second-dashboard-run', 1); await worker.tick();
   assert.equal(h.counts.runs, 1);
@@ -865,7 +870,7 @@ test('a PR author past the per-author monthly limit gets the reason on the PR an
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
   settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: false });
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings);
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'owner', settings);
   const first = h.store.enqueue('alice-1', 1); await worker.tick();
   assert.equal(h.counts.runs, 1); assert.equal(h.store.get(first).author, 1);
   h.store.enqueue('alice-2', 1); await worker.tick();
@@ -936,7 +941,7 @@ test('an organization past its monthly plan gets the reason on its PR and no mod
   t.after(() => repositories.close());
   repositories.setPlan(21, { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: .05 }, 8);
   const entry = repositories.entries.get(42);
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', entry.settings, (job, limit) => repositories.reserve(entry, job, 'owner', limit));
+  const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'owner', entry.settings, (job, limit) => repositories.reserve(entry, job, 'owner', limit));
   h.store.enqueue('within-plan', 1); await worker.tick();
   h.store.enqueue('past-plan', 1); await worker.tick();
   assert.equal(h.counts.runs, 1);
@@ -975,7 +980,7 @@ test('a failed isolated fix check withholds the apply button while retaining the
 test('a push hands the runner the last completed review and a /atmin review command does not', async t => {
   const h = await harness(t);
   const seen = [];
-  const worker = new Worker(h.config, h.store, h.github, async (job, signal, previous) => { seen.push(previous ?? null); return h.runner(job, signal); }, 'owner');
+  const worker = new Worker(h.config, h.store, h.github, inline(async (job, signal, previous) => { seen.push(previous ?? null); return h.runner(job, signal); }), 'owner');
   const first = h.store.enqueue('opened', 1); await worker.tick();
   h.store.enqueue('push', 1); await worker.tick();
   h.store.enqueue('comment', 1, 'command'); await worker.tick();
@@ -1026,18 +1031,16 @@ test('a database from before incremental review gains the trigger column; old jo
 // Self-run (Lors, 2026-10-01): a PR whose author has a runner online is reviewed there and
 // published by this service, marked as such, and counted toward no plan, credit or author limit,
 // because atmin paid for no inference. A runner that does not deliver means a hosted review.
-function selfRunFake(h, outcome) {
+const alice = { id: 'r1', user: 1, login: 'alice', cli: 'claude', model: 'claude-sonnet-5' };
+function selfRunFake(h, delivers) {
   const calls = [];
-  return { calls, runner: (_job, author) => author === 1 ? { id: 'r1', user: 1, login: 'alice', cli: 'claude', model: 'claude-sonnet-5' } : null,
-    run: async (job, _runner, directory) => {
-      calls.push(job.id);
-      if (outcome === 'done') {
-        const packet = { ...h.fixture.packet, headSha: h.live.headSha, baseSha: h.live.baseSha };
-        writeFileSync(join(directory, 'packet.json'), JSON.stringify(packet));
-        writeFileSync(join(directory, 'result.json'), JSON.stringify(completed(packet)));
-      }
-      return outcome;
-    } };
+  const dispatcher = inline(async (job, signal, previous, to) => {
+    if (to === 'pool') return h.runner(job, signal);
+    calls.push(job.id);
+    if (!delivers) throw new Error('runner went quiet');
+    return h.runner(job, signal);
+  }, { own: author => author === 1 ? alice : null });
+  return { calls, dispatcher };
 }
 test('a review delivered by the author\'s runner is published, marked, and never counts against limits', async t => {
   const h = await harness(t);
@@ -1045,15 +1048,17 @@ test('a review delivered by the author\'s runner is published, marked, and never
   const settings = new ReviewSettings(h.config, h.store);
   settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: true });
   const reserved = [];
-  const self = selfRunFake(h, 'done');
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings, job => { reserved.push(job.id); return true; }, undefined, undefined, self);
+  const self = selfRunFake(h, true);
+  let hosted = 0; const run = h.runner;
+  h.runner = async (...args) => { hosted++; return run(...args); };
+  const worker = new Worker(h.config, h.store, h.github, self.dispatcher, 'owner', settings, job => { reserved.push(job.id); return true; });
   for (const delivery of ['a', 'b']) {
     const id = h.store.enqueue(delivery, 1); await worker.tick();
     assert.equal(h.store.get(id).state, 'completed');
     assert.equal(h.store.get(id).runner, "@alice's runner (Claude Code / claude-sonnet-5)");
   }
   assert.equal(self.calls.length, 2);
-  assert.equal(h.counts.runs, 0, 'no hosted inference');
+  assert.deepEqual(self.dispatcher.offered.map(offer => offer.to), [alice, alice], 'nothing was offered to the hosted runners');
   assert.deepEqual(reserved, [], 'no plan or credit reservation');
   assert.equal(h.store.authorReviews(1, 0), 0, 'the per-author limit of 1 was not used up');
   assert.match(h.comment.body, /Ran on @alice's runner \(Claude Code \/ claude-sonnet-5\), with the author's own subscription\. atmin charged nothing/);
@@ -1064,20 +1069,22 @@ test('a runner that does not deliver leaves an ordinary hosted review', async t 
   const settings = new ReviewSettings(h.config, h.store);
   settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: null, selfRun: true });
   const reserved = [];
-  const self = selfRunFake(h, 'silent');
-  const worker = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings, job => { reserved.push(job.id); return h.store.reserve(job, 'owner', 6); }, undefined, undefined, self);
+  const self = selfRunFake(h, false);
+  const worker = new Worker(h.config, h.store, h.github, self.dispatcher, 'owner', settings, job => { reserved.push(job.id); return h.store.reserve(job, 'owner', 6); });
   const id = h.store.enqueue('a', 1); await worker.tick();
+  assert.equal(h.store.get(id).state, 'dispatched', 'offered to the hosted runners');
+  await worker.tick();
   assert.equal(self.calls.length, 1);
-  assert.equal(h.counts.runs, 1);
+  assert.deepEqual(self.dispatcher.offered.map(offer => offer.to), [alice, 'pool']);
   assert.deepEqual(reserved, [id], 'the hosted review reserves as any other');
   assert.equal(h.store.get(id).runner, null);
   assert.equal(h.store.get(id).state, 'completed');
   assert.ok(!h.comment.body.includes('Ran on'));
   // The fallback is subject to the same refusals as any hosted review.
-  const refusing = new Worker(h.config, h.store, h.github, h.runner, 'owner', settings, () => 'Credit used up.', undefined, undefined, selfRunFake(h, 'unclaimed'));
-  h.setLive({ headSha: h.live.headSha });
+  const quiet = selfRunFake(h, false);
+  const refusing = new Worker(h.config, h.store, h.github, quiet.dispatcher, 'owner', settings, () => 'Credit used up.');
   const second = h.store.enqueue('b', 1, 'command'); await refusing.tick();
-  assert.equal(h.counts.runs, 1);
+  assert.deepEqual(quiet.dispatcher.offered.map(offer => offer.to), [alice], 'never offered to the hosted runners');
   assert.match(h.comment.body, /review not run[\s\S]*Credit used up\./);
   assert.equal(h.store.get(second).started, null, 'a refused review never counts as started');
 });

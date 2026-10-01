@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-export type JobState = 'queued' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled' | 'skipped' | 'uncertain';
+// 'dispatched': offered to a runner (the author's own, or one of this service's), whose
+// records the worker collects on a later tick. The worker never waits on a runner.
+export type JobState = 'queued' | 'running' | 'dispatched' | 'publishing' | 'completed' | 'failed' | 'cancelled' | 'skipped' | 'uncertain';
 // `trigger` is what asked for the review: a PR or branch event, or a maintainer's
 // `/atmin review` comment. A command always gets a full review and resets auto-pause.
 export type Trigger = 'event' | 'command';
@@ -56,7 +58,7 @@ export class Store {
   enable(value: boolean): void {
     this.transaction(() => {
       this.db.prepare('UPDATE control SET enabled=?').run(Number(value));
-      if (!value) this.db.prepare("UPDATE jobs SET state='cancelled', error='operator-paused' WHERE state IN ('queued','running','publishing')").run();
+      if (!value) this.db.prepare("UPDATE jobs SET state='cancelled', error='operator-paused' WHERE state IN ('queued','running','dispatched','publishing')").run();
     });
   }
   seen(delivery: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM deliveries WHERE id=?').get(delivery)); }
@@ -66,7 +68,7 @@ export class Store {
       this.db.prepare('INSERT INTO deliveries VALUES(?,?)').run(delivery, Date.now());
       if (!this.enabled()) return null;
       const id = randomUUID();
-      this.db.prepare("UPDATE jobs SET state='cancelled', error='superseded' WHERE pr=? AND state IN ('queued','running','publishing')").run(pr);
+      this.db.prepare("UPDATE jobs SET state='cancelled', error='superseded' WHERE pr=? AND state IN ('queued','running','dispatched','publishing')").run(pr);
       this.db.prepare("INSERT INTO jobs(id,pr,state,created,trigger) VALUES(?,?,'queued',?,?)").run(id, pr, Date.now(), trigger);
       this.db.prepare('INSERT INTO pulls(pr,desired) VALUES(?,?) ON CONFLICT(pr) DO UPDATE SET desired=excluded.desired').run(pr, id);
       return id;
@@ -88,14 +90,14 @@ export class Store {
   release(owner: string): void { this.db.prepare('UPDATE control SET owner=NULL,lease=0 WHERE owner=?').run(owner); }
   owns(owner: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM control WHERE owner=? AND lease>?').get(owner, Date.now())); }
   current(job: Job, owner: string): boolean {
-    return this.enabled() && this.owns(owner) && Boolean(this.db.prepare("SELECT 1 FROM pulls JOIN jobs ON pulls.desired=jobs.id WHERE jobs.id=? AND jobs.state IN ('running','publishing')").get(job.id));
+    return this.enabled() && this.owns(owner) && Boolean(this.db.prepare("SELECT 1 FROM pulls JOIN jobs ON pulls.desired=jobs.id WHERE jobs.id=? AND jobs.state IN ('running','dispatched','publishing')").get(job.id));
   }
   next(owner: string): Job | null {
     return this.transaction(() => {
       if (!this.enabled() || !this.owns(owner)) return null;
       this.db.exec(`DELETE FROM ci_refreshes WHERE job NOT IN (
         SELECT jobs.id FROM jobs JOIN pulls ON jobs.id=pulls.desired
-        WHERE pulls.active=1 AND jobs.state IN ('running','publishing','completed'))`);
+        WHERE pulls.active=1 AND jobs.state IN ('running','dispatched','publishing','completed'))`);
       // Keep events arriving during publication until a second pass can observe them.
       const refresh = this.db.prepare("SELECT job FROM ci_refreshes JOIN jobs ON job=jobs.id WHERE jobs.state='completed' LIMIT 1").get();
       if (refresh) {
@@ -110,6 +112,8 @@ export class Store {
       return this.get(job.id);
     });
   }
+  // Jobs a runner is working on, oldest first.
+  dispatched(): Job[] { return this.db.prepare("SELECT * FROM jobs WHERE state='dispatched' ORDER BY created").all() as unknown as Job[]; }
   reserve(job: Job, owner: string, limit: number): boolean {
     return this.transaction(() => {
       if (!this.current(job, owner)) return false;
@@ -134,7 +138,7 @@ export class Store {
   // latest completed review, which a push review builds on. Unfinished jobs are left alone.
   expireRuns(before: number): string[] {
     return this.transaction(() => {
-      const rows = this.db.prepare(`SELECT id, artifact FROM jobs WHERE artifact IS NOT NULL AND created<? AND state NOT IN ('queued','running','publishing')
+      const rows = this.db.prepare(`SELECT id, artifact FROM jobs WHERE artifact IS NOT NULL AND created<? AND state NOT IN ('queued','running','dispatched','publishing')
         AND id NOT IN (SELECT latest FROM (SELECT (SELECT k.id FROM jobs k WHERE k.pr=p.pr AND k.state='completed' AND k.artifact IS NOT NULL
           ORDER BY k.created DESC, k.rowid DESC LIMIT 1) AS latest FROM (SELECT DISTINCT pr FROM jobs) p) WHERE latest IS NOT NULL)`).all(before);
       for (const row of rows) this.db.prepare('UPDATE jobs SET artifact=NULL WHERE id=?').run(row.id!);
@@ -193,7 +197,7 @@ export class Store {
       // Match our saved snapshot, including fork PRs whose event has no pull_requests array.
       this.db.prepare(`INSERT OR IGNORE INTO ci_refreshes(job)
         SELECT jobs.id FROM jobs JOIN pulls ON jobs.id=pulls.desired
-        WHERE pulls.active=1 AND jobs.state IN ('running','publishing','completed')
+        WHERE pulls.active=1 AND jobs.state IN ('running','dispatched','publishing','completed')
           AND json_extract(jobs.report,'$.initial.headSha')=?`).run(head);
     });
   }

@@ -142,7 +142,7 @@ function failureReason(job: Job): string {
   if (job.state === 'skipped') return 'No review was started for this event. Draft and closed PRs do not trigger automatic reviews.';
   if (job.state === 'cancelled') return 'This run was cancelled. A newer commit or a pause can cancel a review.';
   if (job.state === 'uncertain') return 'GitHub publication could not be confirmed. Check the PR before requesting another review.';
-  if (['queued', 'running', 'publishing'].includes(job.state)) return 'This review is still in progress. Refresh to check its status.';
+  if (['queued', 'running', 'dispatched', 'publishing'].includes(job.state)) return 'This review is still in progress. Refresh to check its status.';
   try {
     const receipt = artifact(job, 'receipt.json');
     const reasons: Record<string, string> = {
