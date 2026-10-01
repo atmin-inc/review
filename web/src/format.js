@@ -52,6 +52,8 @@ export const runStates = {
 
 // Unknown cost is never shown as zero.
 export function runCost(run) {
+  // A member's own runner used their subscription; atmin charged nothing.
+  if (run.runner) return 'Free (own runner)';
   if (run.usage && run.usage.totalUsd !== null) return usd(run.usage.totalUsd);
   return run.started ? 'Unsettled' : 'None';
 }

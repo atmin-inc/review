@@ -69,7 +69,8 @@ export function creditUsedUp(plan: Plan, now: number, url?: string): string {
   const buy = url ? `A repository admin can buy credit on the atmin dashboard (${url}) to keep reviewing` : 'atmin can add credit to keep reviewing';
   return `This organization ${used}has no review credit left. ${buy}${plan.freeReviews ? `; otherwise free reviews start again on ${new Date(end).toISOString().slice(0, 10)}` : ''}. No inference was started.`;
 }
-const startedSince = (store: Store, since: number) => Number(store.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>=?').get(since)!.n);
+// Reviews this service ran: one on the author's own runner costs no inference and counts toward no plan.
+const startedSince = (store: Store, since: number) => Number(store.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>=? AND runner IS NULL').get(since)!.n);
 
 // ponytail: any installation connects up to ten repositories itself; one scheduler serves them all.
 // Separate stores reuse the worker's existing isolation boundary without tenant SQL.
@@ -202,7 +203,7 @@ export class Repositories {
   // Reviews that started inference since `since`, oldest first, across the installation's repositories.
   // Jobs that started inference in [start, end), oldest first.
   started(installation: number, start: number, end: number): { entry: Repository; job: Job }[] {
-    return this.of(installation).flatMap(entry => (entry.store.db.prepare('SELECT * FROM jobs WHERE started>=? AND started<?').all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
+    return this.of(installation).flatMap(entry => (entry.store.db.prepare('SELECT * FROM jobs WHERE started>=? AND started<? AND runner IS NULL').all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
       .sort((a, b) => a.job.started! - b.job.started!);
   }
   // What the installation's repositories store on the shared disk: run records and each

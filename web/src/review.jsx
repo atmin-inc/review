@@ -62,7 +62,7 @@ function Report({ repository, detail, models }) {
       <div><dt>Outcome</dt><dd>{report?.assessment.outcome ?? run.verdict ?? 'No verdict'}</dd></div>
       <div><dt>State</dt><dd><RunState state={run.state}/></dd></div>
       <div><dt>Started</dt><dd><Figure>{dateTime(run.createdAt)}</Figure></dd></div>
-      <div><dt>Model</dt><dd>{model ?? '—'}</dd></div>
+      {run.runner ? <div><dt>Ran on</dt><dd>{run.runner}</dd></div> : <div><dt>Model</dt><dd>{model ?? '—'}</dd></div>}
       <div><dt>Cost</dt><dd>{run.usage?.totalUsd != null ? <Figure>{runCost(run)}</Figure> : runCost(run)}</dd></div>
       {(report?.head ?? run.head) && <div><dt>Commit</dt><dd><Figure>{(report?.head ?? run.head).slice(0, 12)}</Figure></dd></div>}
     </dl>

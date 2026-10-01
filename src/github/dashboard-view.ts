@@ -37,7 +37,7 @@ export function runView(config: PilotConfig, job: Job) {
     usage = { model: profile.model, knownUsd, totalUsd: unsettledCalls || !receipt.finishedAt ? null : knownUsd, unsettledCalls, calls: receipt.calls.length };
   } catch { /* Unknown is not zero, including interrupted receipt writes. */ }
   return { id: job.id, pr: job.pr, state: job.state, createdAt: new Date(job.created).toISOString(), started: job.started !== null,
-    head, verdict, usage, url: `https://github.com/${config.repository}/pull/${job.pr}` };
+    head, verdict, usage, runner: job.runner ?? null, url: `https://github.com/${config.repository}/pull/${job.pr}` };
 }
 
 // What one started review costs the organization: free while it is within the month's free

@@ -102,7 +102,7 @@ function RunsTable({ id, data }) {
           <TableCell className="max-md:hidden"><ExternalLink href={run.url} icon={false}><Figure>#{run.pr}</Figure></ExternalLink></TableCell>
           <TableCell><RunState state={run.state}/></TableCell>
           <TableCell className="max-md:hidden">{run.verdict ?? <span className="text-muted-foreground">—</span>}</TableCell>
-          <TableCell className="max-md:hidden">{modelLabel(data.models, run.usage)}</TableCell>
+          <TableCell className="max-md:hidden">{run.runner ? 'Own runner' : modelLabel(data.models, run.usage)}</TableCell>
           <TableCell className="text-right max-md:hidden">
             {run.usage?.totalUsd != null ? <Figure>{runCost(run)}</Figure> : <span className="text-muted-foreground">{runCost(run)}</span>}
           </TableCell>
@@ -121,13 +121,14 @@ function SettingsForm({ id, data, onSaved }) {
   const [form, setForm] = useState(() => ({
     model: data.settings.model, maxUsd: String(data.settings.maxUsd), maxReviewsPerDay: String(data.settings.maxReviewsPerDay),
     maxReviewsPerAuthor: data.settings.maxReviewsPerAuthor === null ? '' : String(data.settings.maxReviewsPerAuthor),
+    selfRun: data.settings.selfRun === true,
   }));
   const [status, setStatus] = useState({ pending: false, submitted: false, error: null, saved: false });
   const { errors, value } = validateSettings(form, data.models, data.limits);
   const shown = status.submitted ? errors : {};
   const model = data.models.find(m => m.id === form.model);
   const changed = value.model !== data.settings.model || value.maxUsd !== data.settings.maxUsd || value.maxReviewsPerDay !== data.settings.maxReviewsPerDay
-    || value.maxReviewsPerAuthor !== data.settings.maxReviewsPerAuthor;
+    || value.maxReviewsPerAuthor !== data.settings.maxReviewsPerAuthor || value.selfRun !== data.settings.selfRun;
   const edit = (key, next) => { setForm(current => ({ ...current, [key]: next })); setStatus(current => ({ ...current, saved: false, error: null })); };
 
   async function submit(event) {
@@ -185,6 +186,10 @@ function SettingsForm({ id, data, onSaved }) {
         <Field id={`${prefix}-maxReviewsPerAuthor`} label="Reviews per PR author each month" error={shown.maxReviewsPerAuthor}
           help="Counts every review of one person's PRs in this repository. Leave blank for no limit.">
           <Input {...describe('maxReviewsPerAuthor')} inputMode="numeric" autoComplete="off" placeholder="No limit" value={form.maxReviewsPerAuthor} onChange={event => edit('maxReviewsPerAuthor', event.target.value)}/>
+        </Field>
+        <Field id={`${prefix}-selfRun`} label="Members' own runners"
+          help="A member running atmin-code-review-runner reviews their own PRs with their own Claude Code or Codex subscription. Those reviews are free and use none of your reviews or credit. When their runner is offline, the PR is reviewed here as usual.">
+          <Switch {...describe('selfRun')} checked={form.selfRun} onCheckedChange={next => edit('selfRun', next)}/>
         </Field>
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={status.pending || !changed}>{status.pending ? 'Saving…' : 'Save settings'}</Button>

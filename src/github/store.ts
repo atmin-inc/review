@@ -7,7 +7,7 @@ export type JobState = 'queued' | 'running' | 'publishing' | 'completed' | 'fail
 // `trigger` is what asked for the review: a PR or branch event, or a maintainer's
 // `/atmin review` comment. A command always gets a full review and resets auto-pause.
 export type Trigger = 'event' | 'command';
-export interface Job { id: string; pr: number; state: JobState; created: number; started: number | null; artifact: string | null; report: string | null; error: string | null; createStarted: number; trigger: Trigger; author: number | null; }
+export interface Job { id: string; pr: number; state: JobState; created: number; started: number | null; artifact: string | null; report: string | null; error: string | null; createStarted: number; trigger: Trigger; author: number | null; runner: string | null; }
 // Automatic reviews stop after this many distinct reviewed heads of one PR, as CodeRabbit
 // does after five reviewed commits; a `/atmin review` comment starts the count again.
 export const AUTO_PAUSE_AFTER = 5;
@@ -39,6 +39,11 @@ export class Store {
     // per-author limits have none and count toward no author.
     if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'author')) {
       this.db.exec('ALTER TABLE jobs ADD COLUMN author INTEGER');
+    }
+    // Who ran the review when it was not this service: the PR author's own runner, as shown on the
+    // comment and dashboard. Such reviews cost this service no inference, so plans never count them.
+    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'runner')) {
+      this.db.exec('ALTER TABLE jobs ADD COLUMN runner TEXT');
     }
   }
   close(): void { this.db.close(); }
@@ -108,12 +113,23 @@ export class Store {
   reserve(job: Job, owner: string, limit: number): boolean {
     return this.transaction(() => {
       if (!this.current(job, owner)) return false;
-      const count = Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>?').get(Date.now() - 86_400_000)!.n);
+      const count = Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>? AND runner IS NULL').get(Date.now() - 86_400_000)!.n);
       if (count >= limit) return false;
       this.db.prepare('UPDATE jobs SET started=? WHERE id=?').run(Date.now(), job.id);
       return true;
     });
   }
+  // Starts a review on the PR author's own runner. It takes no part in the daily limits, which
+  // count this service's inference only.
+  reserveOnRunner(job: Job, owner: string, runner: string): boolean {
+    return this.transaction(() => {
+      if (!this.current(job, owner)) return false;
+      this.db.prepare('UPDATE jobs SET started=?,runner=? WHERE id=?').run(Date.now(), runner, job.id);
+      return true;
+    });
+  }
+  // The runner did not deliver; the review becomes an ordinary one that has not started yet.
+  releaseRunner(job: Job): void { this.db.prepare('UPDATE jobs SET started=NULL,runner=NULL WHERE id=?').run(job.id); }
   // Clears and returns the run directories of jobs created before `before`, except each PR's
   // latest completed review, which a push review builds on. Unfinished jobs are left alone.
   expireRuns(before: number): string[] {
@@ -127,13 +143,13 @@ export class Store {
   }
   // Reviews of this author's PRs that started inference since `since`.
   authorReviews(author: number, since: number): number {
-    return Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE author=? AND started>=?').get(author, since)!.n);
+    return Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE author=? AND started>=? AND runner IS NULL').get(author, since)!.n);
   }
   get(id: string): Job { return this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as unknown as Job; }
-  update(id: string, values: Partial<Pick<Job, 'state' | 'artifact' | 'report' | 'error' | 'createStarted' | 'author'>>): void {
+  update(id: string, values: Partial<Pick<Job, 'state' | 'artifact' | 'report' | 'error' | 'createStarted' | 'author' | 'runner'>>): void {
     const entries = Object.entries(values);
     if (!entries.length) return;
-    const allowed = ['state', 'artifact', 'report', 'error', 'createStarted', 'author'];
+    const allowed = ['state', 'artifact', 'report', 'error', 'createStarted', 'author', 'runner'];
     if (entries.some(([key]) => !allowed.includes(key))) throw new Error('Invalid job field');
     this.db.prepare(`UPDATE jobs SET ${entries.map(([key]) => `${key}=?`).join(',')} WHERE id=?`).run(...entries.map(([, v]) => v!), id);
   }
