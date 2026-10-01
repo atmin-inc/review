@@ -1,0 +1,33 @@
+# The atmin review worker: webhooks, dashboard, and one review at a time.
+# Installed by deploy/install.sh; deploy/release.sh switches /opt/atmin-review/current and restarts it.
+[Unit]
+Description=atmin review
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=atmin-review
+Group=atmin-review
+WorkingDirectory=/opt/atmin-review/current
+EnvironmentFile=/etc/atmin-review/service.env
+# ATMIN_REVIEW_CONFIG (the pilot config path) is set in service.env.
+ExecStart=/usr/bin/node dist/github/cli.js serve ${ATMIN_REVIEW_CONFIG}
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# The state directories are writable through a drop-in that install.sh writes
+# (atmin-review.service.d/state.conf), since their paths are recorded in the job database.
+# AF_NETLINK lets Bubblewrap set up the private network namespace for local checks
+# (docs/isolated-checks.md).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
