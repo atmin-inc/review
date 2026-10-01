@@ -5,6 +5,9 @@ const runId = /^[a-zA-Z0-9-]{1,100}$/;
 // Stripe Checkout returns to /billing with its session ID once credit is paid for.
 const checkoutId = /^cs_(test|live)_[A-Za-z0-9]{1,250}$/;
 
+// Where someone who would rather not buy credit learns to run atmin review themselves.
+export const selfHostUrl = 'https://github.com/atmin-inc/review#readme';
+
 export const signinMessages = {
   denied: 'GitHub did not grant access. Sign in again.',
   expired: 'The sign-in link expired. Sign in again.',

@@ -46,7 +46,7 @@ export function priceLine(price: ReviewPrice): string {
     const last = price.index + 1 === price.freeReviews && credit && credit.usd <= 0 && !credit.topUp;
     return `**This review is free:** ${price.index + 1} of ${price.freeReviews} free reviews in ${name}.${last ? ` Later reviews this month need review credit, which ${url ? `a repository admin can [buy](${url})` : 'atmin can add'}.` : ''}`;
   }
-  if (price.usd === null) return `**This review’s price is not known yet** because its model cost has not settled. It is review ${price.index + 1} in ${name}, after ${price.freeReviews} free.`;
+  if (price.usd === null) return `**This review’s price is not known yet** because its cost has not settled. It is review ${price.index + 1} in ${name}, after ${price.freeReviews} free.`;
   const left = credit ? ` It was paid from review credit, which has $${Math.max(0, credit.usd).toFixed(2)} left.` : '';
   const warning = !credit || credit.topUp ? ''
     : credit.usd <= 0 ? ` Reviews stop until ${url ? `a repository admin [buys credit](${url})` : 'atmin adds credit'}.`

@@ -2,7 +2,7 @@ import { LogOut, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button.jsx';
 import { Card, CardContent } from './ui/card.jsx';
 import { Avatar, Brand, Mark, Notice, userAvatar } from './components.jsx';
-import { signInHref } from './route.js';
+import { selfHostUrl, signInHref } from './route.js';
 
 const steps = [
   ['Install the App on an organization', 'Install the atmin review GitHub App and choose which repositories it can access.'],
@@ -25,7 +25,10 @@ export function Landing({ route, installUrl, error }) {
           <Button asChild><a href={signInHref(route)}>Sign in with GitHub</a></Button>
           {installUrl && <Button asChild variant="outline"><a href={installUrl}>Install on GitHub</a></Button>}
         </div>
-        <p className="text-[13px] text-muted-foreground">20 reviews a month free for each organization.</p>
+        <p className="text-[13px] text-muted-foreground">
+          20 free reviews a month for each organization, then prepaid credit.
+          Or <a className="link" href={selfHostUrl} target="_blank" rel="noreferrer" onClick={() => console.info('atmin review: self-host link opened from landing')}>run it yourself</a>: it is open source.
+        </p>
       </section>
       <section aria-labelledby="how" className="grid gap-4">
         <h2 id="how">How it works</h2>
