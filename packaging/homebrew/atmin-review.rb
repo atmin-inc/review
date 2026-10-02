@@ -33,7 +33,8 @@ class AtminReview < Formula
     assert_match "code-review-runner", shell_output("#{bin}/atmin-code-review-runner --help")
     assert_match "review", shell_output("#{formula_opt_bin("atmin-inc/tap/atmin")}/atmin --help")
     profile = pkgshare/"profiles/smoke-openrouter-free.json"
-    output = shell_output("#{bin}/atmin-review https://example.com/owner/repo/pull/1 --profile #{profile} 2>&1", 1)
+    url = "https://example.com/owner/repo/pull/1"
+    output = shell_output("#{bin}/atmin-review review #{url} --profile #{profile} 2>&1", 1)
     assert_match "Use an HTTPS github.com pull request URL", output
   end
 end
