@@ -8,6 +8,12 @@ export class ReviewInputError extends Error {
 
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
 export type Priority = typeof PRIORITIES[number];
+// What each priority means. The one rubric every pass that assigns a priority is given.
+export const PRIORITY_RUBRIC = `P0: catastrophic, concretely established, broadly reachable failure such as destruction of primary data; stop release.
+P1: serious realistically reachable security, data or core functionality failure; fix before merge.
+P2: meaningful localized functional defect with a plausible concrete trigger; fix before merge.
+P3: established minor low-impact defect; nonblocking follow-up.
+P4: optional behavior-preserving improvement, no established defect; report only when policy.includeOptional is true.`;
 export const RATING_PRESETS = ['balanced', 'correctness-first', 'strict-conventions'] as const;
 export const QUALITY_CRITERIA = ['codebaseFit', 'simplicity', 'verification', 'documentedConventions'] as const;
 export type QualityCriterion = typeof QUALITY_CRITERIA[number];

@@ -7,6 +7,7 @@ import { repository, persist } from './helpers.mjs';
 import { ablate, runClaimReview, MAX_GUIDANCE_BYTES } from '../dist/claim-run.js';
 import { claimInstructions, failurePathInstruction } from '../dist/investigator.js';
 import { capture } from '../dist/snapshot.js';
+import { PRIORITY_RUBRIC } from '../dist/contracts.js';
 import { renderClaimReview } from '../dist/render-claim.js';
 
 const profile = { provider: 'openai', model: 'gpt-5.4-2026-03-05', maxUsd: 2, maxTurns: 6,
@@ -273,6 +274,19 @@ test('without AGENTS.md files or called code the claim pass is asked exactly the
   const context = JSON.parse(fake.inputs[0].context);
   assert.equal('targetGuidance' in context, false);
   assert.equal('calledCode' in context, false);
+});
+
+// The claim writer picks each claim's priority, and the comment, the check and the rating
+// all follow it. With only the labels P0-P4 to go on, two models rated one removed
+// ownership check P1 and P2 (atmin-inc/review PR 2, 2026-10-02). Every model must be
+// given the same meaning for each label, the one the reviewer rubric already uses.
+test('the claim pass is told what each priority means', async t => {
+  const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
+  await runClaimReview(persist(repository(t)), profile, fake);
+
+  const recordClaim = fake.inputs[0].tools.find(tool => tool.name === 'record_claim');
+  const severity = recordClaim.parameters.properties.severity.description;
+  for (const line of PRIORITY_RUBRIC.split('\n')) assert.ok(severity.includes(line), line);
 });
 
 // On mason-v1 #4590 the defect was in an unchanged mapper the new code threw into, and
