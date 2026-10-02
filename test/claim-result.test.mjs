@@ -92,6 +92,24 @@ test('a confirmed claim is published as a finding and a refuted one is not', asy
   assert.equal(asked, false);
 });
 
+// Both passes can confirm the same defect in their own words, so the two claims get
+// different ids. A reader must see one finding, not two P1s for one bug, and the rating
+// must count it once; the more severe wording wins and keeps both claims' evidence.
+test('two confirmed claims on one line are one finding at the higher priority', async t => {
+  withoutJev(t);
+  const directory = persist(repository(t));
+  await runClaimReviewAsResult(directory, profile, undefined, model([
+    [action('record_claim', claim('P2')),
+      action('record_claim', claim('P1', { suspectedCondition: 'A non-owner renames a record and the call succeeds.' }))],
+    action('end_investigation', { complete: true, limitations: [] })]));
+
+  const { packet, result } = loadReview(directory);
+  assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
+  assert.equal(result.findings[0].evidenceIds.length, 2);
+  assert.match(result.summary, /1 confirmed and shown, 1 merged into a finding on the same line/);
+  assert.equal(assess(packet, result, current()).findings.filter(f => f.priority === 'P1').length, 1);
+});
+
 test('a withheld minor finding is listed, not published, and a run that stops claims no coverage', async t => {
   withoutJev(t);
   const minor = persist(repository(t));
