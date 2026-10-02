@@ -41,7 +41,14 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     anchors: text.map(file => ({ path: file.path, side: file.change === 'deleted' ? 'base' : 'head', line: null })) });
 
   const outside: string[] = [];
-  run.chains.filter(chain => chain.verdict === 'confirmed').forEach((chain, index) => {
+  // One finding per line: two confirmed claims on the same line are one defect seen twice
+  // (the main and failure-path passes word it differently, so their claim ids differ).
+  // The most severe is shown and carries the other's evidence; the summary counts the merge.
+  const onLine = new Map<string, Finding>();
+  let merged = 0;
+  const confirmed = run.chains.filter(chain => chain.verdict === 'confirmed')
+    .sort((a, b) => (byId.get(a.claimId)?.severity ?? 'P4').localeCompare(byId.get(b.claimId)?.severity ?? 'P4'));
+  confirmed.forEach((chain, index) => {
     const claim = byId.get(chain.claimId);
     if (!claim) return;
     let anchor: Anchor | undefined;
@@ -59,14 +66,18 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     evidence.push({ id, kind: 'source-reasoning', provenance: 'declared', anchors: [anchor],
       summary: clip(`Verified at ${chain.verifierConfidence} confidence. ${established.length} of ${chain.propositions.length} proposition(s) established: `
         + established.map(item => `${item.proposition} [${item.settledBy ?? 'unsettled'}]`).join('; ')) });
-    findings.push({ id, priority: claim.severity, kind: claim.severity === 'P4' ? 'improvement' : 'defect',
+    const same = onLine.get(`${anchor.path}:${anchor.line}`);
+    if (same) { same.evidenceIds.push(id); merged++; return; }
+    const finding: Finding = { id, priority: claim.severity, kind: claim.severity === 'P4' ? 'improvement' : 'defect',
       category: CATEGORY[claim.type], title: clip(run.titles?.[claim.claimId] ?? claim.description, 400), trigger: clip(claim.suspectedCondition),
       consequence: clip(claim.description),
       priorityReason: `Rated ${claim.severity} by the reviewer when it made the claim; type ${claim.type}.`,
       counterEvidence: clip(`Each proposition was checked against the frozen revision: ${chain.propositions
         .map(item => `${item.proposition} (${item.status})`).join('; ')}`),
       ...(claim.shouldBe ? { suggestion: clip(claim.shouldBe.text) } : {}),
-      anchor, evidenceIds: [id] });
+      anchor, evidenceIds: [id] };
+    findings.push(finding);
+    onLine.set(`${anchor.path}:${anchor.line}`, finding);
   });
   for (const item of outside) limitations.push(clip(`Confirmed, but its location does not resolve at this revision: ${item}`));
   const withheld = run.chains.filter(chain => chain.verdict === 'withheld').map(chain => byId.get(chain.claimId)?.location).filter(Boolean);
@@ -78,7 +89,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     schemaVersion: 1, headSha: packet.headSha, baseSha: packet.baseSha, policyHash: packet.policyHash,
     status: completed ? 'completed' : 'partial',
     reviewer: { name: 'atmin claim review', model: run.model, context: 'independent' },
-    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${withheld.length} withheld as minor, `
+    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${merged ? `${merged} merged into a finding on the same line, ` : ''}${withheld.length} withheld as minor, `
       + `${counts.refuted} refuted, ${counts.inconclusive} inconclusive. Policy verdict ${run.verdict} (rule ${run.rule}).`,
     coverage: packet.changedFiles.map(file => ({ path: file.path,
       status: completed && file.kind === 'text' ? 'reviewed' : 'unreviewed', evidenceIds: completed && file.kind === 'text' ? ['change-diff'] : [] })),
