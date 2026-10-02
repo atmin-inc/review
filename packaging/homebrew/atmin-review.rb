@@ -1,5 +1,5 @@
 class AtminReview < Formula
-  desc "atmin review: evidence-based code review, and the runner for your own CLI subscription"
+  desc "Evidence-based code review and a runner for your own CLI subscription"
   homepage "https://github.com/atmin-inc/review"
   url "https://registry.npmjs.org/@atmin.ai/review/-/review-0.1.0-alpha.3.tgz"
   sha256 "SET_AT_RELEASE"
@@ -31,8 +31,9 @@ class AtminReview < Formula
     assert_match "atmin-review", shell_output("#{bin}/atmin-review --help")
     assert_match "Starts paused", shell_output("#{bin}/atmin-review-github --help")
     assert_match "code-review-runner", shell_output("#{bin}/atmin-code-review-runner --help")
-    assert_match "review", shell_output("#{Formula["atmin-inc/tap/atmin"].opt_bin}/atmin --help")
-    output = shell_output("#{bin}/atmin-review https://example.com/owner/repo/pull/1 --profile #{pkgshare}/profiles/smoke-openrouter-free.json 2>&1", 1)
+    assert_match "review", shell_output("#{formula_opt_bin("atmin-inc/tap/atmin")}/atmin --help")
+    profile = pkgshare/"profiles/smoke-openrouter-free.json"
+    output = shell_output("#{bin}/atmin-review https://example.com/owner/repo/pull/1 --profile #{profile} 2>&1", 1)
     assert_match "Use an HTTPS github.com pull request URL", output
   end
 end
