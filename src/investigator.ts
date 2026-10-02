@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Ajv } from 'ajv';
 import { assignClaimIds, claimRejection, parseLocation, CLAIM_TYPES, type Claim, type ClaimDraft } from './claim.js';
-import { PRIORITIES, ReviewInputError, text as str } from './contracts.js';
+import { PRIORITIES, PRIORITY_RUBRIC, ReviewInputError, text as str } from './contracts.js';
 import type { Model, ModelReply, TurnInput } from './investigation.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import type { Revisions } from './symbolic.js';
@@ -34,7 +34,7 @@ export const claimSchema = {
     location: { type: 'string', pattern: '^[^\\u0000\\r\\n]+:[0-9]+$' },
     description: str,
     suspectedCondition: str,
-    severity: { type: 'string', enum: [...PRIORITIES] },
+    severity: { type: 'string', enum: [...PRIORITIES], description: `Priority if the claim holds:\n${PRIORITY_RUBRIC}` },
     evidenceToCheck: { type: 'array', minItems: 1, maxItems: 8, items: {
       type: 'object', additionalProperties: false,
       properties: { proposition: str, revision: { type: 'string', enum: ['head', 'base'], default: 'head' }, check: symbolicCheck },
