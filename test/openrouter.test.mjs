@@ -157,3 +157,26 @@ test('paid request cannot start without budget; unknown charge retains its reser
   assert.ok(unknown.receipt.calls[0].reservedUsd > 0);
   assert.match(unknown.receipt.stopReason, /cost confirmation missing/);
 });
+
+// Customer code goes in every request, so the production model may only reach a route that
+// keeps none of it: a request without zdr could be served, and kept, by any route.
+test('the production model is sent only to a zero-data-retention route', async () => {
+  const bodies = [];
+  const luna = parseProfile(JSON.parse(readFileSync(new URL('../profiles/review-luna-openrouter.json', import.meta.url))));
+  const adapter = openRouterModel(luna, 'fixture-key', async (url, options) => {
+    if (url.endsWith('/models')) return Response.json({ data: [{ id: luna.model, canonical_slug: 'openai/gpt-6-luna-20260922', supported_parameters: ['tools', 'tool_choice'] }] });
+    if (url.endsWith('/endpoints')) return Response.json({ data: { endpoints: [{ tag: 'azure', status: 0, supports_tool_choice: { required: true },
+      supported_parameters: ['tools', 'tool_choice'], pricing: { prompt: '0.0000001', completion: '0.0000005' } }] } });
+    bodies.push(JSON.parse(options.body));
+    const data = response(); data.model = luna.model; data.usage.cost = 0.00001;
+    return Response.json(data);
+  });
+  const signal = AbortSignal.timeout(5000);
+  await adapter.count(input, signal);
+  await adapter.respond(input, 100, signal);
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(bodies[0].provider.only, ['azure']);
+  assert.equal(bodies[0].provider.zdr, true);
+  assert.equal(bodies[0].provider.data_collection, 'deny');
+  assert.equal(bodies[0].provider.allow_fallbacks, false);
+});

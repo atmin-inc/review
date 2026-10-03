@@ -11,10 +11,13 @@ export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTE
   if (profile.provider !== 'openrouter') throw new Error('Unsupported OpenRouter profile');
   // Each paid model is pinned to one route and one price ceiling, read from
   // https://openrouter.ai/api/v1/models/<model>/endpoints on the date in investigation.ts.
-  const paidRoutes: Record<string, { canonicalSlug: string; route: string; prompt: number; completion: number }> = {
+  // A route marked zdr is one OpenRouter lists as zero data retention
+  // (https://openrouter.ai/api/v1/endpoints/zdr): customer code sent to it is not kept. The
+  // production model must be on one; the others are benchmark-only.
+  const paidRoutes: Record<string, { canonicalSlug: string; route: string; prompt: number; completion: number; zdr?: true }> = {
     'deepseek/deepseek-v3.2': { canonicalSlug: 'deepseek/deepseek-v3.2-20251201', route: 'novita/fp8', prompt: 0.269, completion: 0.4 },
     'anthropic/claude-sonnet-5': { canonicalSlug: 'anthropic/claude-sonnet-5-20260630', route: 'anthropic', prompt: 2, completion: 10 },
-    'openai/gpt-6-luna': { canonicalSlug: 'openai/gpt-6-luna-20260922', route: 'openai', prompt: 0.1, completion: 0.5 },
+    'openai/gpt-6-luna': { canonicalSlug: 'openai/gpt-6-luna-20260922', route: 'azure', prompt: 0.1, completion: 0.5, zdr: true },
   };
   const pinned = paidRoutes[profile.model];
   const paid = pinned !== undefined;
@@ -26,7 +29,8 @@ export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTE
   const payload = (input: TurnInput) => ({
     model: profile.model, messages: [{ role: 'system', content: input.instructions }, { role: 'user', content: input.context }, ...input.transcript],
     tools: input.tools.map(tool => ({ type: 'function', function: tool })), tool_choice: 'required',
-    provider: { only: [route], allow_fallbacks: false, require_parameters: true, max_price: { prompt: ceiling.prompt, completion: ceiling.completion, request: 0 } },
+    provider: { only: [route], allow_fallbacks: false, require_parameters: true, max_price: { prompt: ceiling.prompt, completion: ceiling.completion, request: 0 },
+      ...(pinned?.zdr ? { zdr: true, data_collection: 'deny' } : {}) },
     stream: false,
   });
   const getJson = async (url: string, options: RequestInit, stage: 'count' | 'inference') => {

@@ -109,7 +109,7 @@ export interface Receipt {
   toolCalls: number;
   toolErrors: { tool: string; reason: string }[];
 }
-// Luna at OpenAI's standard rates, direct or on OpenRouter's pinned openai route. Prompt
+// Luna at OpenAI's standard rates, direct or on OpenRouter's pinned azure route (same rates). Prompt
 // tokens written to the cache cost 1.25x input; a prompt over 272K tokens costs 2x input and
 // cache rates and 1.5x output for the whole request (developers.openai.com, 2026-09-26).
 const luna = (input: number, output: number, cached: number, writes: number) => {
@@ -163,7 +163,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
       : profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' }
       : profile.model === 'anthropic/claude-sonnet-5' ? { providerRoute: 'anthropic', inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 10, checkedAt: '2026-09-23', source: 'https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints' }
       : profile.model === 'gpt-6-luna' ? { inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, cacheWritePerMillionUsd: 0.125, outputPerMillionUsd: 0.5, checkedAt: '2026-09-26', source: 'https://developers.openai.com/api/docs/models/gpt-6-luna' }
-      : profile.model === 'openai/gpt-6-luna' ? { providerRoute: 'openai', inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, outputPerMillionUsd: 0.5, checkedAt: '2026-09-23', source: 'https://openrouter.ai/api/v1/models/openai/gpt-6-luna/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
+      : profile.model === 'openai/gpt-6-luna' ? { providerRoute: 'azure', inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, outputPerMillionUsd: 0.5, checkedAt: '2026-10-03', source: 'https://openrouter.ai/api/v1/models/openai/gpt-6-luna/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
       : { inputPerMillionUsd: 2.5, cachedInputPerMillionUsd: 0.25, outputPerMillionUsd: 15,
         checkedAt: '2026-09-09', source: 'https://developers.openai.com/api/docs/models/gpt-5.4' },
