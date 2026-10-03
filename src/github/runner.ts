@@ -79,12 +79,15 @@ export function childEnvironment(home: string, credentials: Record<string, strin
 // code, network (it fetches from GitHub and calls the model), its own run and the one
 // repository it reviews. Every runner and review runs as the same user, so without this a
 // child broken by a hostile repository could read every other organization's code.
+// No /proc: systemd's ProtectKernelTunables masks parts of the host's /proc, and the kernel
+// then refuses a fresh one (EPERM, seen on review.atmin.ai 2026-10-03); binding the host's
+// instead would show the runners' environments, which hold the model key.
 export interface Isolation { writable: string[]; readable: string[] }
 const networkFiles = ['/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf', '/etc/passwd', '/etc/group', '/etc/ssl', '/etc/ca-certificates', '/etc/pki', '/etc/gitconfig', '/run/systemd/resolve'];
 export function childSandbox(home: string, isolation: Isolation, app = realpathSync(fileURLToPath(new URL('../..', import.meta.url))), runtime = process.execPath): string[] {
   return ['--unshare-all', '--share-net', '--die-with-parent', '--new-session', '--cap-drop', 'ALL', ...runtimeMounts(runtime),
     ...networkFiles.flatMap(path => ['--ro-bind-try', path, path]),
-    '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--ro-bind', app, app,
+    '--dev', '/dev', '--tmpfs', '/tmp', '--ro-bind', app, app,
     ...isolation.readable.flatMap(path => ['--ro-bind', path, path]),
     ...[home, ...isolation.writable].flatMap(path => ['--bind', path, path]), '--chdir', home, '--'];
 }
