@@ -1,11 +1,14 @@
 name: release
-# Pushing a tag v<version> (the version in package.json) publishes @atmin.ai/review to npm
-# and updates the atmin-review formula in atmin-inc/homebrew-tap, tested before it is pushed.
+# A version in package.json that npm does not have yet, once on main, is published: @atmin.ai/review
+# to npm, the tag v<version> on that commit, and the atmin-review formula in atmin-inc/homebrew-tap,
+# tested before it is pushed. Releasing is merging a version bump, the same as deploying.
 # npm: trusted publishing from this workflow (no npm token is stored). Homebrew: TAP_TOKEN,
 # a token that may push to atmin-inc/homebrew-tap. Both live in the `release` environment.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: [package.json, .github/workflows/release.yml]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -17,10 +20,11 @@ jobs:
     timeout-minutes: 20
     environment: release
     permissions:
-      contents: read
+      contents: write
       id-token: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -30,21 +34,37 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - id: version
-        name: The tag names the package version
+        name: Is this version new to npm?
         run: |
           version="$(node -p 'require("./package.json").version')"
-          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json version $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: npm ci --ignore-scripts
-      - run: npm test
-      - run: node packaging/verify.mjs
+          # npm view prints nothing and fails for a version it does not have.
+          if npm view "@atmin.ai/review@$version" version >/dev/null 2>&1; then
+            echo "published=no" >> "$GITHUB_OUTPUT"; echo "$version is already on npm; nothing to release."
+          else
+            echo "published=yes" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.published == 'yes'
+        run: npm ci --ignore-scripts
+      - if: steps.version.outputs.published == 'yes'
+        run: npm test
+      - if: steps.version.outputs.published == 'yes'
+        run: node packaging/verify.mjs
       # Trusted publishing needs npm 11.5.1 or later; fail here rather than at publish.
-      - run: node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
+      - if: steps.version.outputs.published == 'yes'
+        run: node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
       # Every release so far is an alpha and `latest` points at it, so publish there explicitly.
-      - run: npm publish --provenance --access public --tag latest
+      - if: steps.version.outputs.published == 'yes'
+        run: npm publish --provenance --access public --tag latest
+      - if: steps.version.outputs.published == 'yes'
+        name: Tag the released commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v${{ steps.version.outputs.version }}" -f sha="$GITHUB_SHA"
 
   homebrew:
     needs: npm
+    if: needs.npm.outputs.published == 'yes'
     runs-on: macos-latest
     timeout-minutes: 30
     environment: release
