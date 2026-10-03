@@ -1,0 +1,92 @@
+name: release
+# Pushing a tag v<version> (the version in package.json) publishes @atmin.ai/review to npm
+# and updates the atmin-review formula in atmin-inc/homebrew-tap, tested before it is pushed.
+# npm: trusted publishing from this workflow (no npm token is stored). Homebrew: TAP_TOKEN,
+# a token that may push to atmin-inc/homebrew-tap. Both live in the `release` environment.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - id: version
+        name: The tag names the package version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json version $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: node packaging/verify.mjs
+      # Trusted publishing needs npm 11.5.1 or later; fail here rather than at publish.
+      - run: node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
+      # Every release so far is an alpha and `latest` points at it, so publish there explicitly.
+      - run: npm publish --provenance --access public --tag latest
+
+  homebrew:
+    needs: npm
+    runs-on: macos-latest
+    timeout-minutes: 30
+    environment: release
+    env:
+      VERSION: ${{ needs.npm.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      # A new version can 404 for a few minutes after npm accepts it (seen 2026-10-02).
+      - name: Download the published archive and check it against npm's integrity
+        run: |
+          url="https://registry.npmjs.org/@atmin.ai/review/-/review-$VERSION.tgz"
+          for i in $(seq 1 30); do curl -fsSL -o review.tgz "$url" && break; sleep 20; done
+          [ -s review.tgz ] || { echo "$url did not download"; exit 1; }
+          expected="$(npm view "@atmin.ai/review@$VERSION" dist.integrity)"
+          actual="sha512-$(openssl dgst -sha512 -binary review.tgz | base64 | tr -d '\n')"
+          [ "$expected" = "$actual" ] || { echo "Archive integrity $actual is not npm's $expected"; exit 1; }
+          echo "URL=$url" >> "$GITHUB_ENV"
+          echo "SHA256=$(shasum -a 256 review.tgz | cut -d' ' -f1)" >> "$GITHUB_ENV"
+      - name: Write the formula into the tap
+        run: |
+          brew tap atmin-inc/tap
+          tap="$(brew --repository atmin-inc/tap)"
+          sed -e "s|^  url \".*\"|  url \"$URL\"|" -e "s|^  sha256 \".*\"|  sha256 \"$SHA256\"|" \
+            packaging/homebrew/atmin-review.rb > "$tap/Formula/atmin-review.rb"
+          grep -q "$SHA256" "$tap/Formula/atmin-review.rb" || { echo "The formula did not take the checksum"; exit 1; }
+          echo "TAP=$tap" >> "$GITHUB_ENV"
+      - name: Install, test and audit before pushing
+        env:
+          HOMEBREW_NO_INSTALL_FROM_API: '1'
+        run: |
+          brew install --build-from-source atmin-inc/tap/atmin-review
+          brew test atmin-inc/tap/atmin-review
+          brew audit --strict atmin-inc/tap/atmin-review
+      - name: Push the tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          cd "$TAP"
+          git config user.name 'atmin release'
+          git config user.email 'release@atmin.ai'
+          git add Formula/atmin-review.rb
+          git commit -m "atmin-review $VERSION"
+          git push "https://x-access-token:${TAP_TOKEN}@github.com/atmin-inc/homebrew-tap.git" HEAD:main
