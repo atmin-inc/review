@@ -193,6 +193,7 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   const limitations = [...review.investigation.limitations, ...review.verification.limitations];
   if (!jev) limitations.push('The cross-family rung was off (no TYPESAFE_API_KEY), so no finding reached high confidence through agreement.');
   if (note) limitations.push(note);
+  if (!packet.changedFiles.length) limitations.push('This pull request changes no files, so there was nothing to review.');
   if (titling.failure) limitations.push(`Finding titles were not written (${titling.failure}), so each finding is titled by its full description.`);
   persist('result.json', claimResult(packet, join(directory, 'source.git'), {
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,

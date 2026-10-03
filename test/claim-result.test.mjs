@@ -336,6 +336,27 @@ test('nothing new to read asks no model; a moved merge base or a rewritten head 
   }
 });
 
+// atmin-inc/review PR 3 has no changes. A model asked to review an empty diff ended with
+// complete=false, and the PR read "Review incomplete" with a failing check: a verdict about
+// work that did not exist. An empty change is reviewed completely, by asking no one.
+test('a pull request with no changes asks no model and is a complete review', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  fixture.run('commit', '--allow-empty', '-qm', 'no changes');
+  const headSha = fixture.run('rev-parse', 'HEAD');
+  const empty = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, baseSha: fixture.state.headSha, headSha }) });
+  assert.equal(loadReview(empty).packet.changedFiles.length, 0);
+  let asked = false;
+  await runClaimReviewAsResult(empty, profile, undefined, { ...model([]), async respond() { asked = true; throw new Error('no model call expected'); } });
+
+  assert.equal(asked, false);
+  const { packet, result } = loadReview(empty);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.findings, []);
+  assert.match(result.limitations.join(' '), /changes no files/);
+  assert.equal(assess(packet, result, current()).scope, 'complete');
+});
+
 test('a partial earlier review is not built on', async t => {
   withoutJev(t);
   const stopped = persist(repository(t));
