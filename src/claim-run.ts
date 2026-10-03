@@ -170,8 +170,9 @@ export async function runClaimReview(directory: string, profile: Profile,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
     maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}), ...charges(profile),
   });
-  // Nothing new to read, as when only the target branch moved: no model is asked.
-  const main = incremental && !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, limits(profile.maxUsd), signal);
+  // Nothing to read, as in a PR with no changes or a push that only moved the target
+  // branch: no model is asked. Asked anyway, a model can only call the review incomplete.
+  const main = !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, limits(profile.maxUsd), signal);
   // A second pass on failure paths alone, within what the first left of the budget, shown
   // only the diff around error handling; a change with none gets no second pass. See
   // failurePathInstruction for why it is a pass of its own, failureExcerpt for the cost.
