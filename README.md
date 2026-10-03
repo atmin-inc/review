@@ -36,7 +36,7 @@ Requires Node 24 or newer, Git, and an authenticated GitHub CLI (`gh auth login`
 Install the versioned release in a fresh directory:
 
 ```sh
-npm install @atmin.ai/review@0.1.0-alpha.3
+npm install @atmin.ai/review@0.1.0-alpha.4
 npx atmin-review --help
 cp node_modules/@atmin.ai/review/profiles/smoke-openrouter-free.json ./review-profile.json
 ```
