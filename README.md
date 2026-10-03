@@ -28,7 +28,8 @@ runs the installed `atmin-<tool>` binary, so other atmin tools sit beside this o
 `atmin review …` runs `atmin-review`, and `atmin code-review-runner …` runs your own
 review runner. All commands below are available as `atmin review` (or
 `atmin-review`) without the `npx` prefix. If you installed the older
-`atmin-inc/tap/atmin` formula, run `brew uninstall atmin` first.
+`atmin-inc/tap/atmin` formula, run `brew uninstall atmin` first. If Homebrew refuses to load a
+formula from an untrusted tap, run `brew trust atmin-inc/tap` and install again.
 
 ### npm
 

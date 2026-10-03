@@ -62,9 +62,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v${{ steps.version.outputs.version }}" -f sha="$GITHUB_SHA"
 
+  # Runs for every version, not only one published just now, so a tap update that failed is
+  # retried by the next run; it does nothing once the tap already installs this version.
   homebrew:
     needs: npm
-    if: needs.npm.outputs.published == 'yes'
     runs-on: macos-latest
     timeout-minutes: 30
     environment: release
@@ -74,8 +75,20 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      # Current Homebrew refuses formulas from a third-party tap until it is trusted; the
+      # atmin-review formula depends on this tap's atmin formula.
+      - name: Is the tap already on this version?
+        run: |
+          brew tap atmin-inc/tap
+          brew trust atmin-inc/tap
+          tap="$(brew --repository atmin-inc/tap)"
+          echo "TAP=$tap" >> "$GITHUB_ENV"
+          if grep -q "review-$VERSION.tgz\"" "$tap/Formula/atmin-review.rb"; then
+            echo "CURRENT=yes" >> "$GITHUB_ENV"; echo "The tap already installs $VERSION."
+          fi
       # A new version can 404 for a few minutes after npm accepts it (seen 2026-10-02).
       - name: Download the published archive and check it against npm's integrity
+        if: env.CURRENT != 'yes'
         run: |
           url="https://registry.npmjs.org/@atmin.ai/review/-/review-$VERSION.tgz"
           for i in $(seq 1 30); do curl -fsSL -o review.tgz "$url" && break; sleep 20; done
@@ -86,14 +99,13 @@ jobs:
           echo "URL=$url" >> "$GITHUB_ENV"
           echo "SHA256=$(shasum -a 256 review.tgz | cut -d' ' -f1)" >> "$GITHUB_ENV"
       - name: Write the formula into the tap
+        if: env.CURRENT != 'yes'
         run: |
-          brew tap atmin-inc/tap
-          tap="$(brew --repository atmin-inc/tap)"
           sed -e "s|^  url \".*\"|  url \"$URL\"|" -e "s|^  sha256 \".*\"|  sha256 \"$SHA256\"|" \
-            packaging/homebrew/atmin-review.rb > "$tap/Formula/atmin-review.rb"
-          grep -q "$SHA256" "$tap/Formula/atmin-review.rb" || { echo "The formula did not take the checksum"; exit 1; }
-          echo "TAP=$tap" >> "$GITHUB_ENV"
+            packaging/homebrew/atmin-review.rb > "$TAP/Formula/atmin-review.rb"
+          grep -q "$SHA256" "$TAP/Formula/atmin-review.rb" || { echo "The formula did not take the checksum"; exit 1; }
       - name: Install, test and audit before pushing
+        if: env.CURRENT != 'yes'
         env:
           HOMEBREW_NO_INSTALL_FROM_API: '1'
         run: |
@@ -101,6 +113,7 @@ jobs:
           brew test atmin-inc/tap/atmin-review
           brew audit --strict atmin-inc/tap/atmin-review
       - name: Push the tap
+        if: env.CURRENT != 'yes'
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
