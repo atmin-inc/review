@@ -370,6 +370,9 @@ test('a review child sees only its own run, its own repository and the system, n
     assert.ok(!path.startsWith('/var/lib/atmin'), `${path} is service or runner state`);
   }
   assert.ok(args.includes('--unshare-all') && args.includes('--share-net') && args.includes('--die-with-parent'));
+  // A fresh /proc fails under the runner unit's ProtectKernelTunables, and the host's would
+  // show other processes' environments.
+  assert.ok(!args.includes('--proc') && !mounted.some(([, path]) => path === '/proc'));
   assert.equal(args.at(-1), '--');
 });
 
