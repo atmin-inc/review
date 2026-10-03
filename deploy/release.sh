@@ -52,6 +52,21 @@ if [[ ! -f "$release/.built" ]]; then
   touch "$release/.built"
 fi
 
+# Hosted reviews run inside Bubblewrap (childSandbox in src/github/runner.ts). Prove it starts as
+# the runners' user under the runner unit's restrictions before switching; if it cannot, every
+# hosted review would fail, so the live release stays.
+if ! systemd-run --quiet --wait --collect --pipe -p User=atmin-review -p Group=atmin-review -p NoNewPrivileges=yes \
+    -p PrivateTmp=yes -p ProtectSystem=strict -p ProtectHome=yes -p ProtectKernelTunables=yes -p ProtectKernelModules=yes \
+    -p ProtectControlGroups=yes -p 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' -p LockPersonality=yes \
+    /usr/bin/node --input-type=module -e "
+      import { childSandbox } from '$release/dist/github/runner.js';
+      import { spawnSync } from 'node:child_process'; import { mkdtempSync } from 'node:fs';
+      const home = mkdtempSync('/tmp/atmin-sandbox-check-');
+      const run = spawnSync('bwrap', [...childSandbox(home, { writable: [], readable: [] }), process.execPath, '-e', ''], { stdio: 'inherit' });
+      process.exit(run.status ?? 1);"; then
+  log "review sandbox (bwrap) does not start for atmin-review; not deploying"; exit 1
+fi
+
 previous="$(readlink -f "$root/current" || true)"
 switch() { ln -sfn "$1" "$root/current.next" && mv -T "$root/current.next" "$root/current"; }
 switch "$release"
