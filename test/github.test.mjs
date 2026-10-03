@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync, verify } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,7 @@ import { capture } from '../dist/snapshot.js';
 import { Worker, markerFor, failureCause } from '../dist/github/worker.js';
 import { AppGitHub, GitHubError, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
-import { childEnvironment, hostedReview, expireRuns, trimSourceCache } from '../dist/github/runner.js';
+import { childEnvironment, childSandbox, hostedReview, expireRuns, expireIdleCopies, trimSourceCache, REPOSITORY_IDLE_MS } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
 import { outcomeSummary } from '../dist/github/outcomes.js';
 import { repository, completed, finding, current, inline } from './helpers.mjs';
@@ -353,6 +353,49 @@ test('a run keeps its review records but not its copy of the repository, whether
   await assert.rejects(hostedReview({ job: 'job-1', repository: 'o/r', pr: 1, token: 'read-token', previous: null, profile }, run, join(root, 'cache.git'), stopped.signal, {}), /cancelled/);
   assert.equal(existsSync(join(run, 'source.git')), false);
   assert.equal(existsSync(join(run, 'packet.json')), true);
+});
+
+// Every runner and review runs as one user, so the sandbox is what keeps one organization's
+// review from reading another's code: it mounts only the paths it is given.
+test('a review child sees only its own run, its own repository and the system, not other repositories', () => {
+  const args = childSandbox('/private/home', { writable: ['/runs/job-1'], readable: ['/cache/org-a__repo'] }, '/opt/app', '/opt/node/bin/node');
+  const mounted = [];
+  for (let i = 0; i < args.length; i++) if (['--bind', '--ro-bind', '--ro-bind-try'].includes(args[i])) { mounted.push([args[i], args[i + 1]]); i += 2; }
+  const writable = mounted.filter(([kind]) => kind === '--bind').map(([, path]) => path);
+  assert.deepEqual(writable, ['/private/home', '/runs/job-1']);
+  assert.ok(mounted.some(([kind, path]) => kind === '--ro-bind' && path === '/cache/org-a__repo'));
+  assert.ok(mounted.some(([kind, path]) => kind === '--ro-bind' && path === '/opt/app'));
+  for (const [, path] of mounted) {
+    assert.ok(!['/', '/etc', '/var', '/var/lib', '/home', '/cache', '/runs', '/etc/atmin-review'].includes(path), `${path} would expose more than this review`);
+    assert.ok(!path.startsWith('/var/lib/atmin'), `${path} is service or runner state`);
+  }
+  assert.ok(args.includes('--unshare-all') && args.includes('--share-net') && args.includes('--die-with-parent'));
+  assert.equal(args.at(-1), '--');
+});
+
+test('a sandboxed child cannot read another repository\'s copy', { skip: process.env.ATMIN_REVIEW_VERIFY_LINUX !== '1' }, t => {
+  const root = mkdtempSync(join(tmpdir(), 'atmin-sandbox-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const name of ['home', 'run', 'org-a', 'org-b']) mkdirSync(join(root, name));
+  writeFileSync(join(root, 'org-a', 'code'), 'a'); writeFileSync(join(root, 'org-b', 'code'), 'b');
+  const read = path => spawnSync('bwrap', [...childSandbox(join(root, 'home'), { writable: [join(root, 'run')], readable: [join(root, 'org-a')] }), '/bin/cat', path], { encoding: 'utf8' });
+  assert.equal(read(join(root, 'org-a', 'code')).stdout, 'a');
+  const other = read(join(root, 'org-b', 'code'));
+  assert.notEqual(other.status, 0); assert.equal(other.stdout, '');
+});
+
+// Lors, 2026-10-03: a repository's code stays on a runner only while it is being reviewed, and
+// is deleted after a day with no review; the next review fetches it again.
+test('a repository copy is deleted after a day without a review, and a recently used one is kept', t => {
+  const root = mkdtempSync(join(tmpdir(), 'atmin-copies-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const now = Date.now();
+  for (const [name, age] of [['idle', REPOSITORY_IDLE_MS + 60_000], ['recent', REPOSITORY_IDLE_MS - 60_000]]) {
+    mkdirSync(join(root, name, 'source.git'), { recursive: true });
+    const at = new Date(now - age); utimesSync(join(root, name), at, at);
+  }
+  assert.equal(expireIdleCopies(root, now), 1);
+  assert.equal(existsSync(join(root, 'idle')), false);
+  assert.equal(existsSync(join(root, 'recent', 'source.git')), true);
+  assert.equal(expireIdleCopies(join(root, 'missing'), now), 0);
 });
 
 test('App JWT verifies, installation tokens are repository scoped, forged summary marker is ignored', async () => {

@@ -132,13 +132,22 @@ verify proposed patches on a configured Linux worker. This private pilot is not
 a hardened isolation boundary for many tenants. Each connected repository has its own
 state directory, database and shared copy of its history. A repository over 2 GB on GitHub
 does not connect; no review starts while the state disk has less than `minFreeDiskMb`
-(default 2048) free; a shared copy over 3 GB is wiped before the next capture; and run
+(default 2048) free; a shared copy over 3 GB is wiped before the next capture; a runner's copy of a
+repository is deleted after 24 hours with no review of it; and run
 records older than 90 days are deleted, except each PR's latest completed review. Each
 organization's run records and shared copies together are held to `maxInstallationDiskMb`
 (default 5120), checked before each review, so one review can go past it. Over the limit,
 the organization's shared copies are wiped first, since the next review fetches its own
 again; if its run records alone are still over, the review does not start, the PR comment
 says why, and nothing counts against the plan. `/admin` shows each organization's use.
+
+On the hosted runners every review step (capture, investigation, checks) runs in a Bubblewrap
+sandbox that mounts only the system, the release's code, that run's directory and that one
+repository's copy, so a step broken by a hostile repository cannot read another organization's
+code. The release script refuses to deploy if the sandbox cannot start. Anyone with root on the
+host can still read code while a review runs, and the model provider receives the code it
+reviews: Luna is sent only to OpenRouter's zero-data-retention route. A member's own runner runs
+on their own machine without this sandbox.
 
 Register an App with repository Contents read, Issues read, Pull requests write and
 Checks write. Issues read is what makes GitHub offer the Issue comment event, which carries

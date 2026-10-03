@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { claudeModels, parseProfile, type Profile } from './investigation.js';
 import { claudeModel } from './models/claude-cli.js';
 import { runClaimReviewAsResult } from './claim-result.js';
-import { child, childEnvironment, hostedReview } from './github/runner.js';
+import { child, childEnvironment, expireIdleCopies, hostedReview } from './github/runner.js';
 import type { Offer } from './github/runners.js';
 
 // atmin-code-review-runner: reviews the PRs you author with the Claude Code CLI you are signed
@@ -132,10 +132,14 @@ export function reviewWith(profile: Profile, cache: string): Review {
 }
 
 // One of atmin's own runners: the same review the service ran before it had runners.
+// Each repository has its own directory under `cache`, touched when a review starts, which
+// expireIdleCopies reads to delete copies idle for a day.
 export function poolReview(cache: string): Review {
   return async (offer, directory, signal) => {
-    mkdirSync(cache, { recursive: true, mode: 0o700 });
-    try { await hostedReview(offer, directory, join(cache, `${offer.repository.replace('/', '__')}.git`), signal); }
+    const repository = join(cache, offer.repository.replace('/', '__'));
+    mkdirSync(repository, { recursive: true, mode: 0o700 });
+    const now = new Date(); utimesSync(repository, now, now);
+    try { await hostedReview(offer, directory, join(repository, 'source.git'), signal); }
     catch { return { ok: false, reason: signal.aborted ? 'cancelled' : 'other' }; }
     return { ok: true };
   };
@@ -185,13 +189,14 @@ function localServer(): string {
 }
 
 async function start(pool: string | undefined, server: string | undefined): Promise<void> {
-  let connection: Connection, review: Review, described: unknown, who: string;
+  let connection: Connection, review: Review, described: unknown, who: string, cache: string | undefined;
   if (pool) {
     if (!/^[a-z0-9-]{1,40}$/.test(pool)) throw new Error('A pool runner name is lowercase letters, digits and dashes.');
     const token = process.env.ATMIN_RUNNER_POOL_TOKEN;
     if (!token) throw new Error('Set ATMIN_RUNNER_POOL_TOKEN.');
     connection = { server: (server ?? localServer()).replace(/\/+$/, ''), token, pool };
-    review = poolReview(process.env.ATMIN_RUNNER_CACHE ?? join(homedir(), '.cache', 'atmin', 'code-review-runner', `pool-${pool}`));
+    cache = process.env.ATMIN_RUNNER_CACHE ?? join(homedir(), '.cache', 'atmin', 'code-review-runner', `pool-${pool}`);
+    review = poolReview(cache);
     described = {}; who = `any PR, as atmin runner ${pool}`;
   } else {
     const config = readConfig();
@@ -211,6 +216,7 @@ async function start(pool: string | undefined, server: string | undefined): Prom
   process.on('SIGINT', signalled); process.on('SIGTERM', signalled);
   say(`Waiting for reviews of ${who} from ${connection.server}.`);
   while (!stopping) {
+    if (cache) expireIdleCopies(cache);
     let offer: Offer | null;
     try { offer = (await call(connection, '/poll', described) as { offer: Offer | null }).offer; }
     catch (error) {

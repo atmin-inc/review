@@ -15,12 +15,16 @@ const fixDigest = (f: Finding) => hash(JSON.stringify({ path: f.anchor.path, fix
 
 // Empty filesystem by default: only runtime files and this immutable checkout
 // are mounted. No host home, credentials, Git metadata, network or writable repo.
-export function sandboxArguments(workspace: string, argv: string[], runtime = process.execPath): string[] {
+// The system's programs and libraries and the Node runtime, read-only; shared with the review
+// children's sandbox in src/github/runner.ts.
+export function runtimeMounts(runtime = process.execPath): string[] {
   const root = dirname(dirname(runtime));
-  return ['--unshare-all', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
-    '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/sbin', '/sbin',
+  return ['--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/sbin', '/sbin',
     '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
-    ...(root === '/usr' ? [] : ['--ro-bind', root, root]),
+    ...(root === '/usr' ? [] : ['--ro-bind', root, root])];
+}
+export function sandboxArguments(workspace: string, argv: string[], runtime = process.execPath): string[] {
+  return ['--unshare-all', '--die-with-parent', '--new-session', '--cap-drop', 'ALL', ...runtimeMounts(runtime),
     '--dev', '/dev', '--size', '67108864', '--tmpfs', '/tmp',
     '--ro-bind', workspace, '/workspace', '--chdir', '/workspace', '--clearenv',
     '--setenv', 'PATH', `${dirname(runtime)}:/usr/bin:/bin`, '--setenv', 'HOME', '/tmp',
