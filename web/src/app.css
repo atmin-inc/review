@@ -33,6 +33,19 @@ body { min-height: 100dvh; }
 .legal h2 { font-size: 17px; }
 .legal p, .legal li { color: var(--muted-foreground); line-height: 1.6; }
 .legal ul { display: grid; gap: 6px; padding-left: 20px; list-style: disc; }
+.docs { width: 100%; max-width: 1040px; margin: 0 auto; padding: 48px 32px; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 48px; align-items: start; flex: 1; }
+.docs-nav { position: sticky; top: 24px; display: grid; gap: 2px; font-size: 14px; }
+.docs-nav a { padding: 6px 10px; border-radius: 6px; color: var(--muted-foreground); }
+.docs-nav a:hover { color: var(--foreground); background: var(--muted); }
+.docs-nav a[aria-current=page] { color: var(--foreground); background: var(--muted); font-weight: 500; }
+.docs-main { display: grid; align-content: start; }
+.docs-main ol { display: grid; gap: 6px; padding-left: 20px; list-style: decimal; }
+.docs-main ol li { color: var(--muted-foreground); line-height: 1.6; }
+.docs-code { overflow-x: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); font-family: var(--font-mono); font-size: 13px; line-height: 1.55; }
+.docs-inline { font-family: var(--font-mono); font-size: 0.9em; padding: 1px 4px; border-radius: 4px; background: var(--muted); overflow-wrap: anywhere; }
+.docs-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.docs-table th, .docs-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.docs-table td { color: var(--muted-foreground); }
 .legal-links { display: flex; gap: 16px; padding: 16px 32px; font-size: 13px; color: var(--muted-foreground); }
 .sidebar .legal-links, .nav-drawer .legal-links { padding: 8px 8px 0; }
 .sidebar-user { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
@@ -95,6 +108,8 @@ body { min-height: 100dvh; }
   .landing-header { padding: 10px 16px; }
   .landing-main { padding: 40px 16px; gap: 48px; }
   .steps { grid-template-columns: minmax(0, 1fr); }
+  .docs { grid-template-columns: minmax(0, 1fr); padding: 24px 16px; gap: 24px; }
+  .docs-nav { position: static; display: flex; flex-wrap: wrap; gap: 4px; }
   .app-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   .sidebar { display: none; }
   .topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--background); }

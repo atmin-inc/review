@@ -12,6 +12,7 @@ import { BillingPage } from './billing.jsx';
 import { RepositoryPage } from './repository.jsx';
 import { AdminPage } from './admin.jsx';
 import { LegalPage } from './legal.jsx';
+import { DocsPage } from './docs.jsx';
 
 export function App() {
   const [route, setRoute] = useState(() => parseRoute(window.location.href));
@@ -78,6 +79,7 @@ export function App() {
 
   // Public pages: readable without signing in or waiting for the session.
   if (route.view === 'terms' || route.view === 'privacy') return <LegalPage page={route.view}/>;
+  if (route.view === 'docs') return <DocsPage slug={route.page}/>;
 
   if (!session) {
     return <div className="grid min-h-dvh place-items-center p-4">

@@ -13,7 +13,7 @@ const steps = [
 
 export function Landing({ route, installUrl, error }) {
   return <div className="landing">
-    <header className="landing-header"><Brand/></header>
+    <header className="landing-header"><Brand/><a className="link text-sm" href="/docs">Docs</a></header>
     <main className="landing-main">
       <section className="landing-hero grid justify-items-start gap-6">
         <Mark box size={56}/>

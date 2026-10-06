@@ -39,6 +39,11 @@ test('/admin, /usage, /billing and unknown paths', () => {
     assert.equal(parseRoute(`/billing?installation=99&checkout=${bad}`).checkout, null, bad);
   }
   assert.equal(parseRoute('/settings').view, 'not-found');
+  // Docs are public pages; the self-host guide is where "run it yourself" links point.
+  assert.equal(parseRoute('/docs').view, 'docs');
+  assert.equal(parseRoute('/docs/self-host').page, 'self-host');
+  assert.equal(parseRoute('/docs/../admin').view, 'admin');
+  assert.equal(parseRoute('/docs/a/b').view, 'not-found');
 });
 
 test('sign-in errors come only from the known codes', () => {
@@ -48,7 +53,7 @@ test('sign-in errors come only from the known codes', () => {
 });
 
 test('routeHref round-trips every view', () => {
-  for (const href of ['/', '/?installation=99', '/usage?installation=99', '/billing?installation=99', '/admin', '/?repository=42', '/?repository=42#review/abc-123']) {
+  for (const href of ['/', '/?installation=99', '/usage?installation=99', '/billing?installation=99', '/admin', '/docs', '/docs/self-host', '/?repository=42', '/?repository=42#review/abc-123']) {
     assert.equal(routeHref(parseRoute(href)), href);
   }
 });
@@ -66,4 +71,12 @@ test('terms and privacy are their own public pages', () => {
   assert.equal(parseRoute('/privacy/').view, 'privacy');
   assert.equal(routeHref({ view: 'terms' }), '/terms');
   assert.equal(routeHref({ view: 'privacy' }), '/privacy');
+});
+
+test('every self-host link opens an existing docs page', async () => {
+  const { selfHostUrl } = await import('../src/route.js');
+  const route = parseRoute(selfHostUrl);
+  assert.equal(route.view, 'docs');
+  const source = (await import('node:fs')).readFileSync(new URL('../src/docs.jsx', import.meta.url), 'utf8');
+  assert.ok(source.includes(`['${route.page}', `), `no docs page ${route.page}`);
 });
