@@ -3,6 +3,7 @@ import { Button } from './ui/button.jsx';
 import { Card, CardContent } from './ui/card.jsx';
 import { Avatar, Brand, Mark, Notice, userAvatar } from './components.jsx';
 import { selfHostUrl, signInHref } from './route.js';
+import { LegalLinks } from './legal.jsx';
 
 const steps = [
   ['Install the App on an organization', 'Install the atmin review GitHub App and choose which repositories it can access.'],
@@ -40,6 +41,7 @@ export function Landing({ route, installUrl, error }) {
         </ol>
       </section>
     </main>
+    <LegalLinks/>
   </div>;
 }
 
@@ -64,5 +66,6 @@ export function NoInstallations({ user, installUrl, onSignOut }) {
         </CardContent>
       </Card>
     </main>
+    <LegalLinks/>
   </div>;
 }
