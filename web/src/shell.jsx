@@ -1,4 +1,5 @@
 import { useContext, useEffect, useState } from 'react';
+import { LegalLinks } from './legal.jsx';
 import { ChevronsUpDown, CreditCard, FolderGit2, Gauge, LogOut, Menu, Plus, Shield } from 'lucide-react';
 import { Button } from './ui/button.jsx';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog.jsx';
@@ -71,6 +72,7 @@ function Sidebar({ session, installation, route, onSignOut }) {
       </span>
       <Button variant="ghost" size="sm" onClick={onSignOut}><LogOut aria-hidden="true"/>Sign out</Button>
     </div>
+    <LegalLinks/>
   </div>;
 }
 

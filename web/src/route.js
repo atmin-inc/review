@@ -29,6 +29,7 @@ export function parseRoute(href) {
   const signin = Object.hasOwn(signinMessages, code ?? '') ? code : null;
   const installation = single(params, 'installation', repositoryId);
   const base = { signin, installation: installation && Number(installation) };
+  if (path === '/terms' || path === '/privacy') return { ...base, view: path.slice(1) };
   if (path === '/admin') return { ...base, view: 'admin' };
   if (path === '/usage') return { ...base, view: 'usage' };
   if (path === '/billing') return { ...base, view: 'billing', checkout: single(params, 'checkout', checkoutId) };
@@ -44,6 +45,8 @@ export function routeHref(route) {
   const query = id => (id ? `?installation=${id}` : '');
   switch (route.view) {
     case 'admin': return '/admin';
+    case 'terms': return '/terms';
+    case 'privacy': return '/privacy';
     case 'usage': return `/usage${query(route.installation)}`;
     case 'billing': return `/billing${query(route.installation)}`;
     case 'repository': return `/?repository=${route.repository}${route.review ? `#review/${route.review}` : ''}`;

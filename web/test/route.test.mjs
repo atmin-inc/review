@@ -59,3 +59,11 @@ test('sign-in preserves the repository and review deep link', () => {
   assert.equal(signInHref(parseRoute('/')), '/auth/github');
   assert.equal(signInHref(parseRoute('/admin')), '/auth/github');
 });
+
+// Terms and privacy must open without signing in; Stripe, GitHub and the footer link to them.
+test('terms and privacy are their own public pages', () => {
+  assert.equal(parseRoute('/terms').view, 'terms');
+  assert.equal(parseRoute('/privacy/').view, 'privacy');
+  assert.equal(routeHref({ view: 'terms' }), '/terms');
+  assert.equal(routeHref({ view: 'privacy' }), '/privacy');
+});
