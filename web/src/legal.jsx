@@ -105,6 +105,7 @@ export function LegalPage({ page }) {
 
 export function LegalLinks() {
   return <footer className="legal-links">
+    <a className="link" href="/docs">Docs</a>
     <a className="link" href="/terms">Terms</a>
     <a className="link" href="/privacy">Privacy</a>
   </footer>;
