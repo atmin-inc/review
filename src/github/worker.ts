@@ -40,7 +40,10 @@ export interface Dispatcher {
   open(): string[];
 }
 const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n` : '';
-const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
+// The target branch moving on is not a change to the PR: a review is of the head against its
+// merge base, which a new target commit does not alter. On a busy target (mason: main moves
+// every few minutes) comparing the target tip cancelled reviews mid-run.
+const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
   private checks: Checks;
   private inline: InlineReviews;
@@ -103,7 +106,6 @@ export class Worker {
     const initial = await this.github.pull(job.pr);
     const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
     if (!this.store.current(job, this.owner) || signal.aborted) return;
-    this.store.track(job.pr, initial.baseRef, initial.state === 'open' && !initial.draft);
     if (job.author !== initial.author.id) this.store.update(job.id, { author: initial.author.id });
     const marker = markerFor(this.config.repositoryId, job.pr);
     if (initial.state !== 'open' || initial.draft) {

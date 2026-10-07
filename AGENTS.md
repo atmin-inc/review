@@ -933,8 +933,12 @@ and noise lever. The worker used to re-review the whole PR on every push.
   base, so every claim is still about the whole change. Carried claims are re-verified with
   the new ones and written to `carried-claims.json`; a claim the model records again keeps
   the earlier wording (same `claimId`).
-- **No new commits, no model call.** A target-branch push with the merge base unchanged
-  re-verifies the carried claims and spends nothing on emission.
+- **A target-branch push starts nothing** (Lors chose 2026-10-07, "Skip on main moves"). Each
+  one used to re-review every open PR; on mason, whose main moves many times a day, that billed
+  unchanged PRs several times a day (62 reviews on its first afternoon). Reviews compare only
+  head, target branch name, state and draft (`same` in `src/github/worker.ts`,
+  `compareCurrent` in `src/snapshot.ts`), so main moving no longer cancels a running review
+  or marks a finished one outdated. Merging main into the PR is a PR push and is reviewed.
 - **Auto-pause.** After `AUTO_PAUSE_AFTER` (5) distinct reviewed heads since the last
   `/atmin review`, an event job is `skipped` with error `auto-paused` and the summary keeps
   the last review under a banner naming the head it describes. Jobs now record `trigger`

@@ -201,12 +201,13 @@ test('pausing an active rerun replaces the pending summary and cancels its check
   assert.doesNotMatch(h.comment.body, /review pending/);
 });
 
-test('target branch changes before publication suppress the obsolete report', async t => {
+test('the target branch moving on during a review does not cancel it', async t => {
+  // mason's main moves every few minutes; a review that takes several would never finish.
   const h = await harness(t);
   const runner = async (job, signal) => { const path = await h.runner(job, signal); h.setLive({ baseSha: 'b'.repeat(40) }); return path; };
   const worker = new Worker(h.config, h.store, h.github, inline(runner), 'owner');
   const id = h.store.enqueue('first', 1); await worker.tick();
-  assert.equal(h.store.get(id).state, 'cancelled'); assert.equal(h.counts.creates, 0);
+  assert.notEqual(h.store.get(id).state, 'cancelled'); assert.equal(h.counts.creates, 1);
 });
 
 test('push during GitHub publication replaces summary with an explicit superseded state', async t => {
@@ -272,17 +273,15 @@ test('daily starts are durably capped, including cancelled and failed investigat
   assert.equal(h.counts.runs, 1); assert.match(h.comment.body, /24-hour review limit/);
 });
 
-test('a target-branch push queues only tracked open PRs and replay does not queue again', async t => {
+test('a push to the target branch does not re-review open PRs', async t => {
+  // Each re-review billed an unchanged PR again; mason's main moves many times a day.
   const h = await harness(t); const post = await http(t, h);
   h.store.enqueue('first', 1); await h.worker.tick();
   h.setLive({ baseSha: 'd'.repeat(40) });
-  await post('push', { ref: 'refs/heads/unrelated' }, 'unrelated');
+  await post('push', { ref: 'refs/heads/main' }, 'target');
   assert.equal(h.store.status().jobs.length, 1);
-  await post('push', { ref: 'refs/heads/main' }, 'target');
-  await post('push', { ref: 'refs/heads/main' }, 'target');
-  assert.equal(h.store.status().jobs.length, 2);
   await h.worker.tick();
-  assert.equal(h.counts.runs, 2); assert.match(h.comment.body, new RegExp('d'.repeat(40)));
+  assert.equal(h.counts.runs, 1);
 });
 
 test('worker crash during inference publishes saved interruption state without repeating inference', async t => {
