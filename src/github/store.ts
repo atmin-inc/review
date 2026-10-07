@@ -13,6 +13,10 @@ export interface Job { id: string; pr: number; state: JobState; created: number;
 // Automatic reviews stop after this many distinct reviewed heads of one PR, as CodeRabbit
 // does after five reviewed commits; a `/atmin review` comment starts the count again.
 export const AUTO_PAUSE_AFTER = 5;
+// The started jobs an organization's plan counts and charges: all but those cancelled before
+// they finished (a newer commit, a second trigger or a pause), which post nothing. The daily
+// limits, which cap this service's spend, count those too.
+export const COUNTED = "NOT (state='cancelled' AND report IS NULL)";
 // One service owns the worker lease. Local CLI controls share the WAL database.
 export class Store {
   readonly db: DatabaseSync;
@@ -145,9 +149,9 @@ export class Store {
       return rows.map(row => String(row.artifact));
     });
   }
-  // Reviews of this author's PRs that started inference since `since`.
+  // Reviews of this author's PRs that started inference since `since` and count toward the plan.
   authorReviews(author: number, since: number): number {
-    return Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE author=? AND started>=? AND runner IS NULL').get(author, since)!.n);
+    return Number(this.db.prepare(`SELECT count(*) AS n FROM jobs WHERE author=? AND started>=? AND runner IS NULL AND ${COUNTED}`).get(author, since)!.n);
   }
   get(id: string): Job { return this.db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as unknown as Job; }
   update(id: string, values: Partial<Pick<Job, 'state' | 'artifact' | 'report' | 'error' | 'createStarted' | 'author' | 'runner'>>): void {
@@ -164,6 +168,12 @@ export class Store {
     const row = this.db.prepare("SELECT artifact FROM jobs WHERE pr=? AND id<>? AND state='completed' AND artifact IS NOT NULL AND created<=? ORDER BY created DESC, rowid DESC LIMIT 1")
       .get(job.pr, job.id, job.created);
     return (row?.artifact as string | undefined) ?? null;
+  }
+  // Whether a full review of this PR is already queued or under way, so that a `/atmin review`
+  // comment would only cancel it and start the same review again.
+  fullReviewActive(pr: number): boolean {
+    const job = this.db.prepare("SELECT * FROM jobs WHERE pr=? AND state IN ('queued','running','dispatched','publishing') ORDER BY created DESC, rowid DESC LIMIT 1").get(pr) as unknown as Job | undefined;
+    return Boolean(job && (job.trigger === 'command' || this.previous(job) === null));
   }
   // Distinct heads that automatic reviews have completed since the last command on this PR.
   reviewedHeads(pr: number): string[] {

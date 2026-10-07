@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PilotConfig } from './config.js';
-import { Store, type Job } from './store.js';
+import { COUNTED, Store, type Job } from './store.js';
 import { ReviewSettings, type ModelChoice } from './settings.js';
 import { DEFAULT_MAX_INSTALLATION_DISK_MB, directoryBytes } from './runner.js';
 import { chargeCredit } from './dashboard-view.js';
@@ -219,10 +219,10 @@ export class Repositories {
     process.stderr.write(`atmin review: plan for installation ${installation} set to ${JSON.stringify(plan)} by GitHub user ${by}\n`);
     return plan;
   }
-  // Reviews that started inference since `since`, oldest first, across the installation's repositories.
-  // Jobs that started inference in [start, end), oldest first.
+  // Jobs that started inference in [start, end) and count toward the plan, oldest first, across the
+  // installation's repositories.
   started(installation: number, start: number, end: number): { entry: Repository; job: Job }[] {
-    return this.of(installation).flatMap(entry => (entry.store.db.prepare('SELECT * FROM jobs WHERE started>=? AND started<? AND runner IS NULL').all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
+    return this.of(installation).flatMap(entry => (entry.store.db.prepare(`SELECT * FROM jobs WHERE started>=? AND started<? AND runner IS NULL AND ${COUNTED}`).all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
       .sort((a, b) => a.job.started! - b.job.started!);
   }
   // What the installation's repositories store on the shared disk: run records and each
@@ -238,7 +238,7 @@ export class Repositories {
     // Synchronous with reservation; all stores must be leased by this scheduler.
     if ([...this.entries.values()].some(entry => !entry.store.owns(owner))) return 'The review service lost its lease on repository state. No inference was started.';
     const now = Date.now(), installation = repository.config.installationId, { plan } = this.plan(installation);
-    const used = this.of(installation).reduce((n, entry) => n + startedSince(entry.store, month(now).start), 0);
+    const used = this.started(installation, month(now).start, month(now).end).length;
     const refuse = (reason: string, detail: string) => {
       process.stderr.write(`atmin review: review ${job.id} of repository ${repository.config.repositoryId} not started: ${detail}\n`);
       return reason;
