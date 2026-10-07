@@ -9,6 +9,8 @@ import { StripeError, creditAmounts, topUpBelowUsd, type Billing } from './billi
 
 import { history, pullViews, readReview, livePulls, latestJobs, verifiedRepositories, monthlyUsage, chargeCredit } from './dashboard-view.js';
 import { outcomeSummary } from './outcomes.js';
+import { checkModelKey, keyPattern, modelKeyProviders } from './model-keys.js';
+import type { ModelKeyProvider } from './store.js';
 export { history } from './dashboard-view.js';
 
 const version = 'atmin.review.v1';
@@ -135,6 +137,7 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     const { plan, updatedAt, updatedBy } = repositories!.plan(installation), { perRepository, ...usage } = monthlyUsage(repositories!, installation), record = repositories!.billing(installation);
     return { plan: { ...plan, custom: updatedAt !== null, updatedAt: updatedAt === null ? null : new Date(updatedAt).toISOString(), updatedBy }, usage,
       creditUsd: credit(installation), card: record?.card ?? null, topUpUsd: record?.topUpCents ? record.topUpCents / 100 : null, topUpFailed: record?.topUpFailed ?? null,
+      modelKey: repositories!.keys?.view(installation) ?? null,
       storage: { mb: Math.round(Object.values(repositories!.stored(installation)).reduce((a, b) => a + b, 0) / 1024 ** 2), limitMb: repositories!.storageLimitMb() },
       repositories: repositories!.of(installation).map(entry => ({ id: entry.config.repositoryId, name: entry.config.repository, enabled: entry.store.enabled(), reviews: perRepository.get(entry.config.repositoryId) ?? 0, outcomes: outcomeSummary(entry.store) })) };
   };
@@ -245,6 +248,29 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
             repositories.grant(Number(target), value.usd, value.note, session.user.id);
           } catch { json(response, 400, { error: 'Add or take between $0.01 and $1,000, with a note of up to 200 characters.' }); return true; }
           json(response, 200, { creditUsd: adminView(Number(target)).creditUsd }); return true;
+        }
+        // An organization's own model key: checked with one call before it is saved, never returned.
+        if (url.pathname === '/api/review/v1/admin/model-key' && ['POST', 'DELETE'].includes(request.method ?? '')) {
+          const target = url.searchParams.get('installation');
+          if (url.searchParams.getAll('installation').length !== 1 || !/^[1-9][0-9]{0,15}$/.test(target ?? '') || !known.has(Number(target))) {
+            json(response, 404, { error: 'Installation not found.' }); return true;
+          }
+          const keys = repositories.keys;
+          if (!keys) { json(response, 404, { error: 'Not found.' }); return true; }
+          if (!keys.ready) { json(response, 503, { error: 'The service has no ATMIN_REVIEW_KEY_SECRET, so it cannot store or use keys.' }); return true; }
+          if (request.method === 'DELETE') { keys.remove(Number(target), session.user.id); json(response, 200, { modelKey: null }); return true; }
+          const read = await body(request);
+          if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
+          const value = 'value' in read ? read.value as { provider?: unknown; key?: unknown } : null;
+          if (!value || typeof value !== 'object' || Object.keys(value).some(key => !['provider', 'key'].includes(key))
+            || !modelKeyProviders.includes(value.provider as ModelKeyProvider) || typeof value.key !== 'string' || !keyPattern.test(value.key.trim())) {
+            json(response, 400, { error: 'Paste an Amazon Bedrock API key.' }); return true;
+          }
+          const provider = value.provider as ModelKeyProvider, key = value.key.trim();
+          const refused = await checkModelKey(provider, key, fetcher);
+          if (refused) { json(response, 400, { error: refused }); return true; }
+          keys.set(Number(target), provider, key, session.user.id);
+          json(response, 200, { modelKey: keys.view(Number(target)) }); return true;
         }
         json(response, 404, { error: 'Not found.' }); return true;
       }

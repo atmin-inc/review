@@ -4,7 +4,7 @@ import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePacket } from '../contracts.js';
 import { readProfile } from '../run.js';
-import { parseProfile } from '../investigation.js';
+import { parseProfile, type Profile } from '../investigation.js';
 import { tmpdir } from 'node:os';
 import { previousReview } from '../claim-result.js';
 import type { Dispatcher } from './worker.js';
@@ -13,6 +13,7 @@ import { runtimeMounts, type LocalCheck } from '../verification.js';
 import type { PilotConfig } from './config.js';
 import type { GitHub } from './api.js';
 import type { ReviewSettings } from './settings.js';
+import type { ModelKeys } from './model-keys.js';
 import type { Job, Store } from './store.js';
 
 // Storage limits, because strangers' repositories share this disk. Each connected repository
@@ -119,6 +120,15 @@ export function child(args: string[], env: NodeJS.ProcessEnv, signal: AbortSigna
   });
 }
 
+// The model key a review's investigation runs with, by the environment variable that carries it:
+// the organization's own, which arrives with its job, or this service's. Never one for the other.
+export function modelCredential(profile: Profile, offer: Offer, credentials: Record<string, string | undefined>): [string, string] {
+  const keyName = profile.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : profile.provider === 'bedrock' ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY';
+  const key = profile.provider === 'bedrock' ? offer.modelKey : offer.modelKey === undefined ? credentials[keyName] : undefined;
+  if (!key) throw new Error('Configured model credential unavailable');
+  return [keyName, key];
+}
+
 // One review on one of this service's own runners, with this service's model key: capture the
 // PR with the offer's read-only token, investigate with the offer's profile, and run the local
 // checks the PR's policy requires. Source and model credentials never share a process.
@@ -135,9 +145,7 @@ export async function hostedReview(offer: Offer, directory: string, cache: strin
     if (offer.previous) writeFileSync(join(directory, 'previous.json'), JSON.stringify(offer.previous), { mode: 0o600, flag: 'wx' });
     const profilePath = join(directory, 'profile.json');
     writeFileSync(profilePath, JSON.stringify(profile), { mode: 0o600, flag: 'wx' });
-    const keyName = profile.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
-    const key = credentials[keyName];
-    if (!key) throw new Error('Configured model credential unavailable');
+    const [keyName, key] = modelCredential(profile, offer, credentials);
     // Rung 3 (Jev) is part of the configuration that was measured; without its key the
     // claim run still completes and records that the rung was off.
     const jev = credentials.TYPESAFE_API_KEY ? { TYPESAFE_API_KEY: credentials.TYPESAFE_API_KEY } : {};
@@ -163,15 +171,20 @@ export const OWN_RUNNER_DEADLINE_MS = 60 * 60_000;
 // The router: offers each review to the PR author's own runner when the repository allows it
 // and one is online, and otherwise to this service's runners, with the repository's model
 // profile, its local checks, a read-only token for this one repository, and the earlier review
-// a push review builds on.
-export function router(config: PilotConfig, github: GitHub, runners: Runners, settings?: ReviewSettings): Dispatcher {
+// a push review builds on. A review reserved on the organization's own model key runs Luna on
+// that key, with the repository profile's limits.
+export function router(config: PilotConfig, github: GitHub, runners: Runners, settings?: ReviewSettings, keys?: ModelKeys): Dispatcher {
   return {
     ownRunner: author => settings?.current().selfRun ? runners.online(author) : null,
     async offer(job, to, directory, previous) {
-      const profile = settings?.profile() ?? readProfile(config.profile);
+      const configured = settings?.profile() ?? readProfile(config.profile);
+      const own = job.modelKey ? keys?.get(config.installationId) : null;
+      if (job.modelKey && own?.provider !== job.modelKey) throw new Error(`Review ${job.id} was started on installation ${config.installationId}'s own ${job.modelKey} key, which is no longer set`);
+      const profile = own ? parseProfile({ ...configured, provider: 'bedrock', model: 'openai.gpt-6-luna' }) : configured;
+      if (own) process.stderr.write(`atmin review: review ${job.id} of repository ${config.repositoryId} runs on installation ${config.installationId}'s own ${own.provider} key ending ${own.key.slice(-4)}\n`);
       const base = { job: job.id, repository: config.repository, pr: job.pr, token: await github.readToken(), previous: previous ? previousReview(previous) : null };
       if (to === 'pool') runners.offer(job.id, POOL, config.repositoryId, directory,
-        { ...base, profile, checks: config.localChecks?.filter(check => check.repositoryId === config.repositoryId) ?? [] }, profile.deadlineMs + POOL_MARGIN_MS);
+        { ...base, profile, checks: config.localChecks?.filter(check => check.repositoryId === config.repositoryId) ?? [], ...(own ? { modelKey: own.key } : {}) }, profile.deadlineMs + POOL_MARGIN_MS);
       else runners.offer(job.id, to.user, config.repositoryId, directory, base, OWN_RUNNER_DEADLINE_MS);
     },
     poll: job => runners.poll(job.id),

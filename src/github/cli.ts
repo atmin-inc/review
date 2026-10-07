@@ -11,6 +11,7 @@ import { Repositories, type Repository } from './repositories.js';
 import { Worker, failureCause } from './worker.js';
 import { expireRuns, router } from './runner.js';
 import { Runners } from './runners.js';
+import { ModelKeys } from './model-keys.js';
 import { runnerApi } from './runner-api.js';
 import { dashboard } from './dashboard.js';
 import { reviewPrice } from './dashboard-view.js';
@@ -59,7 +60,9 @@ async function main(): Promise<void> {
   const owner = randomUUID();
   if (!store.acquire(owner)) throw new Error('A pilot service already owns this state directory');
   // Buying credit needs a Stripe key; without one, reviews past the free ones run only on credit an operator adds.
-  const repositories = dashboardConfig ? new Repositories(config, store, dashboardConfig.models, owner, process.env.STRIPE_SECRET_KEY ? dashboardConfig.origin : undefined) : undefined;
+  // Organizations' own model keys are sealed with ATMIN_REVIEW_KEY_SECRET; without it none can be set or used.
+  const keys = new ModelKeys(store.db, process.env.ATMIN_REVIEW_KEY_SECRET);
+  const repositories = dashboardConfig ? new Repositories(config, store, dashboardConfig.models, owner, process.env.STRIPE_SECRET_KEY ? dashboardConfig.origin : undefined, keys) : undefined;
   const billing = repositories && dashboardConfig && process.env.STRIPE_SECRET_KEY ? new Billing(new Stripe(process.env.STRIPE_SECRET_KEY), repositories, dashboardConfig.origin) : undefined;
   const initial: Repository = repositories?.entries.get(config.repositoryId) ?? { config, store, settings: new ReviewSettings(config, store) };
   const entries = repositories?.entries ?? new Map([[config.repositoryId, initial]]);
@@ -73,7 +76,7 @@ async function main(): Promise<void> {
     let value = workers.get(entry.config.repositoryId);
     if (!value) {
       const github = new AppGitHub(entry.config, appId, key);
-      value = { github, worker: new Worker(entry.config, entry.store, github, router(entry.config, github, runners, entry.settings), owner, entry.settings,
+      value = { github, worker: new Worker(entry.config, entry.store, github, router(entry.config, github, runners, entry.settings, keys), owner, entry.settings,
         repositories ? (job, limit) => repositories.reserve(entry, job, owner, limit) : undefined, dashboardConfig?.origin,
         repositories ? job => reviewPrice(repositories, entry.config.installationId, job) : undefined) };
       workers.set(entry.config.repositoryId, value);

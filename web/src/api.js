@@ -61,4 +61,6 @@ export const api = {
   admin: () => request('GET', `${base}/admin`),
   savePlan: (installation, plan) => request('POST', `${base}/admin/plan?installation=${encodeURIComponent(installation)}`, plan),
   addCredit: (installation, value) => request('POST', `${base}/admin/credit?installation=${encodeURIComponent(installation)}`, value),
+  setModelKey: (installation, value) => request('POST', `${base}/admin/model-key?installation=${encodeURIComponent(installation)}`, value),
+  removeModelKey: installation => request('DELETE', `${base}/admin/model-key?installation=${encodeURIComponent(installation)}`),
 };

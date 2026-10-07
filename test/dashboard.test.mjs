@@ -13,6 +13,7 @@ import { dashboard, history } from '../dist/github/dashboard.js';
 import { reviewPrice } from '../dist/github/dashboard-view.js';
 import { priceLine } from '../dist/render.js';
 import { Billing, Stripe } from '../dist/github/billing.js';
+import { ModelKeys } from '../dist/github/model-keys.js';
 const origin = 'https://review.example.test';
 const profile = resolve('profiles/smoke-openrouter-free.json');
 const models = [{ id: 'free', label: 'Free', profile: readProfile(profile) }, { id: 'deepseek', label: 'DeepSeek', profile: readProfile(resolve('profiles/baseline-deepseek.json')) }];
@@ -24,6 +25,14 @@ async function setup(t, hosted = false, operators = [], stripe) {
   const store = new Store(root), settings = new ReviewSettings(config, store, models);
   const state = { admin: true, installed: true, revoked: false, exchange: null, exchanges: 0, calls: 0 };
   const fetcher = async (url, init) => {
+    // Amazon Bedrock, which an operator's model key is checked against before it is saved.
+    if (String(url).startsWith('https://bedrock-mantle.us-east-1.api.aws/')) {
+      (state.bedrock ??= []).push({ url: String(url), auth: new Headers(init.headers).get('authorization') });
+      return state.bedrockStatus ? Response.json({ error: { message: 'denied' } }, { status: state.bedrockStatus })
+        : Response.json({ id: 'resp_1', object: 'response', model: 'openai.gpt-6-luna', status: 'completed',
+          output: [{ type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'ok', arguments: '{}', status: 'completed' }],
+          usage: { input_tokens: 40, output_tokens: 12, total_tokens: 52, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } });
+    }
     state.calls++; (state.urls ??= []).push(url); assert.equal(init.redirect, url.startsWith('https://api.github.com') ? 'manual' : 'error'); assert.ok(init.signal);
     if (url === 'https://github.com/login/oauth/access_token') {
       state.exchanges++; state.exchange = init.body;
@@ -53,7 +62,8 @@ async function setup(t, hosted = false, operators = [], stripe) {
     throw new Error('Unexpected GitHub endpoint');
   };
   store.acquire('test-owner');
-  const repositories = hosted ? new Repositories(config, store, models, 'test-owner', origin) : undefined;
+  const keys = new ModelKeys(store.db, 'a test sealing secret of at least 32 bytes');
+  const repositories = hosted ? new Repositories(config, store, models, 'test-owner', origin, keys) : undefined;
   // `stripe` is a fake Stripe's state; its answers are the ones billing checks.
   const billing = stripe && new Billing(new Stripe('sk_test_fake', async (url, init) => {
     const path = new URL(url).pathname.replace(/^\/v1/, ''), params = Object.fromEntries(new URLSearchParams(init.body ?? ''));
@@ -87,7 +97,8 @@ async function setup(t, hosted = false, operators = [], stripe) {
   };
   const login = async () => { const { response, cookie } = await finish(await begin()); assert.equal(response.headers.get('location'), '/'); return cookie; };
   const post = (path, body, cookie, extra = {}) => fetch(base + '/api/review/v1/' + path, { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...extra }, body: typeof body === 'string' ? body : JSON.stringify(body) });
-  return { root, config, store, settings, state, get, post, begin, finish, login, repositories };
+  const remove = (path, cookie) => fetch(base + '/api/review/v1/' + path, { method: 'DELETE', headers: { Cookie: cookie, Origin: origin } });
+  return { root, config, store, settings, state, get, post, remove, begin, finish, login, repositories, keys };
 }
 
 test('OAuth binds browser/state/PKCE/repository; tokens stay server-side; codes cannot replay', async t => {
@@ -455,4 +466,38 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   assert.equal((await f.get('/api/review/v1/admin', cookie)).status, 403);
   f.state.revoked = false;
   assert.equal((await f.get('/api/review/v1/admin', cookie)).status, 401);
+});
+
+// An operator sets an organization's own Amazon Bedrock key. It is checked with one call first,
+// stored sealed, and never sent back: the admin panel shows only its last four characters.
+test('only an operator sets an organization\'s model key, which is checked first and never returned', async t => {
+  const f = await setup(t, true, [8]);
+  f.state.appInstallations = [{ id: 99, account: { login: 'owner', type: 'Organization' }, created_at: '2026-09-25T17:40:00Z', suspended_at: null }];
+  const key = 'ABSKQmVkcm9ja0FQSUtleS10ZXN0LWtleS0xMjM0NTY3ODkw';
+  let cookie = await f.login();
+  assert.equal((await f.post('admin/model-key?installation=99', { provider: 'bedrock', key }, cookie)).status, 403);
+  f.state.userId = 8; cookie = await f.login();
+  for (const bad of [{ provider: 'bedrock', key: 'short' }, { provider: 'openai', key }, { provider: 'bedrock', key, installation: 77 }, { key }]) {
+    assert.equal((await f.post('admin/model-key?installation=99', bad, cookie)).status, 400);
+  }
+  assert.equal((await f.post('admin/model-key?installation=12345', { provider: 'bedrock', key }, cookie)).status, 404);
+  assert.equal(f.state.bedrock, undefined, 'nothing is sent to Bedrock until the request is valid');
+  // Bedrock refuses the key: nothing is saved and the reason says what to fix.
+  f.state.bedrockStatus = 403;
+  const refused = await f.post('admin/model-key?installation=99', { provider: 'bedrock', key }, cookie);
+  assert.equal(refused.status, 400);
+  assert.match((await refused.json()).error, /refused the key/);
+  assert.equal(f.keys.provider(99), null);
+  delete f.state.bedrockStatus;
+  const saved = await f.post('admin/model-key?installation=99', { provider: 'bedrock', key: ` ${key} ` }, cookie), text = await saved.text();
+  assert.equal(saved.status, 200);
+  assert.ok(!text.includes(key));
+  assert.deepEqual(JSON.parse(text).modelKey, { provider: 'bedrock', last4: 'ODkw', updatedAt: JSON.parse(text).modelKey.updatedAt, updatedBy: 8 });
+  assert.deepEqual(f.state.bedrock.map(call => [call.url, call.auth]), Array(2).fill(['https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses', `Bearer ${key}`]));
+  assert.deepEqual(f.keys.get(99), { provider: 'bedrock', key });
+  const admin = await (await f.get('/api/review/v1/admin', cookie)).text();
+  assert.ok(!admin.includes(key));
+  assert.equal(JSON.parse(admin).installations[0].modelKey.last4, 'ODkw');
+  assert.equal((await f.remove('admin/model-key?installation=99', cookie)).status, 200);
+  assert.equal(f.keys.provider(99), null);
 });

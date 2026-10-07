@@ -4,10 +4,15 @@ import type { Model, Profile, TurnInput } from './investigation.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import { traceEvent, traceId } from './trace.js';
 
-export function openAIModel(profile: Profile, apiKey = process.env.OPENAI_API_KEY, fetch?: typeof globalThis.fetch): Model {
-  if (!apiKey) throw new Error('OPENAI_API_KEY is missing. Configure it locally; never put a key in a profile or report.');
+// Luna on Amazon Bedrock is served only in us-east-1, through an OpenAI-compatible endpoint that
+// takes a Bedrock API key as its bearer token: https://developers.openai.com/api/docs/guides/amazon-bedrock
+export const bedrockOrigin = 'https://bedrock-mantle.us-east-1.api.aws/openai/v1';
+export function openAIModel(profile: Profile, apiKey = process.env[profile.provider === 'bedrock' ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY'], fetch?: typeof globalThis.fetch): Model {
+  if (profile.provider !== 'openai' && profile.provider !== 'bedrock') throw new Error('Unsupported OpenAI profile');
+  const bedrock = profile.provider === 'bedrock';
+  if (!apiKey) throw new Error(`${bedrock ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY'} is missing. Configure it locally; never put a key in a profile or report.`);
   // Fixed destination, no SDK retries or implicit account/base-URL environment overrides.
-  const client = new OpenAI({ apiKey, baseURL: 'https://api.openai.com/v1', maxRetries: 0,
+  const client = new OpenAI({ apiKey, baseURL: bedrock ? bedrockOrigin : 'https://api.openai.com/v1', maxRetries: 0,
     organization: null, project: null, timeout: profile.deadlineMs, ...(fetch ? { fetch } : {}) });
   const payload = (input: TurnInput) => ({
     model: profile.model, instructions: input.instructions,
@@ -24,12 +29,16 @@ export function openAIModel(profile: Profile, apiKey = process.env.OPENAI_API_KE
     }
   };
   return {
+    // Bedrock has no token-count route (it answers 405), so its input is bounded by serialized
+    // UTF-8 bytes plus overhead, as on OpenRouter; actual tokens are still recorded.
+    ...(bedrock ? { inputCountKind: 'conservative-estimate' as const } : {}),
     async count(input, signal) {
+      if (bedrock) return Buffer.byteLength(JSON.stringify(payload(input))) + 4096;
       return (await request('count', async () => client.responses.inputTokens.count(payload(input), { signal }))).input_tokens;
     },
     async respond(input, maxOutputTokens, signal) {
       const response = await request('inference', async () => client.responses.create({ ...payload(input), max_output_tokens: maxOutputTokens,
-        store: false, include: ['reasoning.encrypted_content'], service_tier: 'default' }, { signal }));
+        store: false, include: ['reasoning.encrypted_content'], ...(bedrock ? {} : { service_tier: 'default' as const }) }, { signal }));
       traceEvent('provider.response', { responseId: traceId(response.id), requestedModel: profile.model,
         returnedModel: response.model === profile.model ? profile.model : 'unexpected',
         status: response.status ?? 'unknown', toolCalls: response.output.filter(item => item.type === 'function_call').length,

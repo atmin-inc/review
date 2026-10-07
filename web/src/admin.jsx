@@ -148,7 +148,60 @@ function CreditDialog({ installation, onClose, onSaved }) {
   </Dialog>;
 }
 
-function Customers({ data, onEdit, onCredit }) {
+// The organization's own model key (Amazon Bedrock): its reviews then run Luna on its account
+// and take no free reviews or credit. Saving makes one small call with the key first; the key
+// itself is never shown again, only its last four characters.
+function ModelKeyDialog({ installation, onClose, onSaved }) {
+  const prefix = useId();
+  const [key, setKey] = useState('');
+  const [status, setStatus] = useState({ pending: false, submitted: false, error: null });
+  const current = installation.modelKey;
+  const invalid = !/^[\x21-\x7e]{20,3000}$/.test(key.trim());
+  const shown = status.submitted && invalid ? 'Paste the whole Amazon Bedrock API key.' : null;
+
+  async function run(action, label) {
+    setStatus({ pending: true, submitted: true, error: null });
+    try {
+      await action();
+      console.info(`atmin review: model key ${label} for installation ${installation.id}`);
+      onSaved();
+    } catch (failure) {
+      console.info(`atmin review: model key ${label} failed for installation ${installation.id}: ${failure.message}`);
+      setStatus({ pending: false, submitted: true, error: failure.message });
+    }
+  }
+  function submit(event) {
+    event.preventDefault();
+    if (invalid) { setStatus({ pending: false, submitted: true, error: null }); document.getElementById(`${prefix}-key`)?.focus(); return; }
+    run(() => api.setModelKey(installation.id, { provider: 'bedrock', key: key.trim() }), 'set');
+  }
+
+  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Model key for {installation.account}</DialogTitle>
+        <DialogDescription>
+          {current ? <>Reviews run on its own Amazon Bedrock key ending <Figure>{current.last4}</Figure>, set {current.updatedAt.slice(0, 10)}.</>
+            : 'Reviews run on atmin’s model key.'} With its own key, reviews run GPT-6 Luna on its Bedrock account in us-east-1 and use no free reviews or credit.
+        </DialogDescription>
+      </DialogHeader>
+      <form id={`${prefix}-form`} noValidate onSubmit={submit}>
+        <Field id={`${prefix}-key`} label={current ? 'Replace with a new Bedrock API key' : 'Bedrock API key'} help="Checked with one small call before it is saved." error={shown}>
+          <Input id={`${prefix}-key`} type="password" autoComplete="off" spellCheck={false} aria-invalid={shown ? true : undefined} aria-describedby={`${prefix}-key-message`}
+            value={key} onChange={event => setKey(event.target.value)}/>
+        </Field>
+        {status.error && <Notice tone="error">{status.error}</Notice>}
+      </form>
+      <DialogFooter>
+        {current && <Button variant="outline" disabled={status.pending} onClick={() => run(() => api.removeModelKey(installation.id), 'removed')}>Remove key</Button>}
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button type="submit" form={`${prefix}-form`} disabled={status.pending}>{status.pending ? 'Checking…' : 'Save key'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
+function Customers({ data, onEdit, onCredit, onModelKey }) {
   const [open, setOpen] = useState(() => new Set());
   const toggle = id => setOpen(current => {
     const next = new Set(current);
@@ -198,6 +251,7 @@ function Customers({ data, onEdit, onCredit }) {
                   <div className="mt-2 flex flex-wrap gap-2 md:hidden">
                     <Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button>
                     <Button variant="outline" size="sm" onClick={() => onCredit(installation)}>Add credit</Button>
+                    <Button variant="outline" size="sm" onClick={() => onModelKey(installation)}>Model key</Button>
                   </div>
                 </TableCell>
                 <TableCell className="text-right max-md:hidden"><Figure>{repositories.length}</Figure></TableCell>
@@ -214,6 +268,7 @@ function Customers({ data, onEdit, onCredit }) {
                   <div className={`text-[13px] ${installation.creditUsd <= 0 && usage.reviews >= plan.freeReviews ? 'text-destructive' : 'text-muted-foreground'}`}><Figure>{credit(installation.creditUsd)}</Figure> credit</div>
                   <div className="text-[13px] text-muted-foreground">{installation.card ?? 'No card'}{installation.topUpUsd ? <>, auto top-up <Figure>{money(installation.topUpUsd)}</Figure></> : ''}</div>
                   {installation.topUpFailed && <div className="text-[13px] text-destructive">Auto top-up stopped: {installation.topUpFailed}</div>}
+                  {installation.modelKey && <div className="text-[13px] text-muted-foreground">Own Bedrock key ending <Figure>{installation.modelKey.last4}</Figure></div>}
                   <div className={`text-[13px] ${installation.storage.mb > installation.storage.limitMb ? 'text-destructive' : 'text-muted-foreground'}`}>
                     <Figure>{count(installation.storage.mb)}</Figure> of <Figure>{count(installation.storage.limitMb)}</Figure> MB stored
                   </div>
@@ -222,6 +277,7 @@ function Customers({ data, onEdit, onCredit }) {
                   <div className="flex justify-end gap-2">
                     <Button variant="outline" size="sm" onClick={() => onEdit(installation)}>Edit plan</Button>
                     <Button variant="outline" size="sm" onClick={() => onCredit(installation)}>Add credit</Button>
+                    <Button variant="outline" size="sm" onClick={() => onModelKey(installation)}>Model key</Button>
                   </div>
                 </TableCell>
               </TableRow>
@@ -252,6 +308,7 @@ function Operator() {
   const admin = useResource('admin', () => api.admin());
   const [editing, setEditing] = useState(null);
   const [crediting, setCrediting] = useState(null);
+  const [keying, setKeying] = useState(null);
   const data = admin.data;
   const error = admin.error && (admin.error.status === 403 ? operatorOnly : admin.error.message);
   return <>
@@ -271,12 +328,13 @@ function Operator() {
             <p className="text-[13px] text-muted-foreground">The global backstop counts reviews started in the last 24 hours across every organization.</p>
           </CardContent>
         </Card>
-        <Customers data={data} onEdit={setEditing} onCredit={setCrediting}/>
+        <Customers data={data} onEdit={setEditing} onCredit={setCrediting} onModelKey={setKeying}/>
       </>}
     </div>
     {editing && data && <PlanDialog installation={editing} defaults={data.defaults} onClose={() => setEditing(null)}
       onSaved={() => { setEditing(null); admin.reload(); }}/>}
     {crediting && <CreditDialog installation={crediting} onClose={() => setCrediting(null)} onSaved={() => { setCrediting(null); admin.reload(); }}/>}
+    {keying && <ModelKeyDialog installation={keying} onClose={() => setKeying(null)} onSaved={() => { setKeying(null); admin.reload(); }}/>}
   </>;
 }
 

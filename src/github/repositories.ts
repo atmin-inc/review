@@ -3,6 +3,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PilotConfig } from './config.js';
 import { COUNTED, Store, type Job } from './store.js';
+import type { ModelKeys } from './model-keys.js';
 import { ReviewSettings, type ModelChoice } from './settings.js';
 import { DEFAULT_MAX_INSTALLATION_DISK_MB, directoryBytes } from './runner.js';
 import { chargeCredit } from './dashboard-view.js';
@@ -79,7 +80,7 @@ export class Repositories {
   readonly entries = new Map<number, Repository>();
   // `origin` is the dashboard's, set only when credit can be bought (a Stripe key is configured),
   // for the link in a refusal that asks for it.
-  constructor(readonly config: PilotConfig, readonly root: Store, private models: ModelChoice[], private owner: string, private origin?: string) {
+  constructor(readonly config: PilotConfig, readonly root: Store, private models: ModelChoice[], private owner: string, private origin?: string, readonly keys?: ModelKeys) {
     // The `invoices` table of the monthly-invoice release is left as it is on servers that have it.
     root.db.exec(`CREATE TABLE IF NOT EXISTS repositories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, installation INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS plans (installation INTEGER PRIMARY KEY, value TEXT NOT NULL, updated INTEGER NOT NULL, updatedBy INTEGER NOT NULL);
@@ -219,10 +220,10 @@ export class Repositories {
     process.stderr.write(`atmin review: plan for installation ${installation} set to ${JSON.stringify(plan)} by GitHub user ${by}\n`);
     return plan;
   }
-  // Jobs that started inference in [start, end) and count toward the plan, oldest first, across the
-  // installation's repositories.
+  // Jobs that started inference on this service's model key in [start, end) and count toward the
+  // plan, oldest first, across the installation's repositories.
   started(installation: number, start: number, end: number): { entry: Repository; job: Job }[] {
-    return this.of(installation).flatMap(entry => (entry.store.db.prepare(`SELECT * FROM jobs WHERE started>=? AND started<? AND runner IS NULL AND ${COUNTED}`).all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
+    return this.of(installation).flatMap(entry => (entry.store.db.prepare(`SELECT * FROM jobs WHERE started>=? AND started<? AND runner IS NULL AND modelKey IS NULL AND ${COUNTED}`).all(start, end) as unknown as Job[]).map(job => ({ entry, job })))
       .sort((a, b) => a.job.started! - b.job.started!);
   }
   // What the installation's repositories store on the shared disk: run records and each
@@ -243,8 +244,12 @@ export class Repositories {
       process.stderr.write(`atmin review: review ${job.id} of repository ${repository.config.repositoryId} not started: ${detail}\n`);
       return reason;
     };
-    if (used >= plan.monthlyReviews) return refuse(monthlyLimitReached(plan, now), `installation ${installation} used ${used} of ${plan.monthlyReviews} monthly reviews`);
-    if (used >= plan.freeReviews) {
+    // On the organization's own model key its free reviews and credit do not apply, and its
+    // monthly limit, which counts reviews on this service's key, applies only as the switch that
+    // turns its reviews off. The limits below, which protect this service, still do.
+    const modelKey = this.keys?.provider(installation) ?? null;
+    if ((modelKey === null || plan.monthlyReviews === 0) && used >= plan.monthlyReviews) return refuse(monthlyLimitReached(plan, now), `installation ${installation} used ${used} of ${plan.monthlyReviews} monthly reviews`);
+    if (modelKey === null && used >= plan.freeReviews) {
       chargeCredit(this, installation, now);
       const credit = this.balance(installation);
       if (credit <= 0) return refuse(creditUsedUp(plan, now, this.billingUrl(installation)), `installation ${installation} used ${used} reviews, ${plan.freeReviews} free, with ${credit} USD of credit`);
@@ -262,7 +267,7 @@ export class Repositories {
       stored = this.stored(installation);
       if (stored.runs + stored.copies > limitMb * 1024 ** 2) return refuse(storageLimitReached(limitMb), `installation ${installation} stores ${mb(stored.runs)} MB of run records, over its ${limitMb} MB limit`);
     }
-    return repository.store.reserve(job, owner, limit) || refuse(dailyLimitReached, 'repository daily limit reached or job superseded');
+    return repository.store.reserve(job, owner, limit, modelKey) || refuse(dailyLimitReached, 'repository daily limit reached or job superseded');
   }
   close(): void {
     for (const [id, entry] of this.entries) if (entry.store !== this.root) {

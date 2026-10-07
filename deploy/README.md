@@ -23,6 +23,11 @@ How many reviews run at once on our model key: `ATMIN_REVIEW_RUNNERS` in `servic
 removed or restarted finishes the review it holds first. Members' own runners come on top.
 A review no runner takes within 30 minutes is reported as not run.
 
+Organizations' own model keys (Model key in `/admin`) are sealed with `ATMIN_REVIEW_KEY_SECRET`
+in `service.env`: a random secret of at least 32 bytes, for example `openssl rand -base64 48`.
+Changing it makes every stored key unreadable, which stops those organizations' reviews until
+an operator sets their keys again.
+
 GitHub settings (repository → Settings → Environments → `production`):
 - `DEPLOY_HOST`: the host name or address.
 - `DEPLOY_SSH_KEY`: a private key whose public half is in `/home/deploy/.ssh/authorized_keys`.

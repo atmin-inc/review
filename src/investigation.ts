@@ -15,7 +15,9 @@ interface Limits {
 export type Profile = Limits & ({ provider: 'openai'; model: 'gpt-5.4-2026-03-05' | 'gpt-6-luna' }
   | { provider: 'codex-local'; model: 'gpt-5.6-sol' }
   | { provider: 'claude-local'; model: ClaudeModel }
-  | { provider: 'openrouter'; model: 'cohere/north-mini-code:free' | 'deepseek/deepseek-v3.2' | 'anthropic/claude-sonnet-5' | 'openai/gpt-6-luna' });
+  | { provider: 'openrouter'; model: 'cohere/north-mini-code:free' | 'deepseek/deepseek-v3.2' | 'anthropic/claude-sonnet-5' | 'openai/gpt-6-luna' }
+  // Luna on Amazon Bedrock, through Bedrock's OpenAI-compatible endpoint, with an organization's own key.
+  | { provider: 'bedrock'; model: 'openai.gpt-6-luna' });
 // Claude through the local Claude Code CLI, for benchmarking on a subscription. Like
 // codex-local, it runs only with the benchmark adapter injected, never hosted.
 export const claudeModels = ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1'] as const;
@@ -36,6 +38,7 @@ obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'coher
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'deepseek/deepseek-v3.2' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'anthropic/claude-sonnet-5' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 5 } }),
 obj({ ...limitsSchema, provider: { const: 'openrouter' }, model: { const: 'openai/gpt-6-luna' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
+obj({ ...limitsSchema, provider: { const: 'bedrock' }, model: { const: 'openai.gpt-6-luna' }, maxUsd: { type: 'number', exclusiveMinimum: 0, maximum: 2 } }),
 obj({ ...limitsSchema, provider: { const: 'codex-local' }, model: { const: 'gpt-5.6-sol' }, maxUsd: { const: 0 },
   maxOutputTokens: { type: 'integer', minimum: 1024, maximum: 65536 } }),
 obj({ ...limitsSchema, provider: { const: 'claude-local' }, model: { enum: [...claudeModels] }, maxUsd: { const: 0 } })] });
@@ -119,19 +122,19 @@ const luna = (input: number, output: number, cached: number, writes: number) => 
 export const price = (input: number, output: number, cached = 0, model: Profile['model'] = 'gpt-5.4-2026-03-05', cacheWrites = 0): number =>
   model === 'cohere/north-mini-code:free' ? 0 : model === 'deepseek/deepseek-v3.2' ? ((input - cached) * 0.269 + cached * 0.1345 + output * 0.4) / 1_000_000
   : model === 'anthropic/claude-sonnet-5' ? ((input - cached) * 2 + cached * 0.2 + output * 10) / 1_000_000
-  : model === 'openai/gpt-6-luna' || model === 'gpt-6-luna' ? luna(input, output, cached, cacheWrites) : ((input - cached) * 2.5 + cached * 0.25 + output * 15) / 1_000_000;
+  : model === 'openai/gpt-6-luna' || model === 'gpt-6-luna' || model === 'openai.gpt-6-luna' ? luna(input, output, cached, cacheWrites) : ((input - cached) * 2.5 + cached * 0.25 + output * 15) / 1_000_000;
 // A reservation assumes every prompt token is written to the cache, the dearest case.
 export const reservedCost = (profile: Profile, input: number, output: number): number =>
   subscription(profile) ? 0 : price(input, output, 0, profile.model, input);
 // What one call cost, or null when that is not known. OpenRouter reports what it billed, and
-// that is the figure. Luna direct is priced from usage, which must count its cache writes.
+// that is the figure. Luna direct and on Bedrock is priced from usage, which must count its cache writes.
 export function meteredCost(profile: Profile, reply: ModelReply): number | null {
   if (subscription(profile)) return 0;
   if (profile.provider === 'openrouter') {
     const cost = reply.reportedCostUsd;
     return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null;
   }
-  if (profile.model !== 'gpt-6-luna') return price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model);
+  if (profile.model !== 'gpt-6-luna' && profile.model !== 'openai.gpt-6-luna') return price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model);
   const writes = reply.cacheWriteTokens;
   return typeof writes === 'number' && Number.isSafeInteger(writes) && writes >= 0 && reply.cachedInputTokens + writes <= reply.inputTokens
     ? price(reply.inputTokens, reply.outputTokens, reply.cachedInputTokens, profile.model, writes) : null;
@@ -162,6 +165,7 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
         checkedAt: '2026-09-23', source: 'https://code.claude.com/docs/en/cli-reference' }
       : profile.model === 'deepseek/deepseek-v3.2' ? { providerRoute: 'novita/fp8', inputPerMillionUsd: 0.269, cachedInputPerMillionUsd: 0.1345, outputPerMillionUsd: 0.4, checkedAt: '2026-09-10', source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v3.2/endpoints' }
       : profile.model === 'anthropic/claude-sonnet-5' ? { providerRoute: 'anthropic', inputPerMillionUsd: 2, cachedInputPerMillionUsd: 0.2, outputPerMillionUsd: 10, checkedAt: '2026-09-23', source: 'https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints' }
+      : profile.model === 'openai.gpt-6-luna' ? { providerRoute: 'bedrock/us-east-1', inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, cacheWritePerMillionUsd: 0.125, outputPerMillionUsd: 0.5, checkedAt: '2026-10-07', source: 'https://developers.openai.com/api/docs/guides/amazon-bedrock' }
       : profile.model === 'gpt-6-luna' ? { inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, cacheWritePerMillionUsd: 0.125, outputPerMillionUsd: 0.5, checkedAt: '2026-09-26', source: 'https://developers.openai.com/api/docs/models/gpt-6-luna' }
       : profile.model === 'openai/gpt-6-luna' ? { providerRoute: 'azure', inputPerMillionUsd: 0.1, cachedInputPerMillionUsd: 0.01, outputPerMillionUsd: 0.5, checkedAt: '2026-10-03', source: 'https://openrouter.ai/api/v1/models/openai/gpt-6-luna/endpoints' } : profile.provider === 'openrouter' ? { inputPerMillionUsd: 0, cachedInputPerMillionUsd: 0, outputPerMillionUsd: 0,
       checkedAt: '2026-09-09', source: 'https://openrouter.ai/cohere/north-mini-code:free' }
