@@ -276,11 +276,14 @@ live key stops the worker at start.
 
 An organization can bring its own model key: an operator sets it with Model key in `/admin`.
 Only Amazon Bedrock for now: reviews then run GPT-6 Luna on the organization's Bedrock account
-in us-east-1, through Bedrock's OpenAI-compatible endpoint, with the repository profile's
+through Bedrock's US inference profile (us-east-1, us-east-2, us-west-2) on its OpenAI-compatible
+bedrock-runtime endpoint, at Bedrock's rates (OpenAI's plus 10%), with the repository profile's
 limits. Such reviews use none of its free reviews or credit, and its plan does not count them;
 the daily limits still do, and a monthly limit of 0 still turns its reviews off. The PR comment
 says the review ran on the organization's own key. Saving a key first makes one small call with
-it, so a key that cannot reach Luna (wrong region, model access off) is refused then. Keys are
+it, so a key that cannot reach Luna is refused then. The key's IAM policy needs
+`bedrock:CallWithBearerToken`, and `bedrock:InvokeModel` on the `us.openai.gpt-6-luna` inference
+profile and on the account's default project (`arn:aws:bedrock:us-east-1:<account>:project/default`). Keys are
 stored sealed with `ATMIN_REVIEW_KEY_SECRET` (at least 32 bytes, in `service.env`); without it
 none can be set or used, and a key sealed under a different secret stops that organization's
 reviews instead of running them on our key. Only this service's runners receive the key, with

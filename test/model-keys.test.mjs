@@ -9,6 +9,7 @@ import { ModelKeys, checkModelKey } from '../dist/github/model-keys.js';
 import { Runners } from '../dist/github/runners.js';
 import { router, modelCredential } from '../dist/github/runner.js';
 import { openAIModel } from '../dist/openai-model.js';
+import { meteredCost } from '../dist/investigation.js';
 import { readProfile } from '../dist/run.js';
 
 const secret = 'a test sealing secret of at least 32 bytes';
@@ -27,7 +28,7 @@ function setup(t) {
 }
 
 // A Responses API reply that calls one tool, as Bedrock's OpenAI-compatible endpoint returns it.
-const reply = () => Response.json({ id: 'resp_1', object: 'response', model: 'openai.gpt-6-luna', status: 'completed',
+const reply = () => Response.json({ id: 'resp_1', object: 'response', model: 'us.openai.gpt-6-luna', status: 'completed',
   output: [{ type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'ok', arguments: '{}', status: 'completed' }],
   usage: { input_tokens: 40, output_tokens: 12, total_tokens: 52, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 8 } } });
 
@@ -88,7 +89,7 @@ test('a review on an organization\'s key is offered as Luna on Bedrock with the 
   const job = { id: '00000000-0000-4000-8000-000000000001', pr: 7, modelKey: 'bedrock' };
   await route.offer(job, 'pool', f.root, null);
   const stored = () => JSON.parse(f.store.db.prepare('SELECT offer FROM runner_jobs WHERE job=?').get(job.id).offer);
-  assert.deepEqual([stored().profile.provider, stored().profile.model, stored().profile.maxUsd, stored().modelKey], ['bedrock', 'openai.gpt-6-luna', 2, key]);
+  assert.deepEqual([stored().profile.provider, stored().profile.model, stored().profile.maxUsd, stored().modelKey], ['bedrock', 'us.openai.gpt-6-luna', 2, key]);
   const offer = runners.claim(Runners.hosted('pool-token-of-at-least-32-bytes!!', 'pool-token-of-at-least-32-bytes!!', 'hosted-1'));
   assert.equal(offer.modelKey, key);
   assert.equal(stored().modelKey, undefined);
@@ -106,7 +107,7 @@ test('a review on an organization\'s key is offered as Luna on Bedrock with the 
   assert.deepEqual([plain.profile.provider, 'modelKey' in plain], ['openrouter', false]);
 });
 
-test('Luna on Bedrock calls Bedrock\'s OpenAI-compatible endpoint in us-east-1 with the key, and bounds input without a count call', async () => {
+test('Luna on Bedrock calls bedrock-runtime\'s OpenAI-compatible endpoint with the key and the US inference profile, and bounds input without a count call', async () => {
   const calls = [];
   const model = openAIModel(readProfile(resolve('profiles/review-luna-bedrock.json')), key, async (url, init) => {
     calls.push({ url: String(url), auth: new Headers(init.headers).get('authorization'), body: JSON.parse(init.body) });
@@ -116,18 +117,29 @@ test('Luna on Bedrock calls Bedrock\'s OpenAI-compatible endpoint in us-east-1 w
   assert.equal(model.inputCountKind, 'conservative-estimate');
   assert.ok(await model.count(input, AbortSignal.timeout(1000)) > 4096);
   const result = await model.respond(input, 2048, AbortSignal.timeout(5000));
-  assert.deepEqual(calls.map(call => [call.url, call.auth]), [['https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses', `Bearer ${key}`]]);
-  assert.deepEqual([calls[0].body.model, calls[0].body.store, 'service_tier' in calls[0].body, calls[0].body.tool_choice], ['openai.gpt-6-luna', false, false, 'required']);
+  assert.deepEqual(calls.map(call => [call.url, call.auth]), [['https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses', `Bearer ${key}`]]);
+  assert.deepEqual([calls[0].body.model, calls[0].body.store, 'service_tier' in calls[0].body, calls[0].body.tool_choice], ['us.openai.gpt-6-luna', false, false, 'required']);
   assert.deepEqual(result.calls, [{ id: 'call_1', name: 'ok', arguments: '{}' }]);
+});
+
+// The organization's AWS bill for a review is what /admin records as its cost: Bedrock's US inference
+// profile bills every Luna rate 10% above OpenAI's, including the long-context rates past 272K tokens.
+test('a review on Bedrock is costed at the US inference profile\'s rates, which Bedrock reports cache writes for', () => {
+  const bedrock = readProfile(resolve('profiles/review-luna-bedrock.json'));
+  const cost = usage => meteredCost(bedrock, { inputTokens: 1000, outputTokens: 50, ...usage });
+  assert.ok(Math.abs(cost({ cachedInputTokens: 600, cacheWriteTokens: 300 }) - (100 * 0.11 + 600 * 0.011 + 300 * 0.1375 + 50 * 0.55) / 1e6) < 1e-15);
+  assert.ok(Math.abs(meteredCost(bedrock, { inputTokens: 300_000, outputTokens: 1000, cachedInputTokens: 100_000, cacheWriteTokens: 50_000 })
+    - (150_000 * 0.22 + 100_000 * 0.022 + 50_000 * 0.275 + 1000 * 0.825) / 1e6) < 1e-15);
+  assert.equal(cost({ cachedInputTokens: 600 }), null);
 });
 
 // A key that cannot run a review is refused when it is set, not at a customer's next PR.
 test('a model key is checked with one tool call before it is saved, and a refusal says why without the key', async () => {
   const seen = [];
   assert.equal(await checkModelKey('bedrock', key, async (url, init) => { seen.push(JSON.parse(init.body)); return reply(); }), null);
-  assert.deepEqual([seen[0].model, seen[0].tool_choice, seen[0].tools.map(tool => tool.name)], ['openai.gpt-6-luna', 'required', ['ok']]);
+  assert.deepEqual([seen[0].model, seen[0].tool_choice, seen[0].tools.map(tool => tool.name)], ['us.openai.gpt-6-luna', 'required', ['ok']]);
   const denied = await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'You don\'t have access to the model', code: 'access_denied' } }, { status: 403 }));
-  assert.match(denied, /refused the key\. Use a Bedrock API key for us-east-1 whose account has access to OpenAI GPT-6 Luna/);
+  assert.match(denied, /refused the key\. Use a Bedrock API key whose IAM policy allows bedrock:InvokeModel on the us\.openai\.gpt-6-luna inference profile and on the account's default project/);
   assert.match(await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'bad' } }, { status: 400 })), /did not run the check call \(request, HTTP 400\)\. The key was not saved/);
   assert.match(await checkModelKey('bedrock', key, async () => { throw new TypeError('fetch failed'); }), /could not be reached|did not run the check call/);
   for (const message of [denied]) assert.ok(!message.includes(key));

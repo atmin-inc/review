@@ -180,7 +180,7 @@ export function router(config: PilotConfig, github: GitHub, runners: Runners, se
       const configured = settings?.profile() ?? readProfile(config.profile);
       const own = job.modelKey ? keys?.get(config.installationId) : null;
       if (job.modelKey && own?.provider !== job.modelKey) throw new Error(`Review ${job.id} was started on installation ${config.installationId}'s own ${job.modelKey} key, which is no longer set`);
-      const profile = own ? parseProfile({ ...configured, provider: 'bedrock', model: 'openai.gpt-6-luna' }) : configured;
+      const profile = own ? parseProfile({ ...configured, provider: 'bedrock', model: 'us.openai.gpt-6-luna' }) : configured;
       if (own) process.stderr.write(`atmin review: review ${job.id} of repository ${config.repositoryId} runs on installation ${config.installationId}'s own ${own.provider} key ending ${own.key.slice(-4)}\n`);
       const base = { job: job.id, repository: config.repository, pr: job.pr, token: await github.readToken(), previous: previous ? previousReview(previous) : null };
       if (to === 'pool') runners.offer(job.id, POOL, config.repositoryId, directory,

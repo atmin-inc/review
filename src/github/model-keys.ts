@@ -75,7 +75,7 @@ export class ModelKeys {
 // rather than at a review. The call costs the key's owner a fraction of a cent.
 export async function checkModelKey(provider: ModelKeyProvider, key: string, fetch: typeof globalThis.fetch = globalThis.fetch): Promise<string | null> {
   if (provider !== 'bedrock') return 'Unsupported model key provider.';
-  const profile = parseProfile({ provider: 'bedrock', model: 'openai.gpt-6-luna', maxUsd: 0.01, maxTurns: 1, maxToolCalls: 1, maxInputTokens: 2000, maxOutputTokens: 1024, deadlineMs: 30_000 });
+  const profile = parseProfile({ provider: 'bedrock', model: 'us.openai.gpt-6-luna', maxUsd: 0.01, maxTurns: 1, maxToolCalls: 1, maxInputTokens: 2000, maxOutputTokens: 1024, deadlineMs: 30_000 });
   const tools = [{ name: 'ok', description: 'Confirms that the call worked.', parameters: { type: 'object', properties: {}, additionalProperties: false } }] as unknown as TurnInput['tools'];
   try {
     await openAIModel(profile, key, fetch).respond({ instructions: 'Call the ok tool.', context: 'This checks that the key can call the model.', tools, transcript: [] }, 1024, AbortSignal.timeout(30_000));
@@ -83,7 +83,7 @@ export async function checkModelKey(provider: ModelKeyProvider, key: string, fet
   } catch (error) {
     const failure = error instanceof ProviderRequestError ? error.failure : null;
     process.stderr.write(`atmin review: ${provider} model key check failed: ${failure ? `${failure.kind}, HTTP ${failure.status ?? 'none'}` : 'no response'}\n`);
-    return failure?.kind === 'authentication' ? 'Amazon Bedrock refused the key. Use a Bedrock API key for us-east-1 whose account has access to OpenAI GPT-6 Luna turned on.'
+    return failure?.kind === 'authentication' ? 'Amazon Bedrock refused the key. Use a Bedrock API key whose IAM policy allows bedrock:InvokeModel on the us.openai.gpt-6-luna inference profile and on the account\'s default project in us-east-1.'
       : failure ? `Amazon Bedrock did not run the check call (${failure.kind}${failure.status ? `, HTTP ${failure.status}` : ''}). The key was not saved.`
       : 'Amazon Bedrock could not be reached. The key was not saved.';
   }
