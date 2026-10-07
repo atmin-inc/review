@@ -4,9 +4,12 @@ import type { Model, Profile, TurnInput } from './investigation.js';
 import { ProviderRequestError, type ProviderFailure } from './provider-error.js';
 import { traceEvent, traceId } from './trace.js';
 
-// Luna on Amazon Bedrock is served only in us-east-1, through an OpenAI-compatible endpoint that
-// takes a Bedrock API key as its bearer token: https://developers.openai.com/api/docs/guides/amazon-bedrock
-export const bedrockOrigin = 'https://bedrock-mantle.us-east-1.api.aws/openai/v1';
+// Luna on Amazon Bedrock, through bedrock-runtime's OpenAI-compatible endpoint, which takes a Bedrock
+// API key as its bearer token. Its model is the US inference profile (us-east-1, us-east-2, us-west-2):
+// that endpoint has no in-Region Luna, and its key needs only bedrock:InvokeModel on that profile and
+// the account's default project, so it can be limited to Luna (recommended for Mason, 2026-10-07).
+// https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
+export const bedrockOrigin = 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1';
 export function openAIModel(profile: Profile, apiKey = process.env[profile.provider === 'bedrock' ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY'], fetch?: typeof globalThis.fetch): Model {
   if (profile.provider !== 'openai' && profile.provider !== 'bedrock') throw new Error('Unsupported OpenAI profile');
   const bedrock = profile.provider === 'bedrock';
@@ -29,7 +32,7 @@ export function openAIModel(profile: Profile, apiKey = process.env[profile.provi
     }
   };
   return {
-    // Bedrock has no token-count route (it answers 405), so its input is bounded by serialized
+    // Bedrock has no token-count route for Luna, so its input is bounded by serialized
     // UTF-8 bytes plus overhead, as on OpenRouter; actual tokens are still recorded.
     ...(bedrock ? { inputCountKind: 'conservative-estimate' as const } : {}),
     async count(input, signal) {

@@ -26,10 +26,10 @@ async function setup(t, hosted = false, operators = [], stripe) {
   const state = { admin: true, installed: true, revoked: false, exchange: null, exchanges: 0, calls: 0 };
   const fetcher = async (url, init) => {
     // Amazon Bedrock, which an operator's model key is checked against before it is saved.
-    if (String(url).startsWith('https://bedrock-mantle.us-east-1.api.aws/')) {
+    if (String(url).startsWith('https://bedrock-runtime.us-east-1.amazonaws.com/')) {
       (state.bedrock ??= []).push({ url: String(url), auth: new Headers(init.headers).get('authorization') });
       return state.bedrockStatus ? Response.json({ error: { message: 'denied' } }, { status: state.bedrockStatus })
-        : Response.json({ id: 'resp_1', object: 'response', model: 'openai.gpt-6-luna', status: 'completed',
+        : Response.json({ id: 'resp_1', object: 'response', model: 'us.openai.gpt-6-luna', status: 'completed',
           output: [{ type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'ok', arguments: '{}', status: 'completed' }],
           usage: { input_tokens: 40, output_tokens: 12, total_tokens: 52, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } });
     }
@@ -493,7 +493,7 @@ test('only an operator sets an organization\'s model key, which is checked first
   assert.equal(saved.status, 200);
   assert.ok(!text.includes(key));
   assert.deepEqual(JSON.parse(text).modelKey, { provider: 'bedrock', last4: 'ODkw', updatedAt: JSON.parse(text).modelKey.updatedAt, updatedBy: 8 });
-  assert.deepEqual(f.state.bedrock.map(call => [call.url, call.auth]), Array(2).fill(['https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses', `Bearer ${key}`]));
+  assert.deepEqual(f.state.bedrock.map(call => [call.url, call.auth]), Array(2).fill(['https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses', `Bearer ${key}`]));
   assert.deepEqual(f.keys.get(99), { provider: 'bedrock', key });
   const admin = await (await f.get('/api/review/v1/admin', cookie)).text();
   assert.ok(!admin.includes(key));
