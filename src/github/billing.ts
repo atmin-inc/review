@@ -7,7 +7,13 @@ export class StripeError extends Error {
   constructor(readonly status: number, readonly request: string, readonly code: string, detail?: string) { super(`Stripe ${status} ${code} on ${request}${detail ? `: ${detail}` : ''}`); }
 }
 export class Stripe {
-  constructor(private key: string, private fetcher: typeof fetch = fetch) {}
+  // Which of Stripe's modes the key works in; a key of neither kind is refused at start.
+  readonly mode: 'test' | 'live';
+  constructor(private key: string, private fetcher: typeof fetch = fetch) {
+    const mode = /^[rs]k_(test|live)_/.exec(key)?.[1];
+    if (mode !== 'test' && mode !== 'live') throw new Error('Unrecognized Stripe key');
+    this.mode = mode;
+  }
   async call(method: 'GET' | 'POST', path: string, params: Record<string, string> = {}, idempotencyKey?: string): Promise<any> {
     const query = new URLSearchParams(params), request = `${method} ${path}`;
     const response = await this.fetcher(`https://api.stripe.com/v1${path}${method === 'GET' && query.size ? `?${query}` : ''}`, {
@@ -54,7 +60,7 @@ const topUpFailure = (code: string) => code === 'authentication_required' || cod
 // then confirmed, so a retried or interrupted payment never charges twice. Stripe emails the
 // receipt to the address entered in Checkout.
 export class Billing {
-  constructor(private stripe: Stripe, private repositories: Repositories, private origin: string) {}
+  constructor(private stripe: Stripe, private repositories: Repositories, private origin: string) { repositories.stripeMode(stripe.mode); }
   private async customer(installation: number, account: string, by: number): Promise<string> {
     const existing = this.repositories.billing(installation)?.customer;
     if (existing) return existing;

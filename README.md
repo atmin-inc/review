@@ -265,6 +265,13 @@ credit or turns it on again. Stripe emails receipts to the address entered in Ch
 Settings > Emails > Successful payments is on in the Stripe dashboard. The `invoices` table
 of the earlier monthly-invoice release is left as it is.
 
+Stripe's test and live modes share no customers, cards or payments, so the worker records the
+mode of the key it last ran with. When it starts with a key of the other mode (going live, say),
+it forgets every organization's Stripe customer, saved card and auto top-up, closes open
+payments as expired, and logs the counts. Credit balances stay: credit bought with test cards
+still counts until an operator takes it away in `/admin`. A key that is neither a test nor a
+live key stops the worker at start.
+
 `operators` lists GitHub user IDs, not logins, because a login can be renamed and taken
 by someone else. Operators get `/admin`, which lists every installation of the App (read
 with the App's credentials) with its repositories, reviews this month, model cost,

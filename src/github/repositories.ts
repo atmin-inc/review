@@ -23,7 +23,8 @@ export const creditStart = Date.UTC(2026, 9, 1);
 export type CreditKind = 'purchase' | 'top-up' | 'grant' | 'review';
 export interface CreditRecord { reference: string; kind: CreditKind; usd: number; created: number; by: number | null; note: string | null; receipt: string | null; }
 // A payment to Stripe for credit, written before Stripe is asked to take it. 'open' until Stripe
-// says it was paid, failed, or (a Checkout page left unpaid) expired. `intent` is a top-up's
+// says it was paid, failed, or (a Checkout page left unpaid) expired; also expired when the Stripe
+// key changes mode (`stripeMode`). `intent` is a top-up's
 // PaymentIntent once Stripe has made it.
 export type PaymentState = 'open' | 'paid' | 'failed' | 'expired';
 export interface PaymentRecord { reference: string; installation: number; kind: 'checkout' | 'top-up'; cents: number; state: PaymentState; intent: string | null; created: number; by: number | null; }
@@ -85,7 +86,8 @@ export class Repositories {
       CREATE TABLE IF NOT EXISTS billing (installation INTEGER PRIMARY KEY, customer TEXT NOT NULL, paymentMethod TEXT, card TEXT, updated INTEGER NOT NULL, updatedBy INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS credit (reference TEXT PRIMARY KEY, installation INTEGER NOT NULL, kind TEXT NOT NULL, micros INTEGER NOT NULL, created INTEGER NOT NULL, by INTEGER, note TEXT, receipt TEXT);
       CREATE INDEX IF NOT EXISTS credit_installation ON credit(installation, created);
-      CREATE TABLE IF NOT EXISTS payments (reference TEXT PRIMARY KEY, installation INTEGER NOT NULL, kind TEXT NOT NULL, cents INTEGER NOT NULL, state TEXT NOT NULL, intent TEXT, created INTEGER NOT NULL, by INTEGER);`);
+      CREATE TABLE IF NOT EXISTS payments (reference TEXT PRIMARY KEY, installation INTEGER NOT NULL, kind TEXT NOT NULL, cents INTEGER NOT NULL, state TEXT NOT NULL, intent TEXT, created INTEGER NOT NULL, by INTEGER);
+      CREATE TABLE IF NOT EXISTS stripe (id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL);`);
     // Columns added after the first billing release; its table exists on the server.
     for (const [column, type] of [['email', 'TEXT'], ['expires', 'TEXT'], ['topUpCents', 'INTEGER'], ['topUpFailed', 'TEXT']]) {
       if (!root.db.prepare('PRAGMA table_info(billing)').all().some(row => row.name === column)) root.db.exec(`ALTER TABLE billing ADD COLUMN ${column} ${type}`);
@@ -144,6 +146,23 @@ export class Repositories {
   setTopUp(installation: number, cents: number | null, by: number): void {
     this.root.db.prepare('UPDATE billing SET topUpCents=?, topUpFailed=NULL, updated=?, updatedBy=? WHERE installation=?').run(cents, Date.now(), by, installation);
     process.stderr.write(`atmin review: auto top-up for installation ${installation} ${cents === null ? 'turned off' : `set to ${cents} cents`} by GitHub user ${by}\n`);
+  }
+  // Stripe's test and live modes share nothing: a customer, card or payment made with a key of
+  // one mode does not exist for a key of the other. When the key's mode changes, the old mode's
+  // customers, with their saved cards and auto top-up, are forgotten and its open payments are
+  // closed as expired, so each organization starts again on the Billing page. Credit already in
+  // the ledger stays; an operator takes test credit away in /admin. A server that billed before
+  // the mode was recorded had only ever used a test key.
+  stripeMode(mode: 'test' | 'live'): void {
+    this.root.transaction(() => {
+      const previous = String(this.root.db.prepare('SELECT mode FROM stripe').get()?.mode ?? 'test');
+      if (previous !== mode) {
+        const customers = this.root.db.prepare('DELETE FROM billing').run().changes;
+        const payments = this.root.db.prepare("UPDATE payments SET state='expired' WHERE state='open'").run().changes;
+        process.stderr.write(`atmin review: Stripe key changed from ${previous} to ${mode} mode; forgot ${customers} Stripe customers with their saved cards and auto top-up, and closed ${payments} open payments as expired. Credit balances are unchanged.\n`);
+      }
+      this.root.db.prepare('INSERT INTO stripe VALUES(1,?) ON CONFLICT(id) DO UPDATE SET mode=excluded.mode').run(mode);
+    });
   }
   failTopUp(installation: number, reason: string): void { this.root.db.prepare('UPDATE billing SET topUpFailed=? WHERE installation=?').run(reason, installation); }
   // Installations whose auto top-up is on, has a card to charge and has not failed.
