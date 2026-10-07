@@ -9,7 +9,10 @@ export type JobState = 'queued' | 'running' | 'dispatched' | 'publishing' | 'com
 // `trigger` is what asked for the review: a PR or branch event, or a maintainer's
 // `/atmin review` comment. A command always gets a full review and resets auto-pause.
 export type Trigger = 'event' | 'command';
-export interface Job { id: string; pr: number; state: JobState; created: number; started: number | null; artifact: string | null; report: string | null; error: string | null; createStarted: number; trigger: Trigger; author: number | null; runner: string | null; }
+export interface Job { id: string; pr: number; state: JobState; created: number; started: number | null; artifact: string | null; report: string | null; error: string | null; createStarted: number; trigger: Trigger; author: number | null; runner: string | null; modelKey: ModelKeyProvider | null; }
+// Whose model account paid for a review this service ran: null for this service's own, or the
+// provider of the organization's own key (see model-keys.ts).
+export type ModelKeyProvider = 'bedrock';
 // Automatic reviews stop after this many distinct reviewed heads of one PR, as CodeRabbit
 // does after five reviewed commits; a `/atmin review` comment starts the count again.
 export const AUTO_PAUSE_AFTER = 5;
@@ -50,6 +53,11 @@ export class Store {
     // comment and dashboard. Such reviews cost this service no inference, so plans never count them.
     if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'runner')) {
       this.db.exec('ALTER TABLE jobs ADD COLUMN runner TEXT');
+    }
+    // Reviews run on the organization's own model key cost this service no inference, so plans
+    // and credit never count them. Jobs from before such keys ran on this service's.
+    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'modelKey')) {
+      this.db.exec('ALTER TABLE jobs ADD COLUMN modelKey TEXT');
     }
   }
   close(): void { this.db.close(); }
@@ -118,12 +126,12 @@ export class Store {
   }
   // Jobs a runner is working on, oldest first.
   dispatched(): Job[] { return this.db.prepare("SELECT * FROM jobs WHERE state='dispatched' ORDER BY created").all() as unknown as Job[]; }
-  reserve(job: Job, owner: string, limit: number): boolean {
+  reserve(job: Job, owner: string, limit: number, modelKey: ModelKeyProvider | null = null): boolean {
     return this.transaction(() => {
       if (!this.current(job, owner)) return false;
       const count = Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>? AND runner IS NULL').get(Date.now() - 86_400_000)!.n);
       if (count >= limit) return false;
-      this.db.prepare('UPDATE jobs SET started=? WHERE id=?').run(Date.now(), job.id);
+      this.db.prepare('UPDATE jobs SET started=?,modelKey=? WHERE id=?').run(Date.now(), modelKey, job.id);
       return true;
     });
   }

@@ -39,7 +39,8 @@ export interface Dispatcher {
   // Jobs of this repository offered to a runner and not yet closed.
   open(): string[];
 }
-const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n` : '';
+const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n`
+  : job.modelKey === 'bedrock' ? `\nRan on this organization's own Amazon Bedrock key. atmin charged nothing for this review.\n` : '';
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseSha === b.baseSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 export class Worker {
   private checks: Checks;
@@ -161,7 +162,8 @@ export class Worker {
         this.store.update(job.id, { artifact, report: JSON.stringify({ initial, check,
           body: `# atmin review — interrupted\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.${this.identity(initial, job)}`,
         }) });
-        await this.dispatcher.offer(job, own && onOwn ? own : 'pool', artifact, this.store.previous(job));
+        // Read again: the reservation recorded whose model key the review runs on.
+        await this.dispatcher.offer(this.store.get(job.id), own && onOwn ? own : 'pool', artifact, this.store.previous(job));
         if (!this.store.current(job, this.owner) || signal.aborted) return;
         this.store.update(job.id, { state: 'dispatched' });
         process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} offered to ${own && onOwn ? `runner ${own.id}` : 'the hosted runners'}\n`);

@@ -6,7 +6,8 @@ import type { DatabaseSync } from 'node:sqlite';
 // calls out; it is offered jobs whose PR its GitHub user authored, and nothing else.
 export type Cli = 'claude' | 'codex';
 export interface RunnerRow { id: string; user: number; login: string; cli: string | null; model: string | null; version: string | null; seen: number; }
-export interface Offer { job: string; repository: string; pr: number; token: string; previous: unknown; profile?: unknown; checks?: unknown }
+// `modelKey` is the organization's own model key, on an offer to this service's runners only.
+export interface Offer { job: string; repository: string; pr: number; token: string; previous: unknown; profile?: unknown; checks?: unknown; modelKey?: string }
 // What a dispatched job ended as. Anything but 'done' falls back to a hosted review.
 export type Outcome = 'done' | 'unclaimed' | 'silent' | 'failed' | 'cancelled';
 
@@ -38,8 +39,9 @@ export class Runners {
       CREATE INDEX IF NOT EXISTS runner_jobs_user ON runner_jobs(user, state, offered);`);
     // Tables created before the worker stopped waiting on runners have no deadline column.
     if (!db.prepare('PRAGMA table_info(runner_jobs)').all().some(column => column.name === 'deadline')) db.exec('ALTER TABLE runner_jobs ADD COLUMN deadline INTEGER NOT NULL DEFAULT 0');
-    // An offer carries a GitHub token, needed only until a runner claims it. Older releases kept it.
-    db.exec(`UPDATE runner_jobs SET offer=json_remove(offer,'$.token') WHERE state<>'offered'`);
+    // An offer carries a GitHub token, and may carry an organization's own model key, both needed
+    // only until a runner claims it. Older releases kept them.
+    db.exec(`UPDATE runner_jobs SET offer=json_remove(offer,'$.token','$.modelKey') WHERE state<>'offered'`);
   }
   // The runner's own token, shown once. Only its hash is kept. Signing in again adds a runner;
   // the newest one seen is the one offered work.
@@ -84,7 +86,7 @@ export class Runners {
     try {
       const row = this.db.prepare("SELECT job,offer FROM runner_jobs WHERE user=? AND state='offered' ORDER BY offered LIMIT 1").get(runner.user);
       // The deadline was stored as offer time plus the allowed run time; the clock starts now.
-      if (row) this.db.prepare("UPDATE runner_jobs SET state='claimed',offer=json_remove(offer,'$.token'),runner=?,heartbeat=?,deadline=deadline-offered+? WHERE job=?").run(runner.id, now, now, row.job as string);
+      if (row) this.db.prepare("UPDATE runner_jobs SET state='claimed',offer=json_remove(offer,'$.token','$.modelKey'),runner=?,heartbeat=?,deadline=deadline-offered+? WHERE job=?").run(runner.id, now, now, row.job as string);
       this.db.exec('COMMIT');
       return row ? JSON.parse(String(row.offer)) as Offer : null;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -105,9 +107,9 @@ export class Runners {
   }
   // The worker is done with a job: it collected it, or the review was superseded, paused or
   // failed. A runner still holding it has its next report refused.
-  close(job: string): void { this.db.prepare("UPDATE runner_jobs SET state='closed',offer=json_remove(offer,'$.token') WHERE job=?").run(job); }
+  close(job: string): void { this.db.prepare("UPDATE runner_jobs SET state='closed',offer=json_remove(offer,'$.token','$.modelKey') WHERE job=?").run(job); }
   private end(job: string, state: Outcome): void {
-    this.db.prepare("UPDATE runner_jobs SET state=?,offer=json_remove(offer,'$.token') WHERE job=? AND state IN ('offered','claimed')").run(state, job);
+    this.db.prepare("UPDATE runner_jobs SET state=?,offer=json_remove(offer,'$.token','$.modelKey') WHERE job=? AND state IN ('offered','claimed')").run(state, job);
   }
   // How a dispatched job ended, or null while a runner may still deliver. The worker checks on
   // each tick and never waits. A user's own runner must claim within CLAIM_MS; the pool's
