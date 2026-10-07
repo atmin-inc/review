@@ -6,7 +6,7 @@ const runId = /^[a-zA-Z0-9-]{1,100}$/;
 const checkoutId = /^cs_(test|live)_[A-Za-z0-9]{1,250}$/;
 
 // Where someone who would rather not buy credit learns to run atmin review themselves.
-export const selfHostUrl = 'https://github.com/atmin-inc/review#readme';
+export const selfHostUrl = '/docs/self-host';
 
 export const signinMessages = {
   denied: 'GitHub did not grant access. Sign in again.',
@@ -29,6 +29,9 @@ export function parseRoute(href) {
   const signin = Object.hasOwn(signinMessages, code ?? '') ? code : null;
   const installation = single(params, 'installation', repositoryId);
   const base = { signin, installation: installation && Number(installation) };
+  if (path === '/terms' || path === '/privacy') return { ...base, view: path.slice(1) };
+  const docs = /^\/docs(?:\/([a-z-]{1,40}))?$/.exec(path);
+  if (docs) return { ...base, view: 'docs', page: docs[1] ?? null };
   if (path === '/admin') return { ...base, view: 'admin' };
   if (path === '/usage') return { ...base, view: 'usage' };
   if (path === '/billing') return { ...base, view: 'billing', checkout: single(params, 'checkout', checkoutId) };
@@ -44,6 +47,9 @@ export function routeHref(route) {
   const query = id => (id ? `?installation=${id}` : '');
   switch (route.view) {
     case 'admin': return '/admin';
+    case 'terms': return '/terms';
+    case 'privacy': return '/privacy';
+    case 'docs': return route.page ? `/docs/${route.page}` : '/docs';
     case 'usage': return `/usage${query(route.installation)}`;
     case 'billing': return `/billing${query(route.installation)}`;
     case 'repository': return `/?repository=${route.repository}${route.review ? `#review/${route.review}` : ''}`;
