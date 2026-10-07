@@ -38,6 +38,26 @@ test('a runner claims only its own user\'s jobs, and only while signed in', t =>
   assert.equal(runners.online(1), null, 'a revoked runner gets no work');
 });
 
+// An offer's GitHub token can read the repository's code. The service needs it only until a
+// runner claims the offer, so a copy of the database never holds a live one for longer.
+test('an offer keeps its GitHub token only until a runner claims it or the offer ends', t => {
+  const { root, store, runners } = setup(t);
+  const alice = runners.authenticate(runners.register(1, 'alice'));
+  const tokens = () => store.db.prepare('SELECT job, offer FROM runner_jobs ORDER BY job').all().map(row => [row.job, JSON.parse(row.offer).token ?? null]);
+  let now = 1_000_000;
+  for (const n of [1, 2, 3]) runners.offer(job(n), 1, 42, root, { job: job(n), repository: 'o/r', pr: n, token: `ghs_${n}`, previous: null }, 60_000, now);
+  assert.equal(runners.claim(alice, now).token, 'ghs_1', 'the runner still receives the token');
+  runners.close(job(2));
+  assert.equal(runners.poll(job(3), now + CLAIM_MS + 1), 'unclaimed');
+  assert.deepEqual(tokens(), [[job(1), null], [job(2), null], [job(3), null]]);
+  assert.equal(JSON.parse(store.db.prepare('SELECT offer FROM runner_jobs WHERE job=?').get(job(1)).offer).pr, 1, 'the rest of the offer stays for diagnosis');
+  // A database from an older release holds tokens of finished jobs; starting removes them.
+  runners.offer(job(4), 1, 42, root, { job: job(4), token: 'ghs_4' }, 60_000, now);
+  store.db.prepare(`UPDATE runner_jobs SET state='done', offer=json_set(offer,'$.token','ghs_old') WHERE job=?`).run(job(1));
+  new Runners(store.db);
+  assert.deepEqual(tokens(), [[job(1), null], [job(2), null], [job(3), null], [job(4), 'ghs_4']], 'an offer not yet claimed keeps its token');
+});
+
 // Every way a runner can fail to deliver ends the job, so the worker never holds one forever.
 test('a dispatched job ends unclaimed, silent, late or done, never never', t => {
   const { root, runners } = setup(t);
