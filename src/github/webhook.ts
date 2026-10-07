@@ -59,10 +59,9 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     store.refreshValidation(delivery, check.head_sha);
     return [202, 'validation refresh recorded'];
   }
-  if (event === 'push' && typeof payload.ref === 'string' && payload.ref.startsWith('refs/heads/')) {
-    for (const number of store.branchPulls(payload.ref.slice(11))) store.enqueue(`${delivery}-${number}`, number);
-    return [202, 'tracked target branches reconciled'];
-  }
+  // A push to a target branch starts nothing: it does not change what a PR changes, and
+  // re-reviewing every open PR on each one billed mason for unchanged code several times a day.
+  if (event === 'push') return [202, 'target branch push ignored'];
   let pr: number | undefined;
   if (event === 'pull_request' && ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft', 'closed'].includes(payload.action)) pr = payload.number;
   if (event === 'pull_request' && payload.action === 'edited' && payload.changes?.base) pr = payload.number;
