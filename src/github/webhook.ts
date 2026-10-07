@@ -77,6 +77,10 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
       })]);
     } finally { clearTimeout(timer); }
     if (!allowed) { return [202, 'insufficient permission']; }
+    if (store.fullReviewActive(payload.issue.number)) {
+      process.stderr.write(`atmin review: /atmin review on ${config.repository}#${payload.issue.number} ignored: a full review of it is already running\n`);
+      return [202, 'full review already running'];
+    }
     pr = payload.issue.number;
   }
   if (!Number.isSafeInteger(pr) || pr! < 1) { return [202, 'ignored event']; }

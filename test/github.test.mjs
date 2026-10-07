@@ -117,6 +117,25 @@ test('invalid signatures, other repositories/installations and unauthorized reru
   assert.equal(h.store.status().jobs.length, 1);
 });
 
+// Marking a PR ready and then commenting `/atmin review` used to start two reviews of the
+// same head: the second cancelled the first, which had already started inference.
+test('/atmin review while a full review of the PR is queued or running does not restart it, but upgrades a push review to a full one', async t => {
+  const h = await harness(t); const post = await http(t, h);
+  const comment = { action: 'created', issue: { number: 1, pull_request: {} }, sender: { id: 9 }, comment: { body: '/atmin review', user: { id: 9, login: 'maintainer', type: 'User' } } };
+  const jobs = () => h.store.db.prepare('SELECT trigger, state FROM jobs').all().map(job => `${job.trigger}:${job.state}`).sort();
+  await post('pull_request', { action: 'ready_for_review', number: 1 }, 'ready');
+  assert.equal(await (await post('issue_comment', comment, 'command-1')).text(), 'full review already running\n');
+  assert.deepEqual(jobs(), ['event:queued']);
+  await h.worker.tick();
+  assert.deepEqual(jobs(), ['event:completed']);
+  h.setLive({ headSha: 'a'.repeat(40) });
+  await post('pull_request', { action: 'synchronize', number: 1 }, 'push');
+  await post('issue_comment', comment, 'command-2');
+  assert.deepEqual(jobs(), ['command:queued', 'event:cancelled', 'event:completed']);
+  await post('issue_comment', comment, 'command-3');
+  assert.deepEqual(jobs(), ['command:queued', 'event:cancelled', 'event:completed']);
+});
+
 test('service starts paused; disabling or installation removal cancels queued work', async t => {
   const h = await harness(t); const post = await http(t, h);
   h.store.enable(false);

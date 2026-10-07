@@ -86,7 +86,10 @@ test('each installation is held to its monthly plan; other installations keep re
   // Any GitHub account can install the App and connect repositories, so a monthly cap per
   // installation is what bounds the model spend a stranger can cause.
   const f = setup(t, 100);
-  const run = (entry, delivery) => { entry.store.enable(true); entry.store.enqueue(delivery, 1); return f.directory.reserve(entry, entry.store.next('worker'), 'worker', 100); };
+  // Each run is a different PR: a second review of one PR would cancel the first, which then
+  // does not count.
+  let pr = 0;
+  const run = (entry, delivery) => { entry.store.enable(true); entry.store.enqueue(delivery, ++pr); return f.directory.reserve(entry, entry.store.next('worker'), 'worker', 100); };
   f.directory.setPlan(99, { freeReviews: 1, monthlyReviews: 1, multiplier: 2, minimumUsd: .05 }, 8);
   assert.equal(run(f.first, 'a'), true);
   // The cap spans every repository of the installation, and the reason reaches the PR comment.

@@ -79,7 +79,8 @@ export function reviewPrice(repositories: Repositories, installation: number, jo
   const record = repositories.billing(installation);
   return { ...price, credit: { usd: repositories.balance(installation), topUp: Boolean(record?.topUpCents && !record.topUpFailed && record.paymentMethod), url: repositories.billingUrl(installation) } };
 }
-// Reviews that started this UTC month count against the plan, failed ones included. Each beyond
+// Reviews that started this UTC month count against the plan, failed ones included and ones
+// cancelled before they finished left out. Each beyond
 // the free allowance is estimated at max(recorded cost x multiplier, minimum); recorded cost runs
 // below the provider's bill, and a review whose cost is not settled is counted, not guessed.
 export function monthlyUsage(repositories: Repositories, installation: number, now = Date.now()) {
@@ -140,7 +141,7 @@ function artifact(job: Job, file: string): any {
 function failureReason(job: Job): string {
   if (job.state === 'skipped' && job.error === 'auto-paused') return 'Automatic reviews paused after five reviews of this PR. Comment /atmin review for a full review.';
   if (job.state === 'skipped') return 'No review was started for this event. Draft and closed PRs do not trigger automatic reviews.';
-  if (job.state === 'cancelled') return 'This run was cancelled. A newer commit or a pause can cancel a review.';
+  if (job.state === 'cancelled') return `This run was cancelled. A newer commit or a pause can cancel a review.${job.report === null ? ' It was not counted toward the plan or charged.' : ''}`;
   if (job.state === 'uncertain') return 'GitHub publication could not be confirmed. Check the PR before requesting another review.';
   if (['queued', 'running', 'dispatched', 'publishing'].includes(job.state)) return 'This review is still in progress. Refresh to check its status.';
   try {

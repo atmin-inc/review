@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { Store } from '../dist/github/store.js';
 import { Repositories, month } from '../dist/github/repositories.js';
 import { Billing, Stripe, StripeError } from '../dist/github/billing.js';
-import { chargeCredit } from '../dist/github/dashboard-view.js';
+import { chargeCredit, monthlyUsage } from '../dist/github/dashboard-view.js';
 import { readProfile } from '../dist/run.js';
 import { priceLine } from '../dist/render.js';
 
@@ -184,6 +184,33 @@ test('each review past the free ones is paid from credit once, at the price its 
   chargeCredit(f.repositories, 99, now);
   assert.equal(Math.round(f.repositories.balance(99) * 100) / 100, 8.35);
   assert.ok(free.every(({ id }) => f.repositories.credited(`review-${id}`)));
+});
+
+// A review cancelled before it finished (a newer commit, a second trigger, a pause) posted
+// nothing, so the customer pays nothing for it: it uses no free review and no credit. A review
+// cancelled after it finished was delivered and counts. The daily limits still count both,
+// because they cap this service's own spend.
+test('a review cancelled before it finished uses no free review and no credit; one cancelled after it finished counts', t => {
+  const f = setup(t), now = Date.now(), at = now - 60_000;
+  f.repositories.setPlan(99, { freeReviews: 1, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, 8);
+  f.repositories.grant(99, 5, 'test credit', 8);
+  const cancel = (review, report) => f.first.store.db.prepare("UPDATE jobs SET state='cancelled', error='superseded', report=? WHERE id=?").run(report, review.id);
+  const early = f.review(f.first, at, .3);
+  cancel(early, null);
+  const free = f.review(f.first, at + 1, .3);
+  chargeCredit(f.repositories, 99, now);
+  assert.equal(f.repositories.balance(99), 5, 'the finished review is the free one; the cancelled one is not charged');
+  f.review(f.first, at + 2, .3);
+  const late = f.review(f.first, at + 3, .3);
+  cancel(late, JSON.stringify({ initial: {} }));
+  chargeCredit(f.repositories, 99, now);
+  assert.equal(Math.round(f.repositories.balance(99) * 100) / 100, 3.8, 'two paid reviews at .60, the one cancelled after finishing included');
+  assert.equal(f.repositories.credited(`review-${early.id}`), false);
+  assert.equal(monthlyUsage(f.repositories, 99, now).reviews, 3);
+  assert.equal(f.repositories.reviewsToday(now), 4);
+  assert.ok(f.repositories.credited(`review-${free.id}`));
+  f.first.store.db.prepare('UPDATE jobs SET author=7').run();
+  assert.equal(f.first.store.authorReviews(7, at), 3, 'the per-author limit does not count it either');
 });
 
 test('reviews from before credit replaced monthly invoices are never taken from credit', t => {
