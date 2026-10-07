@@ -255,6 +255,52 @@ test('auto top-up charges the saved card the chosen amount below $5, once even w
   assert.deepEqual([f.repositories.billing(99).topUpFailed, f.repositories.toppedUp(), f.repositories.balance(99)], [null, [99], 13]);
 });
 
+// Going live on a server that ran in test mode: atmin-inc's test customer and card do not exist
+// for a live key, so keeping them would fail every purchase with "No such customer".
+test('a Stripe key of the other mode forgets the old mode\'s customers, cards and open payments, keeps credit, and buys with a new customer', async t => {
+  const f = setup(t);
+  const live = { calls: [] };
+  const liveStripe = async (url, init) => {
+    assert.equal(init.headers.Authorization, 'Bearer sk_live_fake');
+    const path = new URL(url).pathname.replace(/^\/v1/, '');
+    live.calls.push({ method: init.method, path, params: Object.fromEntries(new URLSearchParams(init.body ?? '')) });
+    if (path === '/customers') return Response.json({ id: 'cus_live1' });
+    if (path === '/checkout/sessions') return Response.json({ id: 'cs_live_1', url: 'https://checkout.stripe.com/c/pay/cs_live_1' });
+    throw new Error(`Unexpected Stripe call ${path}`);
+  };
+  // Billing state from before the mode was recorded, as on the server today: it ran only test keys.
+  f.repositories.root.db.exec('DELETE FROM stripe');
+  f.card(); f.repositories.setTopUp(99, 2500, 7);
+  f.repositories.addCredit(99, 'cs_test_paid', 'purchase', 10_000_000, 7, null, null);
+  f.repositories.startPayment('cs_test_open', 99, 'checkout', 2500, 7);
+  new Billing(new Stripe('sk_test_fake', fakeStripe({})), f.repositories, origin);
+  assert.equal(f.repositories.billing(99).customer, 'cus_test1', 'restarting with a test key keeps test customers');
+  assert.equal(f.repositories.payment('cs_test_open').state, 'open');
+
+  const billing = new Billing(new Stripe('sk_live_fake', liveStripe), f.repositories, origin);
+  assert.equal(f.repositories.billing(99), null, 'the test customer, card and auto top-up are gone');
+  assert.deepEqual(f.repositories.toppedUp(), [], 'no auto top-up charges a test card with a live key');
+  assert.equal(f.repositories.payment('cs_test_open').state, 'expired', 'the hourly check stops asking live Stripe about a test checkout');
+  assert.equal(f.repositories.balance(99), 10, 'credit is left for an operator to decide');
+
+  await billing.checkout(99, 'owner', 2500, 7);
+  assert.deepEqual(live.calls.map(call => call.path), ['/customers', '/checkout/sessions']);
+  assert.equal(live.calls[1].params.customer, 'cus_live1');
+  new Billing(new Stripe('sk_live_fake', liveStripe), f.repositories, origin);
+  assert.equal(f.repositories.billing(99).customer, 'cus_live1', 'restarting with a live key keeps live customers');
+
+  new Billing(new Stripe('sk_test_fake', fakeStripe({})), f.repositories, origin);
+  assert.equal(f.repositories.billing(99), null, 'going back to test forgets live customers too');
+});
+
+test('a Stripe key that is neither a test nor a live key is refused without echoing it', () => {
+  for (const key of ['pk_live_secretvalue', 'sk_secretvalue', '']) {
+    assert.throws(() => new Stripe(key), error => error.message === 'Unrecognized Stripe key');
+  }
+  assert.equal(new Stripe('rk_live_x').mode, 'live');
+  assert.equal(new Stripe('sk_test_x').mode, 'test');
+});
+
 test('operators add or take credit with a note, within bounds', t => {
   const f = setup(t);
   for (const [usd, note] of [[0, 'x'], [NaN, 'x'], [1000.01, 'x'], [-1000.01, 'x'], ['5', 'x'], [5, ''], [5, ' '], [5, 'x'.repeat(201)], [5, undefined]]) {
