@@ -224,10 +224,11 @@ test('a target branch cannot walk out of the ref endpoint', () => {
   assert.equal(refPath('feature/a b?c'), 'feature/a%20b%3Fc');
 });
 
-test('head movement, target movement, retargeting and closed PR all supersede', t => {
+test('head movement, retargeting and closed PR supersede; the target branch moving on does not', t => {
   const f = repository(t);
   assert.equal(compareCurrent(f.packet, f.state).status, 'current');
-  for (const change of [{ headSha: 'a'.repeat(40) }, { baseSha: 'a'.repeat(40) }, { baseRef: 'different' }, { state: 'closed' }, { pr: 2 }]) {
+  assert.equal(compareCurrent(f.packet, { ...f.state, baseSha: 'a'.repeat(40) }).status, 'current');
+  for (const change of [{ headSha: 'a'.repeat(40) }, { baseRef: 'different' }, { state: 'closed' }, { pr: 2 }]) {
     assert.equal(compareCurrent(f.packet, { ...f.state, ...change }).status, 'superseded');
   }
 });

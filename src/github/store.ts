@@ -191,8 +191,6 @@ export class Store {
       .map(row => row.head).filter((head): head is string => typeof head === 'string');
   }
   comment(pr: number): number | null { return this.db.prepare('SELECT comment FROM pulls WHERE pr=?').get(pr)?.comment as number | null ?? null; }
-  track(pr: number, baseRef: string, active: boolean): void { this.db.prepare('UPDATE pulls SET baseRef=?,active=? WHERE pr=?').run(baseRef, Number(active), pr); }
-  branchPulls(baseRef: string): number[] { return this.db.prepare('SELECT pr FROM pulls WHERE baseRef=? AND active=1').all(baseRef).map(row => Number(row.pr)); }
   setComment(pr: number, id: number): void { this.db.prepare('UPDATE pulls SET comment=? WHERE pr=?').run(id, pr); }
   uncertainCreate(pr: number): boolean { return Boolean(this.db.prepare('SELECT 1 FROM jobs WHERE pr=? AND createStarted=1').get(pr)); }
   creationConfirmed(pr: number, comment: number): void {

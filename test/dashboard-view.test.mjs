@@ -18,10 +18,12 @@ function setup(t, priority) {
   return { ...f, result, artifact, store, id, config, live };
 }
 
-test('dashboard derives verdicts from evidence; stale head, target, closed or unknown PR cannot appear clean', t => {
+test('dashboard derives verdicts from evidence; stale head, retargeted, closed or unknown PR cannot appear clean', t => {
   const f = setup(t);
   assert.equal(pullViews(f.config, f.store, [f.live])[0].run.verdict, 'No issues found');
-  for (const change of [{ headSha: 'a'.repeat(40) }, { baseSha: 'b'.repeat(40) }, { baseRef: 'release' }, { state: 'closed' }]) {
+  // The target branch moving on does not change what the PR changes.
+  assert.equal(pullViews(f.config, f.store, [{ ...f.live, baseSha: 'b'.repeat(40) }])[0].run.verdict, 'No issues found');
+  for (const change of [{ headSha: 'a'.repeat(40) }, { baseRef: 'release' }, { state: 'closed' }]) {
     assert.equal(pullViews(f.config, f.store, [{ ...f.live, ...change }])[0].run.verdict, 'Superseded');
   }
   assert.equal(pullViews(f.config, f.store, [])[0].run.verdict, 'Unverified');

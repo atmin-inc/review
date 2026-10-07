@@ -110,10 +110,10 @@ export function readPull(repository: string, pr: number, request: Request = api)
 }
 export function compareCurrent(packet: Packet, current: PullState): Freshness {
   const same = current.state === 'open' && current.repository.toLowerCase() === packet.repository.toLowerCase()
-    && current.pr === packet.pr && current.headSha === packet.headSha && current.baseSha === packet.baseSha && current.baseRef === packet.baseRef;
+    && current.pr === packet.pr && current.headSha === packet.headSha && current.baseRef === packet.baseRef;
   return { status: same ? 'current' : 'superseded', checkedAt: new Date().toISOString(),
-    reason: same ? 'Head and current target matched at the recorded check time; later pushes invalidate this result.'
-      : 'The PR closed, was retargeted, or its head/current target changed. This report applies only to the captured snapshot.' };
+    reason: same ? 'Head and target branch matched at the recorded check time; later pushes to the PR invalidate this result.'
+      : 'The PR closed, was retargeted, or its head changed. This report applies only to the captured snapshot.' };
 }
 export function checkCurrent(packet: Packet): Freshness {
   try { return compareCurrent(packet, readPull(packet.repository, packet.pr)); }
