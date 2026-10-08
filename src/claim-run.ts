@@ -69,6 +69,7 @@ export const partsWithin = (maxUsd: number) => Math.max(1, Math.floor(maxUsd / P
 const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
 export interface DiffPart { diff: Buffer; paths: string[] }
 export function splitDiff(repository: string, from: string, to: string, paths: string[], maxParts: number): { parts: DiffPart[]; unread: string[] } {
+  if (!Number.isSafeInteger(maxParts) || maxParts < 1) throw new Error('A review needs at least one part');
   const diff = reviewDiff(repository, from, to, paths);
   if (diff.length <= MAX_DIFF_BYTES) return { parts: diff.length ? [{ diff, paths: paths.filter(path => !lockFile(path)) }] : [], unread: [] };
   const names = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', '--name-only', '-z', from, to, '--',
