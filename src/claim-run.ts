@@ -196,7 +196,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const { diff, unread } = incremental ? fitDiff(repository, incremental.since, packet.headSha, incremental.changed)
     : fitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
   if (unread.length && !diff.length) throw new Error('Diff exceeds 512 KB investigation limit');
-  const part = unread.length ? ` This diff holds only part of the change: it is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so ${unread.length} changed ${unread.length === 1 ? 'file is' : 'files are'} left out of it and reported as not reviewed.` : '';
+  const part = unread.length ? ` This diff holds only part of the change: it is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so ${unread.length} changed ${unread.length === 1 ? 'file is' : 'files are'} left out of it and reported as not reviewed. They are not yours to review: judge complete by the changes in this diff alone.` : '';
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
   const { guidance, omitted } = targetGuidance(repository, packet);
