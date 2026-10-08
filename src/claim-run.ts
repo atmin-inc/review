@@ -54,14 +54,19 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
 // gets its own investigation, and the claims of every part are verified together. Files are packed
 // in git's path order, so a folder's files share a part. Each file's diff starts at git's
 // "diff --git" line, which no line of content can begin with, and is matched to its path through
-// git's own path list. Past MAX_PARTS parts, or for one file whose diff alone is over the limit,
-// files are left out and listed as not reviewed. Which files are read then is the order Lors chose
+// git's own path list. A review splits into at most as many parts as its budget (the profile's
+// maxUsd, $2 by default) covers at PART_USD each, the parts sharing that one budget (Lors: "we
+// already have a cap of $2 per PR no? big prs should be well below that"). Past those parts, or for
+// one file whose diff alone is over the limit, files are left out and listed as not reviewed. Which files are read then is the order Lors chose
 // for reading in part, as Mira does: deleted files first, each only a header (on mason-v1#4832, 503
 // of them took 90 KB), then source files before tests, docs and generated files, and within each
 // the smallest first, so as many files as fit are read whole.
-export const MAX_PARTS = 4;
+// One full 512 KB part cost $0.15 on mason-v1#4832 (Bedrock, 67 turns, 2026-10-08), the dearest
+// measured; the same part cost $0.08 to $0.11 on OpenRouter.
+export const PART_USD = 0.15;
+export const partsWithin = (maxUsd: number) => Math.max(1, Math.floor(maxUsd / PART_USD + 1e-9));
 const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
-export function splitDiff(repository: string, from: string, to: string, paths: string[]): { parts: Buffer[]; unread: string[] } {
+export function splitDiff(repository: string, from: string, to: string, paths: string[], maxParts: number): { parts: Buffer[]; unread: string[] } {
   const diff = reviewDiff(repository, from, to, paths);
   if (diff.length <= MAX_DIFF_BYTES) return { parts: diff.length ? [diff] : [], unread: [] };
   const names = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', '--name-only', '-z', from, to, '--',
@@ -80,10 +85,10 @@ export function splitDiff(repository: string, from: string, to: string, paths: s
   const chosen: typeof files = [];
   let size = 0;
   for (const file of [...files].sort((a, b) => rank(a) - rank(b) || a.bytes.length - b.bytes.length || a.index - b.index)) {
-    if (file.bytes.length <= MAX_DIFF_BYTES && size + file.bytes.length <= MAX_PARTS * MAX_DIFF_BYTES) { chosen.push(file); size += file.bytes.length; }
+    if (file.bytes.length <= MAX_DIFF_BYTES && size + file.bytes.length <= maxParts * MAX_DIFF_BYTES) { chosen.push(file); size += file.bytes.length; }
   }
   // Packing in path order can leave room unused at the end of a part, so while the chosen files
-  // need more than MAX_PARTS parts, the last one chosen is left out.
+  // need more than maxParts parts, the last one chosen is left out.
   for (;;) {
     const bins: Buffer[][] = [];
     let room = 0;
@@ -91,7 +96,7 @@ export function splitDiff(repository: string, from: string, to: string, paths: s
       if (!bins.length || file.bytes.length > room) { bins.push([]); room = MAX_DIFF_BYTES; }
       bins.at(-1)!.push(file.bytes); room -= file.bytes.length;
     }
-    if (bins.length <= MAX_PARTS) {
+    if (bins.length <= maxParts) {
       const read = new Set(chosen.map(file => file.index));
       return { parts: bins.map(bin => Buffer.concat(bin)), unread: files.filter(file => !read.has(file.index)).map(file => file.path) };
     }
@@ -251,8 +256,8 @@ export async function runClaimReview(directory: string, profile: Profile,
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
   const full = readFileSync(join(directory, 'change.diff'));
-  const { parts, unread } = incremental ? splitDiff(repository, incremental.since, packet.headSha, incremental.changed)
-    : splitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
+  const { parts, unread } = incremental ? splitDiff(repository, incremental.since, packet.headSha, incremental.changed, partsWithin(profile.maxUsd))
+    : splitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path), partsWithin(profile.maxUsd));
   if (unread.length && !parts.length) throw new Error('Diff exceeds 512 KB investigation limit');
   // Each investigation is told what it holds and that only its own diff decides whether it is
   // complete: told only that files were left out, the model ended every such review unfinished,

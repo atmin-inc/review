@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
 import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
 import { capture, loadReview } from '../dist/snapshot.js';
-import { MAX_DIFF_BYTES, MAX_PARTS, splitDiff, reviewDiff } from '../dist/claim-run.js';
+import { MAX_DIFF_BYTES, PART_USD, partsWithin, splitDiff, reviewDiff } from '../dist/claim-run.js';
 import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
 import { renderMarkdown } from '../dist/render.js';
@@ -267,7 +267,7 @@ test('a deleted file is read as its deletion and a lock file is left out, so nei
 const rows = bytes => `export const rows = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(Math.ceil(bytes / 40))}];\n`;
 const filesOf = diff => [...diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map(match => match[1]);
 function partsWatcher() {
-  const inner = model(Array.from({ length: MAX_PARTS }, () => done())); const main = [];
+  const inner = model(Array.from({ length: partsWithin(profile.maxUsd) }, () => done())); const main = [];
   return { main, model: { ...inner, async respond(input, ...rest) {
     if (!input.instructions.includes(failurePathInstruction)) main.push(JSON.parse(input.context));
     return inner.respond(input, ...rest);
@@ -306,11 +306,13 @@ test('a diff over the limit is reviewed in parts, in path order, and every file 
   assert.equal(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).parts, 3);
 });
 
-// Past MAX_PARTS parts, or for a file whose own diff is over 512 KB, files are left out in the order
-// Lors chose for reading in part: deletions first, then source before tests and docs, smallest
-// first. Here five 400 KB source files cannot share parts, so the fifth is left out, as are the
-// doc (no room left) and a 585 KB file (fits no part).
-test('past four parts the lowest-ranked files are left out and listed as not reviewed', async t => {
+// A review splits into as many parts as its budget covers at PART_USD each, the parts sharing the
+// one budget, so a big PR never costs more than any review may. Past those parts, or for a file
+// whose own diff is over 512 KB, files are left out in the order Lors chose for reading in part:
+// deletions first, then source before tests and docs, smallest first. Here a budget of four parts
+// meets five 400 KB source files that cannot share parts, so the fifth is left out, as are the doc
+// (no room left) and a 585 KB file (fits no part).
+test('past the parts its budget covers the lowest-ranked files are left out and listed as not reviewed', async t => {
   withoutJev(t);
   const fixture = repository(t);
   fixture.write('test/old.test.ts', 'export const old = 1;\n');
@@ -322,8 +324,10 @@ test('past four parts the lowest-ranked files are left out and listed as not rev
   const headSha = fixture.commit('very large change');
   const directory = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, baseSha, headSha }) });
   const { main, model: watched } = partsWatcher();
-  await runClaimReviewAsResult(directory, { ...profile, maxInputTokens: 1000000 }, undefined, watched);
-  assert.equal(main.length, MAX_PARTS);
+  const budget = 4 * PART_USD;
+  assert.equal(partsWithin(budget), 4); assert.equal(partsWithin(profile.maxUsd), 13); assert.equal(partsWithin(0), 1);
+  await runClaimReviewAsResult(directory, { ...profile, maxUsd: budget, maxInputTokens: 1000000 }, undefined, watched);
+  assert.equal(main.length, 4);
   assert.deepEqual(main.map(context => filesOf(context.diff)), [['src/a.ts'], ['src/b.ts'], ['src/c.ts'], ['src/d.ts', 'test/old.test.ts']]);
   for (const context of main) assert.match(context.scope, /3 changed files are left out of every part and reported as not reviewed/);
   const { packet, result } = loadReview(directory);
@@ -355,10 +359,10 @@ test('a diff read in part reads every deletion first', t => {
   fixture.run('add', '-A'); fixture.run('commit', '-q', '--amend', '--no-edit');
   headSha = fixture.run('rev-parse', 'HEAD');
   for (const name of names) assert.equal(size(name), target(name));
-  const { parts, unread } = splitDiff(fixture.source, baseSha, headSha, [...names, 'test/old.test.ts']);
+  const { parts, unread } = splitDiff(fixture.source, baseSha, headSha, [...names, 'test/old.test.ts'], 4);
   // Read smallest first after the deletion, d and then a and b fit; c does not.
   assert.deepEqual(unread, ['src/c.ts']);
-  assert.equal(parts.length, MAX_PARTS);
+  assert.equal(parts.length, 4);
   assert.match(parts.at(-1).toString('utf8'), /^diff --git a\/test\/old\.test\.ts b\/test\/old\.test\.ts\ndeleted file mode/);
 });
 
