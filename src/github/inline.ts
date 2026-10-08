@@ -4,7 +4,7 @@ import { renderFinding } from '../render.js';
 import { validateFix } from '../assessment.js';
 import type { GitHub, InlineComment, PullFile } from './api.js';
 import type { Job, Store } from './store.js';
-import { findingMarker } from './outcomes.js';
+import { findingKey, findingMarker } from './outcomes.js';
 
 // GitHub's per-file patch avoids parsing quoted Git paths or guessing rename mappings.
 function diffLines(patch: string) {
@@ -77,7 +77,14 @@ export class InlineReviews {
     if (id === null) {
       // Persist intent before POST. A lost response cannot cause a duplicate batch.
       if (row) throw new Error('Inline review creation uncertain; reconcile explicitly');
-      const comments = inlineComments(packet, findings, await this.github.files(job.pr), verification);
+      // A finding already on the PR from an earlier review (same path and title, on any head)
+      // is not posted again: it stays in the summary. Only bot comments count, so a person
+      // cannot hide a finding by pasting its marker. mason-v1#4787 got one finding five times
+      // on one commit when the PR was re-reviewed; CodeRabbit posted no repeats over two days.
+      const posted = new Set((await this.github.reviewComments(job.pr))
+        .flatMap(comment => comment.human ? [] : /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(comment.body)?.[1] ?? []));
+      const comments = inlineComments(packet, findings.filter(finding => !posted.has(findingKey(finding))),
+        await this.github.files(job.pr), verification);
       if (!comments.length || !await current()) return;
       this.store.db.prepare('INSERT INTO inline_reviews(job,head) VALUES(?,?)').run(job.id, packet.headSha);
       id = await this.github.createReview(job.pr, packet.headSha,

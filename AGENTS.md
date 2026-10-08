@@ -1023,3 +1023,9 @@ nothing (0 of 6,420 repeated tokens). 77% of the target repository's recent merg
 error handling, so the skip saves on about a quarter of PRs. Rung 3 is now also shown
 another file's declaration when it is the symbol's only one (a later commit); on a fresh
 sample of 56 labelled claims harmful shipped held at 33 of 40 and acceptable went 6 to 8 of 16.
+
+Inline findings are posted once per PR (2026-10-08). Before posting, the worker lists the
+PR's review comments and skips any finding whose `atmin-finding` marker a bot comment already
+carries (same path and title, any head); the summary still lists it. Over two days of Mason
+PRs atmin posted 27 repeat comments of 99 (one finding five times on one commit, mason-v1#4787),
+Mira 10 of 75, CodeRabbit none. A reworded title on a later head is not caught.

@@ -18,7 +18,7 @@ import { AppGitHub, GitHubError, appJwt } from '../dist/github/api.js';
 import { ReviewSettings } from '../dist/github/settings.js';
 import { childEnvironment, childSandbox, hostedReview, expireRuns, expireIdleCopies, trimSourceCache, REPOSITORY_IDLE_MS } from '../dist/github/runner.js';
 import { inlineComments } from '../dist/github/inline.js';
-import { outcomeSummary } from '../dist/github/outcomes.js';
+import { outcomeSummary, findingKey } from '../dist/github/outcomes.js';
 import { repository, completed, finding, current, inline } from './helpers.mjs';
 
 const secret = 'a local test secret with more than 32 bytes';
@@ -789,6 +789,30 @@ test('inline publication is commit-bound, hides optional findings and survives C
   h.store.refreshValidation('ci-finished', h.live.headSha); await h.worker.tick();
   assert.equal(h.reviews.length, 1); assert.equal(h.counts.runs, 1);
 });
+// mason-v1#4787 (2026-10-07): each re-review of the PR posted the same finding again, five
+// inline comments on one line. The author reads one; the rest are noise that buries new ones.
+test('a finding already posted inline on the PR is not posted again by a later review, on any head', async t => {
+  const findings = [finding()];
+  const h = await harness(t, findings);
+  h.store.enqueue('first', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 1); assert.equal(h.reviews[0].comments.length, 1);
+  h.store.enqueue('rerun', 1); await h.worker.tick();
+  assert.equal(h.counts.runs, 2); assert.equal(h.reviews.length, 1);
+  h.setLive({ headSha: 'a'.repeat(40) });
+  findings.push({ ...finding(), id: 'second', title: 'A second, different defect' });
+  h.store.enqueue('push', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 2);
+  assert.deepEqual(h.reviews[1].comments.map(c => /A second, different defect/.test(c.body)), [true]);
+  // A person pasting a finding's marker does not hide that finding.
+  const third = { ...finding(), id: 'third', title: 'A third defect' }, listed = h.github.reviewComments;
+  h.github.reviewComments = async pr => [...await listed(pr),
+    { id: 1, reviewId: null, replyTo: null, human: true, body: `<!-- atmin-finding:${findingKey(third)} -->`, up: 0, down: 0 }];
+  h.setLive({ headSha: 'b'.repeat(40) }); findings.push(third);
+  h.store.enqueue('pasted', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 3);
+  assert.deepEqual(h.reviews[2].comments.map(c => /A third defect/.test(c.body)), [true]);
+});
+
 test('native fixes use exact head ranges, preserve code and suppress unsafe or conflicting suggestions', t => {
   const f = repository(t);
   const fix = { startLine: 2, endLine: 3, original: 'new\nlast', replacement: 'guard();\nnew\nlast' };
