@@ -283,6 +283,9 @@ test('a diff still over the limit is read in part: source before tests and docs,
   for (const path of ['src/big.ts', 'src/mid.ts', 'src/small.ts', 'test/small.test.ts', 'update.ts']) assert.ok(diff.includes(`diff --git a/${path} b/${path}`), path);
   assert.ok(!diff.includes('src/huge.ts') && !diff.includes('docs/guide.md'));
   assert.match(scope, /only part of the change.* 2 changed files are left out/);
+  // Without this, the model calls any partial diff unfinished, and an unfinished review claims no
+  // file at all: on mason-v1#4832 both reading orders finished in 28 turns and reported 0/780.
+  assert.match(scope, /judge complete by the changes in this diff alone/);
   const { packet, result } = loadReview(directory);
   assert.deepEqual(result.coverage.filter(c => c.status !== 'reviewed').map(c => c.path), ['docs/guide.md', 'src/huge.ts']);
   assert.ok(result.limitations.some(item => item.startsWith('The diff is over the 512 KB a review reads, so 2 changed file(s) were not read')));
