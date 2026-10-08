@@ -129,10 +129,11 @@ repository's settings can turn automatic reviews off: then opening, pushing to o
 starts nothing, and only that comment starts a review. Reviews are bounded by
 `maxReviewsPerDay`. The review reads a deleted file as its deletion (its old content stays readable
 through the source tools) and leaves lock files out; they are listed as not reviewed and, like
-binary files, do not hold the rating open. A diff still over 512 KB is reviewed in up to four parts
-of 512 KB, files kept in path order, each part investigated side by side and all findings verified
-together; every file is reviewed, and each part's cost comes out of the one review's budget. Past
-four parts, or for a file whose own diff is over 512 KB, files are left out: deleted files are read
+binary files, do not hold the rating open. A diff still over 512 KB is reviewed in parts of 512 KB,
+files kept in path order, each part investigated side by side and all findings verified together, so
+every file is reviewed. The parts share the review's one budget (`maxUsd`, $2 by default), which
+covers one part per $0.15, the dearest part measured: 13 parts at $2. Past the parts the budget
+covers, or for a file whose own diff is over 512 KB, files are left out: deleted files are read
 first, then source files before tests, docs and generated files, smallest first, until the parts are
 full. The rest are listed as not reviewed, the review is incomplete, and a later push gets a full
 review rather than one built on it. When no file's part of the diff fits on its own, the PR gets a "review not run"
