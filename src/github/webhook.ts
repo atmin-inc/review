@@ -4,6 +4,7 @@ import type { PilotConfig } from './config.js';
 import type { GitHub } from './api.js';
 import type { Store } from './store.js';
 import type { Repository } from './repositories.js';
+import type { ReviewSettings } from './settings.js';
 
 export function validSignature(body: Buffer, header: string | undefined, secret: string): boolean {
   if (!header || !/^sha256=[a-f0-9]{64}$/.test(header)) return false;
@@ -42,7 +43,11 @@ export function webhookServer(secret: string, dispatch: (event: string | string[
   });
 }
 
-export async function repositoryEvent(config: PilotConfig, store: Store, github: GitHub, event: string | string[] | undefined, delivery: string, payload: any): Promise<[number, string]> {
+// A maintainer's comment that asks for a full review. `@atmin review` is accepted because people
+// address a bot by mention; it does not need to resolve to a GitHub account.
+const commands = ['/atmin review', '@atmin review'];
+
+export async function repositoryEvent(config: PilotConfig, store: Store, github: GitHub, event: string | string[] | undefined, delivery: string, payload: any, settings?: Pick<ReviewSettings, 'current'>): Promise<[number, string]> {
   if (payload.installation?.id !== config.installationId) { return [202, 'ignored installation']; }
   if ((event === 'installation' && ['deleted', 'suspend'].includes(payload.action)) || (event === 'installation_repositories' && payload.repositories_removed?.some((repo: any) => repo.id === config.repositoryId))) {
     store.enable(false); return [202, 'paused'];
@@ -63,9 +68,15 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
   // re-reviewing every open PR on each one billed mason for unchanged code several times a day.
   if (event === 'push') return [202, 'target branch push ignored'];
   let pr: number | undefined;
-  if (event === 'pull_request' && ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft', 'closed'].includes(payload.action)) pr = payload.number;
-  if (event === 'pull_request' && payload.action === 'edited' && payload.changes?.base) pr = payload.number;
-  if (event === 'issue_comment' && payload.action === 'created' && payload.issue?.pull_request && payload.comment?.body?.trim() === '/atmin review') {
+  const starts = event === 'pull_request' && (['opened', 'reopened', 'synchronize', 'ready_for_review'].includes(payload.action)
+    || (payload.action === 'edited' && payload.changes?.base));
+  if (starts && settings && !settings.current().automatic) {
+    // Drafting and closing still reach the worker, which retires the summary and records outcomes.
+    process.stderr.write(`atmin review: ${payload.action} on ${config.repository}#${String(payload.number)} started no review: automatic reviews are off\n`);
+    return [202, 'automatic reviews off'];
+  }
+  if (starts || (event === 'pull_request' && ['converted_to_draft', 'closed'].includes(payload.action))) pr = payload.number;
+  if (event === 'issue_comment' && payload.action === 'created' && payload.issue?.pull_request && commands.includes(payload.comment?.body?.trim())) {
     if (payload.comment.user?.type !== 'User' || payload.sender?.id !== payload.comment.user?.id) { return [202, 'ignored actor']; }
     // GitHub expects a prompt acknowledgement. On timeout, accept nothing and allow redelivery.
     let timer: NodeJS.Timeout | undefined;
@@ -77,7 +88,7 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     } finally { clearTimeout(timer); }
     if (!allowed) { return [202, 'insufficient permission']; }
     if (store.fullReviewActive(payload.issue.number)) {
-      process.stderr.write(`atmin review: /atmin review on ${config.repository}#${payload.issue.number} ignored: a full review of it is already running\n`);
+      process.stderr.write(`atmin review: ${payload.comment.body.trim()} on ${config.repository}#${payload.issue.number} ignored: a full review of it is already running\n`);
       return [202, 'full review already running'];
     }
     pr = payload.issue.number;
@@ -90,9 +101,9 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
 export async function dispatchRepositories(entries: Map<number, Repository>, github: (entry: Repository) => GitHub, event: string | string[] | undefined, delivery: string, payload: any): Promise<[number, string]> {
   const matching = [...entries.values()].filter(entry => entry.config.installationId === payload.installation?.id);
   if (event === 'installation' || event === 'installation_repositories') {
-    for (const entry of matching) await repositoryEvent(entry.config, entry.store, github(entry), event, delivery, payload);
+    for (const entry of matching) await repositoryEvent(entry.config, entry.store, github(entry), event, delivery, payload, entry.settings);
     return [202, 'installation reconciled'];
   }
   const entry = matching.find(entry => entry.config.repositoryId === payload.repository?.id);
-  return entry ? repositoryEvent(entry.config, entry.store, github(entry), event, delivery, payload) : [202, 'repository not connected'];
+  return entry ? repositoryEvent(entry.config, entry.store, github(entry), event, delivery, payload, entry.settings) : [202, 'repository not connected'];
 }

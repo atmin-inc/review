@@ -28,7 +28,7 @@ test('repositories retain separate jobs/settings after restart and share a durab
     assert.ok(f.directory.reserve(entry, job, 'worker', 2));
     entry.store.update(job.id, { state: 'failed' });
   }
-  f.second.settings.save({ model: 'free', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false });
+  f.second.settings.save({ model: 'free', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true });
   f.second.store.enqueue('third', 2);
   assert.match(f.directory.reserve(f.second, f.second.store.next('worker'), 'worker', 2), /rolling 24-hour review limit/);
   assert.equal(f.first.store.db.prepare('SELECT count(*) AS n FROM jobs').get().n, 1);
@@ -80,6 +80,43 @@ test('signed webhooks dispatch by installation and repository, and removal only 
   assert.equal(f.first.store.enabled(), true); assert.equal(f.third.store.enabled(), false);
   await send('installation', { installation: { id: 99 }, action: 'suspend' });
   assert.equal(f.first.store.enabled(), false);
+});
+
+// Lors (2026-10-08): mason wants reviews only when someone asks, so pushes stop spending its
+// reviews. With the switch off, no PR event starts a review, a maintainer's comment still does,
+// and closing still reaches the worker so finding outcomes are recorded. Other repositories keep
+// reviewing on every push, and settings saved before the switch existed read as on.
+test('with automatic reviews off, only a /atmin review or @atmin review comment starts a review', async t => {
+  const f = setup(t), secret = 'test-webhook-secret';
+  const server = webhookServer(secret, (event, delivery, payload) => dispatchRepositories(f.directory.entries, () => ({ canReview: async () => true }), event, delivery, payload));
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(async () => { server.closeAllConnections(); await new Promise(done => server.close(done)); });
+  let delivery = 0;
+  const send = async (event, body, repository = { id: 43, full_name: 'owner/second' }) => {
+    const payload = JSON.stringify({ installation: { id: 99 }, repository, ...body });
+    return (await fetch(`http://127.0.0.1:${server.address().port}/webhooks/github`, { method: 'POST', headers: {
+      'x-github-event': event, 'x-github-delivery': `delivery-${++delivery}`, 'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(payload).digest('hex')}`,
+    }, body: payload })).text();
+  };
+  const jobs = entry => entry.store.db.prepare('SELECT pr, trigger FROM jobs ORDER BY created, rowid').all().map(job => ({ ...job }));
+  f.first.store.enable(true); f.second.store.enable(true);
+  assert.equal(f.second.settings.current().automatic, true);
+  f.second.settings.save({ ...f.second.settings.current(), automatic: false });
+  for (const action of ['opened', 'reopened', 'synchronize', 'ready_for_review']) assert.equal(await send('pull_request', { action, number: 1 }), 'automatic reviews off\n');
+  assert.equal(await send('pull_request', { action: 'edited', number: 1, changes: { base: { ref: { from: 'old' } } } }), 'automatic reviews off\n');
+  assert.deepEqual(jobs(f.second), []);
+  const comment = (body, number) => ({ action: 'created', issue: { number, pull_request: {} }, sender: { id: 9 }, comment: { body, user: { id: 9, login: 'maintainer', type: 'User' } } });
+  assert.equal(await send('issue_comment', comment('@atmin review', 1)), 'queued\n');
+  assert.equal(await send('issue_comment', comment(' /atmin review ', 2)), 'queued\n');
+  assert.equal(await send('issue_comment', comment('@atmin please review', 3)), 'ignored event\n');
+  assert.equal(await send('pull_request', { action: 'closed', number: 2 }), 'queued\n');
+  assert.deepEqual(jobs(f.second), [{ pr: 1, trigger: 'command' }, { pr: 2, trigger: 'command' }, { pr: 2, trigger: 'event' }]);
+  // The switch belongs to one repository.
+  assert.equal(await send('pull_request', { action: 'opened', number: 1 }, { id: 42, full_name: 'owner/first' }), 'queued\n');
+  assert.deepEqual(jobs(f.first), [{ pr: 1, trigger: 'event' }]);
+  f.second.store.db.prepare('UPDATE review_settings SET value=?').run(JSON.stringify({ model: 'free', maxUsd: 0, maxReviewsPerDay: 2, maxReviewsPerAuthor: null, selfRun: false }));
+  assert.equal(await send('pull_request', { action: 'synchronize', number: 1 }), 'queued\n');
+  assert.throws(() => f.second.settings.validate({ ...f.second.settings.current(), automatic: 'no' }));
 });
 
 test('each installation is held to its monthly plan; other installations keep reviewing', t => {

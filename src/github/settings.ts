@@ -9,7 +9,9 @@ export interface ModelChoice { id: string; label: string; profile: Profile; }
 // maxReviewsPerAuthor caps the reviews of one PR author's PRs in this repository per UTC month;
 // null is no limit. Lors asked (2026-09-24) that customers can cap spend per person.
 // selfRun lets a PR author's own runner review their PRs, with their own CLI subscription.
-export interface ReviewPreferences { model: string; maxUsd: number; maxReviewsPerDay: number; maxReviewsPerAuthor: number | null; selfRun: boolean; }
+// automatic: whether opening, reopening, pushing to or readying a PR starts a review. When off,
+// only a maintainer's `/atmin review` or `@atmin review` comment does (Lors, 2026-10-08, for mason).
+export interface ReviewPreferences { model: string; maxUsd: number; maxReviewsPerDay: number; maxReviewsPerAuthor: number | null; selfRun: boolean; automatic: boolean; }
 // operators: GitHub user IDs (immutable, unlike logins) who may connect repositories from any
 // installation they can see. Everyone else sees only installations an operator already approved.
 export interface DashboardConfig { origin: string; clientId: string; clientSecret: string; models: ModelChoice[]; operators: number[]; appSlug?: string; }
@@ -51,21 +53,23 @@ export class ReviewSettings {
     const initial = readProfile(this.config.profile);
     // Settings saved before per-author limits have no such key; they had no limit.
     // Settings saved before self-run have no such key; it was off.
-    return this.validate(saved ? { maxReviewsPerAuthor: null, selfRun: false, ...JSON.parse(String(saved.value)) } : {
+    // Settings saved before the automatic switch have no such key; every PR event started a review.
+    return this.validate(saved ? { maxReviewsPerAuthor: null, selfRun: false, automatic: true, ...JSON.parse(String(saved.value)) } : {
       model: this.models.find(m => sameProfile(m.profile, initial))!.id,
-      maxUsd: initial.maxUsd, maxReviewsPerDay: this.config.maxReviewsPerDay, maxReviewsPerAuthor: null, selfRun: false,
+      maxUsd: initial.maxUsd, maxReviewsPerDay: this.config.maxReviewsPerDay, maxReviewsPerAuthor: null, selfRun: false, automatic: true,
     });
   }
   validate(value: unknown): ReviewPreferences {
     const p = value as ReviewPreferences;
     const choice = this.models.find(m => m.id === p?.model);
-    if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).length !== 5
-      || Object.keys(p).some(k => !['model', 'maxUsd', 'maxReviewsPerDay', 'maxReviewsPerAuthor', 'selfRun'].includes(k)) || !choice || typeof p.selfRun !== 'boolean'
+    if (!p || typeof p !== 'object' || Array.isArray(p) || Object.keys(p).length !== 6
+      || Object.keys(p).some(k => !['model', 'maxUsd', 'maxReviewsPerDay', 'maxReviewsPerAuthor', 'selfRun', 'automatic'].includes(k)) || !choice
+      || typeof p.selfRun !== 'boolean' || typeof p.automatic !== 'boolean'
       || (p.maxReviewsPerAuthor !== null && (!Number.isSafeInteger(p.maxReviewsPerAuthor) || p.maxReviewsPerAuthor < 1 || p.maxReviewsPerAuthor > 100_000))
       || !Number.isFinite(p.maxUsd) || p.maxUsd < 0 || p.maxUsd > choice.profile.maxUsd
       || !Number.isSafeInteger(p.maxReviewsPerDay) || p.maxReviewsPerDay < 1 || p.maxReviewsPerDay > this.config.maxReviewsPerDay) throw new Error('Settings exceed operator limits');
     parseProfile({ ...choice.profile, maxUsd: p.maxUsd });
-    return { model: p.model, maxUsd: p.maxUsd, maxReviewsPerDay: p.maxReviewsPerDay, maxReviewsPerAuthor: p.maxReviewsPerAuthor, selfRun: p.selfRun };
+    return { model: p.model, maxUsd: p.maxUsd, maxReviewsPerDay: p.maxReviewsPerDay, maxReviewsPerAuthor: p.maxReviewsPerAuthor, selfRun: p.selfRun, automatic: p.automatic };
   }
   save(value: unknown): ReviewPreferences {
     const p = this.validate(value);

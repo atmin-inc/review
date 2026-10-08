@@ -396,7 +396,9 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         }
         try { settings.validate(value); }
         catch { json(response, 400, { error: 'Choose an available model and stay within the displayed limits.' }); return true; }
-        json(response, 200, { settings: settings.save(value) });
+        const saved = settings.save(value);
+        process.stderr.write(`atmin review: review settings of repository ${config.repositoryId} set to ${JSON.stringify(saved)} by GitHub user ${session.user.id}\n`);
+        json(response, 200, { settings: saved });
         return true;
       }
       json(response, 404, { error: 'Not found.' });

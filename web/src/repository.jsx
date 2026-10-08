@@ -121,14 +121,14 @@ function SettingsForm({ id, data, onSaved }) {
   const [form, setForm] = useState(() => ({
     model: data.settings.model, maxUsd: String(data.settings.maxUsd), maxReviewsPerDay: String(data.settings.maxReviewsPerDay),
     maxReviewsPerAuthor: data.settings.maxReviewsPerAuthor === null ? '' : String(data.settings.maxReviewsPerAuthor),
-    selfRun: data.settings.selfRun === true,
+    selfRun: data.settings.selfRun === true, automatic: data.settings.automatic === true,
   }));
   const [status, setStatus] = useState({ pending: false, submitted: false, error: null, saved: false });
   const { errors, value } = validateSettings(form, data.models, data.limits);
   const shown = status.submitted ? errors : {};
   const model = data.models.find(m => m.id === form.model);
   const changed = value.model !== data.settings.model || value.maxUsd !== data.settings.maxUsd || value.maxReviewsPerDay !== data.settings.maxReviewsPerDay
-    || value.maxReviewsPerAuthor !== data.settings.maxReviewsPerAuthor || value.selfRun !== data.settings.selfRun;
+    || value.maxReviewsPerAuthor !== data.settings.maxReviewsPerAuthor || value.selfRun !== data.settings.selfRun || value.automatic !== data.settings.automatic;
   const edit = (key, next) => { setForm(current => ({ ...current, [key]: next })); setStatus(current => ({ ...current, saved: false, error: null })); };
 
   async function submit(event) {
@@ -157,6 +157,10 @@ function SettingsForm({ id, data, onSaved }) {
     </CardHeader>
     <CardContent>
       <form noValidate onSubmit={submit}>
+        <Field id={`${prefix}-automatic`} label="Automatic reviews"
+          help="Review each pull request when it is opened, pushed to or marked ready. When off, a review starts only when a maintainer comments /atmin review or @atmin review.">
+          <Switch {...describe('automatic')} checked={form.automatic} onCheckedChange={next => edit('automatic', next)}/>
+        </Field>
         <Field id={`${prefix}-model`} label="Model" error={shown.model}
           help={model ? <>Up to <Figure>{usd(model.maxUsd)}</Figure> per review with {model.label}.</> : 'Choose a model.'}>
           <DropdownMenu>

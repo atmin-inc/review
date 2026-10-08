@@ -969,7 +969,7 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true });
   const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'owner', settings);
   h.store.enqueue('first-dashboard-run', 1); await worker.tick();
   h.store.enqueue('second-dashboard-run', 1); await worker.tick();
@@ -986,7 +986,7 @@ test('a PR author past the per-author monthly limit gets the reason on the PR an
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: false });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: false, automatic: true });
   const worker = new Worker(h.config, h.store, h.github, inline(h.runner), 'owner', settings);
   const first = h.store.enqueue('alice-1', 1); await worker.tick();
   assert.equal(h.counts.runs, 1); assert.equal(h.store.get(first).author, 1);
@@ -1004,7 +1004,7 @@ test('a PR author past the per-author monthly limit gets the reason on the PR an
   h.setLive({ author: { id: 1, login: 'alice' } });
   h.store.enqueue('alice-3', 1); await worker.tick();
   assert.equal(h.counts.runs, 3);
-  for (const bad of [0, 1.5, 100_001, '2']) assert.throws(() => settings.validate({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: bad, selfRun: false }));
+  for (const bad of [0, 1.5, 100_001, '2']) assert.throws(() => settings.validate({ model: 'default', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: bad, selfRun: false, automatic: true }));
 });
 
 // Strangers' repositories share one disk. Below the configured free space no review starts,
@@ -1163,7 +1163,7 @@ test('a review delivered by the author\'s runner is published, marked, and never
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: true });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: 1, selfRun: true, automatic: true });
   const reserved = [];
   const self = selfRunFake(h, true);
   let hosted = 0; const run = h.runner;
@@ -1184,7 +1184,7 @@ test('a runner that does not deliver leaves an ordinary hosted review', async t 
   const h = await harness(t);
   h.config.profile = fileURLToPath(new URL('../profiles/smoke-openrouter-free.json', import.meta.url));
   const settings = new ReviewSettings(h.config, h.store);
-  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: null, selfRun: true });
+  settings.save({ model: 'default', maxUsd: 0, maxReviewsPerDay: 6, maxReviewsPerAuthor: null, selfRun: true, automatic: true });
   const reserved = [];
   const self = selfRunFake(h, false);
   const worker = new Worker(h.config, h.store, h.github, self.dispatcher, 'owner', settings, job => { reserved.push(job.id); return h.store.reserve(job, 'owner', 6); });

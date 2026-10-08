@@ -140,14 +140,14 @@ test('writes reject CSRF and invalid budgets; choices persist without mutating s
   const f = await setup(t), session = await f.login();
   assert.equal((await f.post('enabled', { enabled: true }, session, { Origin: 'https://evil.test' })).status, 403);
   assert.equal((await f.post('enabled', { enabled: true }, session, { 'Content-Type': 'text/plain' })).status, 403); assert.equal(f.store.enabled(), false);
-  for (const value of [null, [], { model: 'free', maxUsd: 1, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false }, { model: 'foreign', maxUsd: 1, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false },
-    { model: 'deepseek', maxUsd: 2.01, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false }, { model: 'deepseek', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false },
-    { model: 'deepseek', maxUsd: 1, maxReviewsPerDay: 13, maxReviewsPerAuthor: null, selfRun: false }, { model: 'free', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, repository: 'other/repo' }]) {
+  for (const value of [null, [], { model: 'free', maxUsd: 1, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true }, { model: 'foreign', maxUsd: 1, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true },
+    { model: 'deepseek', maxUsd: 2.01, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true }, { model: 'deepseek', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true },
+    { model: 'deepseek', maxUsd: 1, maxReviewsPerDay: 13, maxReviewsPerAuthor: null, selfRun: false, automatic: true }, { model: 'free', maxUsd: 0, maxReviewsPerDay: 1, maxReviewsPerAuthor: null, selfRun: false, automatic: true, repository: 'other/repo' }]) {
     assert.equal((await f.post('settings', value, session)).status, 400);
   }
   assert.equal((await f.post('settings', 'x'.repeat(4097), session)).status, 413);
   const captured = f.settings.profile();
-  assert.equal((await f.post('settings', { model: 'deepseek', maxUsd: .25, maxReviewsPerDay: 3, maxReviewsPerAuthor: null, selfRun: false }, session)).status, 200);
+  assert.equal((await f.post('settings', { model: 'deepseek', maxUsd: .25, maxReviewsPerDay: 3, maxReviewsPerAuthor: null, selfRun: false, automatic: true }, session)).status, 200);
   assert.equal(f.settings.profile().maxUsd, .25); assert.equal(captured.model, models[0].profile.model); assert.equal(captured.maxUsd, 0);
   assert.equal(new ReviewSettings(f.config, f.store, models).current().maxReviewsPerDay, 3);
   assert.equal((await f.post('enabled', { enabled: true }, session)).status, 200);
@@ -246,7 +246,7 @@ test('hosted connection uses GitHub identity, explicit repository scope, and ind
   assert.equal(second.store.enabled(), false); assert.deepEqual(second.config.trustedChecks, []);
   assert.equal((await f.post('enabled?repository=43', { enabled: true }, cookie)).status, 200);
   assert.equal(f.store.enabled(), false);
-  assert.equal((await f.post('settings?repository=43', { model: 'deepseek', maxUsd: .25, maxReviewsPerDay: 2, maxReviewsPerAuthor: null, selfRun: false }, cookie)).status, 200);
+  assert.equal((await f.post('settings?repository=43', { model: 'deepseek', maxUsd: .25, maxReviewsPerDay: 2, maxReviewsPerAuthor: null, selfRun: false, automatic: true }, cookie)).status, 200);
   assert.equal(second.settings.current().maxUsd, .25); assert.equal(f.settings.current().maxUsd, 0);
   const id = second.store.enqueue('same-delivery', 1);
   second.store.update(id, { state: 'failed', error: 'private failure' });
