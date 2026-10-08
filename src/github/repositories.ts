@@ -72,7 +72,8 @@ export function creditUsedUp(plan: Plan, now: number, url?: string): string {
   return `This organization ${used}has no review credit left. ${buy}${plan.freeReviews ? `; otherwise free reviews start again on ${new Date(end).toISOString().slice(0, 10)}` : ''}. No inference was started.`;
 }
 // Reviews this service ran: one on the author's own runner costs no inference and counts toward no plan.
-const startedSince = (store: Store, since: number) => Number(store.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>=? AND runner IS NULL').get(since)!.n);
+// Reviews started on this service's key; see Store.reserve for why the daily limits count no others.
+const startedSince = (store: Store, since: number) => Number(store.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>=? AND runner IS NULL AND modelKey IS NULL').get(since)!.n);
 
 // ponytail: any installation connects up to ten repositories itself; one scheduler serves them all.
 // Separate stores reuse the worker's existing isolation boundary without tenant SQL.
@@ -246,7 +247,8 @@ export class Repositories {
     };
     // On the organization's own model key its free reviews and credit do not apply, and its
     // monthly limit, which counts reviews on this service's key, applies only as the switch that
-    // turns its reviews off. The limits below, which protect this service, still do.
+    // turns its reviews off. Nor do the daily limits, which bound this service's model spend; the
+    // storage limit, which protects this service's disk, still does.
     const modelKey = this.keys?.provider(installation) ?? null;
     if ((modelKey === null || plan.monthlyReviews === 0) && used >= plan.monthlyReviews) return refuse(monthlyLimitReached(plan, now), `installation ${installation} used ${used} of ${plan.monthlyReviews} monthly reviews`);
     if (modelKey === null && used >= plan.freeReviews) {
@@ -255,7 +257,7 @@ export class Repositories {
       if (credit <= 0) return refuse(creditUsedUp(plan, now, this.billingUrl(installation)), `installation ${installation} used ${used} reviews, ${plan.freeReviews} free, with ${credit} USD of credit`);
     }
     const today = this.reviewsToday(now);
-    if (today >= this.config.maxReviewsPerDay) return refuse(dailyLimitReached, `service used ${today} of ${this.config.maxReviewsPerDay} daily reviews`);
+    if (modelKey === null && today >= this.config.maxReviewsPerDay) return refuse(dailyLimitReached, `service used ${today} of ${this.config.maxReviewsPerDay} daily reviews`);
     // Checked before each review, so one review can take an organization past its limit. Shared
     // copies go first: the next review fetches its own again. Reviews run one at a time, so no
     // other review is reading a copy while it is wiped.

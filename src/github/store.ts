@@ -141,8 +141,11 @@ export class Store {
   reserve(job: Job, owner: string, limit: number, modelKey: ModelKeyProvider | null = null): boolean {
     return this.transaction(() => {
       if (!this.current(job, owner)) return false;
-      const count = Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>? AND runner IS NULL').get(Date.now() - 86_400_000)!.n);
-      if (count >= limit) return false;
+      // The daily limit bounds this service's model spend, so it counts and holds only reviews on
+      // this service's key: one on an organization's own key, like one on an author's own runner,
+      // takes no part (Lors chose this on 2026-10-08).
+      const count = Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>? AND runner IS NULL AND modelKey IS NULL').get(Date.now() - 86_400_000)!.n);
+      if (modelKey === null && count >= limit) return false;
       this.db.prepare('UPDATE jobs SET started=?,modelKey=? WHERE id=?').run(Date.now(), modelKey, job.id);
       return true;
     });
