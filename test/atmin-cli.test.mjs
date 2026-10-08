@@ -37,12 +37,16 @@ test('an unknown or malformed command fails without running anything', t => {
 
 // The review runner finishes its review on the first stop signal; a service manager stopping
 // `atmin code-review-runner` must reach the runner, not just kill the wrapper.
+// If the signal is lost, the tool outlives atmin and holds this test's pipes open, which hung a
+// CI run until its time limit (2026-10-08); the tool is killed here, so a failure fails.
 test('a stop signal reaches the tool, and atmin waits for it to finish', async t => {
-  const env = bin(t, { 'atmin-slow': '#!/bin/sh\ntrap \'echo stopping; exit 7\' TERM\necho ready\nwhile true; do sleep 0.1; done\n' });
+  const env = bin(t, { 'atmin-slow': '#!/bin/sh\ntrap \'echo stopping; exit 7\' TERM\necho "ready $$"\nwhile true; do sleep 0.1; done\n' });
   const child = spawn(process.execPath, [atmin, 'slow'], { env });
   let out = '';
   child.stdout.on('data', chunk => { out += chunk; });
-  while (!out.includes('ready')) await once(child.stdout, 'data');
+  while (!/ready \d+\n/.test(out)) await once(child.stdout, 'data');
+  const tool = Number(/ready (\d+)/.exec(out)[1]);
+  t.after(() => { try { process.kill(tool, 'SIGKILL'); } catch { /* already gone */ } });
   child.kill('SIGTERM');
   const [code] = await once(child, 'exit');
   assert.equal(code, 7);

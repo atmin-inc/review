@@ -41,11 +41,15 @@ export function main(argv = process.argv.slice(2)) {
     process.stderr.write(`atmin: '${command}' is not an installed atmin command.\n\n${help(found)}`);
     process.exitCode = 1; return;
   }
-  const child = spawn(target, rest, { stdio: 'inherit', shell: process.platform === 'win32' && /\.cmd$/i.test(target) });
   // The terminal sends Ctrl-C to both processes; the tool decides what it means (the review
   // runner finishes its review first), so this command waits for it rather than exiting.
+  // Handlers go in before the tool starts: a stop signal in between killed this command and
+  // left the tool running, holding its output open (a CI run hung on it, 2026-10-08). Node
+  // runs them only once main returns, when `child` is set.
+  let child;
   const forward = signal => () => { if (signal !== 'SIGINT') child.kill(signal); };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, forward(signal));
+  child = spawn(target, rest, { stdio: 'inherit', shell: process.platform === 'win32' && /\.cmd$/i.test(target) });
   child.on('error', error => { process.stderr.write(`atmin: could not run ${target}: ${error.message}\n`); process.exit(1); });
   child.on('exit', (code, signal) => {
     if (signal) { process.removeAllListeners(signal); process.kill(process.pid, signal); return; }
