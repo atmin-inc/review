@@ -391,6 +391,8 @@ test('a diff read in part reads every deletion first', t => {
   assert.equal(parts.length, 4);
   assert.match(parts.at(-1).diff.toString('utf8'), /^diff --git a\/test\/old\.test\.ts b\/test\/old\.test\.ts\ndeleted file mode/);
   assert.deepEqual(parts.map(part => part.paths), [['src/a.ts'], ['src/b.ts'], ['src/d.ts'], ['test/old.test.ts']]);
+  // No part count would otherwise leave nothing chosen and pack forever.
+  for (const bad of [0, Number.NaN]) assert.throws(() => splitDiff(fixture.source, baseSha, headSha, names, bad), /at least one part/);
 });
 
 // A push after a completed review: the model reads only the commits since, and the earlier
