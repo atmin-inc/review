@@ -21,8 +21,9 @@ import { lockFile, type Packet } from './contracts.js';
 // The two passes share no state but the claims, which is the point.
 // `claims` is everything verified: carried claims first on an incremental run, then the
 // ones this run emitted, which are also `investigation.claims`.
-// `unread` lists the changed paths left out of a diff over the limit (see fitDiff).
-export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification; unread: string[] }
+// `parts` is how many investigations the diff was split across, and `unread` lists the changed
+// paths left out of every part (see splitDiff).
+export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification; parts: number; unread: string[] }
 
 // How rung 3 is answered for this run. 'none' leaves it silent, which is what every
 // run before this one did. 'jev' asks the TypeSafe API once per surviving claim,
@@ -48,35 +49,54 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
   return read.length ? git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', from, to, '--', ...read]) : Buffer.alloc(0);
 }
 
-// A diff still over the limit is read in part rather than not at all, as Mira does (Lors chose
-// this on 2026-10-08): deleted files first, each only a header (on mason-v1#4832, 503 of them took
-// 90 KB), then source files before tests, docs and generated files, and within each the smallest
-// first, so as many files as fit are read whole. The rest are returned as unread and listed as
-// not reviewed. Each file's part starts at git's "diff --git" line, which no line of
-// content can begin with, and is matched to its path through git's own path list.
+// A diff over the limit is reviewed in parts (Lors, 2026-10-08: "if i make a PR and it is a bit
+// big, why cant i get it fully reviewed?"): each part holds up to MAX_DIFF_BYTES of whole files and
+// gets its own investigation, and the claims of every part are verified together. Files are packed
+// in git's path order, so a folder's files share a part. Each file's diff starts at git's
+// "diff --git" line, which no line of content can begin with, and is matched to its path through
+// git's own path list. Past MAX_PARTS parts, or for one file whose diff alone is over the limit,
+// files are left out and listed as not reviewed. Which files are read then is the order Lors chose
+// for reading in part, as Mira does: deleted files first, each only a header (on mason-v1#4832, 503
+// of them took 90 KB), then source files before tests, docs and generated files, and within each
+// the smallest first, so as many files as fit are read whole.
+export const MAX_PARTS = 4;
 const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
-export function fitDiff(repository: string, from: string, to: string, paths: string[]): { diff: Buffer; unread: string[] } {
+export function splitDiff(repository: string, from: string, to: string, paths: string[]): { parts: Buffer[]; unread: string[] } {
   const diff = reviewDiff(repository, from, to, paths);
-  if (diff.length <= MAX_DIFF_BYTES) return { diff, unread: [] };
+  if (diff.length <= MAX_DIFF_BYTES) return { parts: diff.length ? [diff] : [], unread: [] };
   const names = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', '--name-only', '-z', from, to, '--',
     ...paths.filter(path => !lockFile(path))]).toString('utf8').split('\0').filter(Boolean);
   const starts: number[] = [], next = Buffer.from('\ndiff --git ');
   for (let at = diff.indexOf('diff --git '); at !== -1; at = diff.indexOf(next, at + 1)) starts.push(at && at + 1);
-  const parts = names.map((path, index) => ({ path, index, bytes: diff.subarray(starts[index], starts[index + 1] ?? diff.length) }));
+  const files = names.map((path, index) => ({ path, index, bytes: diff.subarray(starts[index], starts[index + 1] ?? diff.length) }));
   // A quoted path (one git escapes) cannot be compared here; every other part must name its path.
   const named = (path: string, bytes: Buffer) => { const line = bytes.subarray(0, bytes.indexOf(10)).toString('utf8');
     return line === `diff --git a/${path} b/${path}` || line.startsWith('diff --git "'); };
-  if (starts[0] !== 0 || starts.length !== names.length || parts.some(({ path, bytes }) => !named(path, bytes))) throw new Error('Diff parts do not match the changed paths');
+  if (starts[0] !== 0 || starts.length !== names.length || files.some(({ path, bytes }) => !named(path, bytes))) throw new Error('Diff parts do not match the changed paths');
   const rank = ({ path, bytes }: { path: string; bytes: Buffer }) => {
     const second = bytes.indexOf(10) + 1;
     return bytes.subarray(second, second + 18).toString('utf8') === 'deleted file mode ' ? 0 : minor.test(path) ? 2 : 1;
   };
-  const order = [...parts].sort((a, b) => rank(a) - rank(b) || a.bytes.length - b.bytes.length || a.index - b.index);
-  const kept = new Set<number>();
+  const chosen: typeof files = [];
   let size = 0;
-  for (const part of order) if (size + part.bytes.length <= MAX_DIFF_BYTES) { kept.add(part.index); size += part.bytes.length; }
-  return { diff: Buffer.concat(parts.filter(part => kept.has(part.index)).map(part => part.bytes)),
-    unread: parts.filter(part => !kept.has(part.index)).map(part => part.path) };
+  for (const file of [...files].sort((a, b) => rank(a) - rank(b) || a.bytes.length - b.bytes.length || a.index - b.index)) {
+    if (file.bytes.length <= MAX_DIFF_BYTES && size + file.bytes.length <= MAX_PARTS * MAX_DIFF_BYTES) { chosen.push(file); size += file.bytes.length; }
+  }
+  // Packing in path order can leave room unused at the end of a part, so while the chosen files
+  // need more than MAX_PARTS parts, the last one chosen is left out.
+  for (;;) {
+    const bins: Buffer[][] = [];
+    let room = 0;
+    for (const file of [...chosen].sort((a, b) => a.index - b.index)) {
+      if (!bins.length || file.bytes.length > room) { bins.push([]); room = MAX_DIFF_BYTES; }
+      bins.at(-1)!.push(file.bytes); room -= file.bytes.length;
+    }
+    if (bins.length <= MAX_PARTS) {
+      const read = new Set(chosen.map(file => file.index));
+      return { parts: bins.map(bin => Buffer.concat(bin)), unread: files.filter(file => !read.has(file.index)).map(file => file.path) };
+    }
+    chosen.pop();
+  }
 }
 
 // An incremental review reads only the commits pushed since an earlier review of the same
@@ -161,6 +181,44 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
   };
 }
 
+// The parts of a split review as one investigation: claims recorded in more than one part count
+// once, it is complete only if every part was, and each part's limitations say which part.
+function acrossParts(parts: ClaimInvestigation[]): ClaimInvestigation {
+  const claims = new Map<string, Claim>();
+  for (const part of parts) for (const claim of part.claims) if (!claims.has(claim.claimId)) claims.set(claim.claimId, claim);
+  const byName: Record<string, number> = {};
+  for (const part of parts) for (const [name, count] of Object.entries(part.telemetry.toolCallsByName)) byName[name] = (byName[name] ?? 0) + count;
+  const sum = (value: (part: ClaimInvestigation) => number | undefined) => parts.reduce((total, part) => total + (value(part) ?? 0), 0);
+  const transcripts = parts.map(part => part.transcript);
+  return {
+    claims: [...claims.values()],
+    complete: parts.every(part => part.complete),
+    limitations: parts.flatMap((part, index) => part.limitations.map(line => `Part ${index + 1} of ${parts.length}: ${line}`)),
+    toolErrors: parts.flatMap(part => part.toolErrors),
+    stopReason: parts.find(part => part.stopReason !== 'finished')?.stopReason ?? 'finished',
+    spentUsd: sum(part => part.spentUsd),
+    unsettledCalls: sum(part => part.unsettledCalls),
+    telemetry: {
+      turns: sum(part => part.telemetry.turns),
+      toolCalls: sum(part => part.telemetry.toolCalls),
+      toolCallsByName: byName,
+      droppedTurns: sum(part => part.telemetry.droppedTurns),
+      inputTokens: sum(part => part.telemetry.inputTokens),
+      cachedInputTokens: sum(part => part.telemetry.cachedInputTokens),
+      outputTokens: sum(part => part.telemetry.outputTokens),
+      finishReason: parts.findLast(part => part.telemetry.finishReason !== null)?.telemetry.finishReason ?? null,
+      failure: parts.find(part => part.telemetry.failure)?.telemetry.failure ?? null,
+      reads: parts.flatMap(part => part.telemetry.reads),
+      retries: parts.flatMap(part => part.telemetry.retries),
+      failurePathClaimIds: parts.flatMap(part => part.telemetry.failurePathClaimIds ?? []),
+      failurePathSpentUsd: sum(part => part.telemetry.failurePathSpentUsd),
+      failurePathTurns: sum(part => part.telemetry.failurePathTurns),
+      failurePathSites: sum(part => part.telemetry.failurePathSites),
+    },
+    ...(transcripts.every(Boolean) ? { transcript: transcripts.flatMap(transcript => transcript!) } : {}),
+  };
+}
+
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
     finishReason: null, failure: null, reads: [], retries: [] } });
@@ -193,37 +251,56 @@ export async function runClaimReview(directory: string, profile: Profile,
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
   const full = readFileSync(join(directory, 'change.diff'));
-  const { diff, unread } = incremental ? fitDiff(repository, incremental.since, packet.headSha, incremental.changed)
-    : fitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
-  if (unread.length && !diff.length) throw new Error('Diff exceeds 512 KB investigation limit');
-  const part = unread.length ? ` This diff holds only part of the change: it is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so ${unread.length} changed ${unread.length === 1 ? 'file is' : 'files are'} left out of it and reported as not reviewed. They are not yours to review: judge complete by the changes in this diff alone.` : '';
+  const { parts, unread } = incremental ? splitDiff(repository, incremental.since, packet.headSha, incremental.changed)
+    : splitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
+  if (unread.length && !parts.length) throw new Error('Diff exceeds 512 KB investigation limit');
+  // Each investigation is told what it holds and that only its own diff decides whether it is
+  // complete: told only that files were left out, the model ended every such review unfinished,
+  // and an unfinished review claims no file (mason-v1#4832, 2026-10-08: 0/780 in 28 turns).
+  const left = unread.length ? ` ${unread.length} changed ${unread.length === 1 ? 'file is' : 'files are'} left out of ${parts.length > 1 ? 'every part' : 'it'} and reported as not reviewed.` : '';
+  const note = (index: number) => parts.length > 1
+    ? ` This diff is part ${index + 1} of ${parts.length} of the change: the change is over the ${MAX_DIFF_BYTES / 1024} KB one review reads, so each part is investigated on its own and the files of the other parts are reviewed there. The source tools still read any file.${left} They are not yours to review: judge complete by the changes in this diff alone.`
+    : unread.length ? ` This diff holds only part of the change: it is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so${left} They are not yours to review: judge complete by the changes in this diff alone.` : '';
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
   const { guidance, omitted } = targetGuidance(repository, packet);
-  const { called, omitted: uncalled } = calledCode(diff.toString('utf8'), revisions.head);
-  const guided = { ...(guidance.length ? { targetGuidance: guidance } : {}), ...(called.length ? { calledCode: called } : {}) };
-  const context = incremental
-    ? { packet, ...guided, diff: diff.toString('utf8'), incrementalSince: incremental.since,
-      scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.${part}`
-        + (recheck.length ? ' earlierFindings are findings from that review in files these commits changed. They are not carried forward on their own: read the new code, and record again, with the same type, location symbol and suspectedCondition, each one that still holds at the new head. Leave out any the new commits fixed.' : ''),
-      ...(recheck.length ? { earlierFindings: recheck.map(({ type, location, description, suspectedCondition }) => ({ type, location, description, suspectedCondition })) } : {}) }
-    : { packet, ...guided, diff: diff.toString('utf8'), ...(part ? { scope: part.trim() } : {}) };
+  const contextFor = (diff: string, part: string, called: ReturnType<typeof calledCode>['called']) => {
+    const guided = { ...(guidance.length ? { targetGuidance: guidance } : {}), ...(called.length ? { calledCode: called } : {}) };
+    return incremental
+      ? { packet, ...guided, diff, incrementalSince: incremental.since,
+        scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.${part}`
+          + (recheck.length ? ' earlierFindings are findings from that review in files these commits changed. They are not carried forward on their own: read the new code, and record again, with the same type, location symbol and suspectedCondition, each one that still holds at the new head. Leave out any the new commits fixed.' : ''),
+        ...(recheck.length ? { earlierFindings: recheck.map(({ type, location, description, suspectedCondition }) => ({ type, location, description, suspectedCondition })) } : {}) }
+      : { packet, ...guided, diff, ...(part ? { scope: part.trim() } : {}) };
+  };
 
   const limits = (maxUsd: number) => ({
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
     maxInputTokens: profile.maxInputTokens, maxOutputTokens: profile.maxOutputTokens,
     maxUsd, ...(capture.transcript ? { recordTranscript: true } : {}), ...charges(profile),
   });
+  // One part's investigation within its share of the review's budget, so the parts together
+  // never spend more than one review may.
+  const investigate = async (bytes: Buffer, index: number) => {
+    const diff = bytes.toString('utf8');
+    const { called, omitted: uncalled } = calledCode(diff, revisions.head);
+    const context = contextFor(diff, note(index), called);
+    const budget = profile.maxUsd / parts.length;
+    const main = await investigateClaims(revisions, sourceOf, context, model, limits(budget), signal);
+    // A second pass on failure paths alone, within what the first left of the budget, shown
+    // only the diff around error handling; a change with none gets no second pass. See
+    // failurePathInstruction for why it is a pass of its own, failureExcerpt for the cost.
+    const failure = failureExcerpt(diff);
+    const failurePaths = !failure.excerpt ? idle()
+      : await investigateClaims(revisions, sourceOf, { ...context, diff: failure.excerpt }, model, { ...limits(budget - main.spentUsd), focus: 'failure_paths' }, signal);
+    return { investigation: combined(main, failurePaths, failure.sites), uncalled };
+  };
   // Nothing to read, as in a PR with no changes or a push that only moved the target
   // branch: no model is asked. Asked anyway, a model can only call the review incomplete.
-  const main = !diff.length ? idle() : await investigateClaims(revisions, sourceOf, context, model, limits(profile.maxUsd), signal);
-  // A second pass on failure paths alone, within what the first left of the budget, shown
-  // only the diff around error handling; a change with none gets no second pass. See
-  // failurePathInstruction for why it is a pass of its own, failureExcerpt for the cost.
-  const failure = failureExcerpt(diff.toString('utf8'));
-  const failurePaths = !failure.excerpt ? idle()
-    : await investigateClaims(revisions, sourceOf, { ...context, diff: failure.excerpt }, model, { ...limits(profile.maxUsd - main.spentUsd), focus: 'failure_paths' }, signal);
-  const investigation = combined(main, failurePaths, failure.sites);
+  // The parts run side by side, so a review in parts takes about as long as one.
+  const results = parts.length ? await Promise.all(parts.map(investigate)) : [{ investigation: idle(), uncalled: [] }];
+  const investigation = results.length === 1 ? results[0]!.investigation : acrossParts(results.map(result => result.investigation));
+  const uncalled = [...new Set(results.flatMap(result => result.uncalled))];
   // Earlier claims first, so a claim the model records again keeps the earlier wording
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
@@ -248,7 +325,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   // Both are written before verification, because a verification that throws must not
   // take the claims and the spend down with it: seen 2026-09-23, when a grep overflow did
   // exactly that on a live run.
-  persist('telemetry.json', { ...investigation.telemetry, stopReason: investigation.stopReason,
+  persist('telemetry.json', { ...investigation.telemetry, parts: parts.length, unread: unread.length, stopReason: investigation.stopReason,
     complete: investigation.complete, claims: investigation.claims.length, spentUsd: investigation.spentUsd,
     toolErrors: investigation.toolErrors, limitations: investigation.limitations });
 
@@ -274,7 +351,7 @@ export async function runClaimReview(directory: string, profile: Profile,
       : `The cross-family rung did not reach ${unreached.length} of ${claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
   }
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
-  return { claims, investigation, verification, unread };
+  return { claims, investigation, verification, parts: parts.length, unread };
 }
 
 // The same claims, verified again with the cross-family rung switched off. Emission is
