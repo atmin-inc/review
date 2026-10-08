@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { charges, MAX_DIFF_BYTES, modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { charges, MAX_DIFF_BYTES, MAX_PARTS, modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { lockFile, parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
@@ -22,7 +22,7 @@ const CATEGORY: Record<ClaimType, Finding['category']> = {
 const clip = (value: string, limit = 16000): string => value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 
 export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: string; rule: string; limitations: string[];
-  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; unread?: string[] }
+  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; parts?: number; unread?: string[] }
 
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
@@ -32,14 +32,15 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   const findings: Finding[] = [];
   const limitations = [...run.limitations];
 
-  // The whole diff is in the claim pass's first turn (under the 512 KB limit), so every
-  // changed text file but a lock file was in front of the model, a deleted one as its deletion.
-  // That is what "reviewed" means here, and only for a run that finished: a run that stopped
-  // early claims no coverage at all.
-  // A diff over the limit is read in part, and the files left out of it are not reviewed.
+  // The whole diff is in the claim pass's first turn (under the 512 KB limit, or split into
+  // parts that each are), so every changed text file but a lock file was in front of the model,
+  // a deleted one as its deletion. That is what "reviewed" means here, and only for a run that
+  // finished: a run that stopped early claims no coverage at all.
+  // Files left out of every part are not reviewed.
   const unread = new Set(run.unread ?? []);
   const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path) && !unread.has(file.path);
-  if (unread.size) limitations.push(`The diff is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until it was full.`);
+  if ((run.parts ?? 1) > 1) limitations.push(`The diff is over the ${MAX_DIFF_BYTES / 1024} KB one investigation reads, so it was reviewed in ${run.parts} parts, files in path order, each investigated on its own; a defect visible only across two parts is less likely to be found.`);
+  if (unread.size) limitations.push(`The diff is over the ${MAX_PARTS} parts of ${MAX_DIFF_BYTES / 1024} KB a review reads, or a file's own diff is over ${MAX_DIFF_BYTES / 1024} KB, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until the parts were full.`);
   const text = packet.changedFiles.filter(read);
   if (completed && text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',
     summary: 'The change diff for this path was in the claim pass context; a deleted file\'s as its deletion, without its old content.',
@@ -206,6 +207,6 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,
     rule: review.verification.decision.rule, limitations, complete: review.investigation.complete,
     stopReason: review.investigation.stopReason, model: profile.model, titles: titling.titles,
-    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}), unread: review.unread }));
+    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}), parts: review.parts, unread: review.unread }));
   return review;
 }
