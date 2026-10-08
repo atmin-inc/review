@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { charges, MAX_DIFF_BYTES, modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { charges, MAX_DIFF_BYTES, modelFor, PART_BYTES, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { lockFile, parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
@@ -46,7 +46,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   const covered = (file: Packet['changedFiles'][number]) => read(file) && (completed
     || (run.unfinished !== undefined && run.stopReason === 'finished' && !unfinished.has(file.path)));
   if ((run.parts ?? 1) > 1) limitations.push(`The diff is over the ${MAX_DIFF_BYTES / 1024} KB one investigation reads, so it was reviewed in ${run.parts} parts, files in path order, each investigated on its own; a defect visible only across two parts is less likely to be found.`);
-  if (unread.size) limitations.push(`The diff is over the parts of ${MAX_DIFF_BYTES / 1024} KB this review's budget covers, or a file's own diff is over ${MAX_DIFF_BYTES / 1024} KB, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until the parts were full.`);
+  if (unread.size) limitations.push(`The diff is over the parts of ${PART_BYTES / 1024} KB this review's budget covers, or a file's own diff is over ${MAX_DIFF_BYTES / 1024} KB, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until the parts were full.`);
   if (!completed && unfinished.size) limitations.push(`${unfinished.size} changed file(s) were in parts whose investigation did not finish, so they are not counted as reviewed.`);
   const text = packet.changedFiles.filter(covered);
   if (text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',

@@ -21,7 +21,7 @@ export const docsPages = [
         <li>The first review of a pull request reads the whole change. Each later push is reviewed incrementally: only the new commits are read for new findings, and earlier findings are re-checked against the new head. A force-push or a merge from the target branch gets a full review.</li>
         <li>Automatic reviews pause after five reviewed heads of one pull request. Comment exactly <C>/atmin review</C> or <C>@atmin review</C> on the pull request for a full review; that also restarts the count.</li>
         <li>A repository administrator can turn off Automatic reviews in the repository's settings. Then opening, pushing to or readying a pull request starts nothing, and a review starts only when a maintainer comments <C>/atmin review</C> or <C>@atmin review</C>.</li>
-        <li>A deleted file counts only as its deletion, and lock files not at all. A diff over 512 KB is reviewed in parts of 512 KB, side by side, so every file is still reviewed. The parts share the review's spending limit, which covers 13 parts at the default $2. Past that, deleted files are read first, then source files before tests and docs, smallest first, and the rest are listed as not reviewed. Binary and lock files are listed but not reviewed and do not affect the rating.</li>
+        <li>A deleted file counts only as its deletion, and lock files not at all. A diff over 512 KB is reviewed in parts of 256 KB, side by side, so every file is still reviewed. The parts share the review's spending limit, which covers 13 parts at the default $2. Past that, deleted files are read first, then source files before tests and docs, smallest first, and the rest are listed as not reviewed. Binary and lock files are listed but not reviewed and do not affect the rating.</li>
         <li>atmin never runs your repository's code during a review.</li>
       </ul>
     </>],
@@ -184,7 +184,7 @@ sudo systemd-run --wait --pipe -p User=atmin-review -p EnvironmentFile=/etc/atmi
     ['Limits', <>
       <ul>
         <li>Up to 10 connected repositories per organization; a repository over 2 GB does not connect.</li>
-        <li>A review reads its diff in parts of 512 KB, as many as its spending limit covers (13 at the default $2), source files first; deleted files' old content and lock files do not count.</li>
+        <li>A diff up to 512 KB is read in one go; a bigger one in parts of 256 KB, as many as its spending limit covers (13 at the default $2), source files first; deleted files' old content and lock files do not count.</li>
         <li>Automatic reviews pause after five reviewed heads of a pull request until someone comments <C>/atmin review</C>.</li>
         <li>Credit is bought in $10, $25, $50 or $100 and does not expire. Auto top-up charges the saved card when credit falls below $5.</li>
       </ul>
