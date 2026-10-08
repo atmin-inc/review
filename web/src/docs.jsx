@@ -20,7 +20,7 @@ export const docsPages = [
       <ul>
         <li>The first review of a pull request reads the whole change. Each later push is reviewed incrementally: only the new commits are read for new findings, and earlier findings are re-checked against the new head. A force-push or a merge from the target branch gets a full review.</li>
         <li>Automatic reviews pause after five reviewed heads of one pull request. Comment exactly <C>/atmin review</C> on the pull request for a full review; that also restarts the count.</li>
-        <li>Diffs over 512 KB are not reviewed. Binary files are listed but not reviewed and do not affect the rating.</li>
+        <li>Diffs over 512 KB are not reviewed. A deleted file counts only as its deletion, and lock files not at all. Binary and lock files are listed but not reviewed and do not affect the rating.</li>
         <li>atmin never runs your repository's code during a review.</li>
       </ul>
     </>],
@@ -183,7 +183,7 @@ sudo systemd-run --wait --pipe -p User=atmin-review -p EnvironmentFile=/etc/atmi
     ['Limits', <>
       <ul>
         <li>Up to 10 connected repositories per organization; a repository over 2 GB does not connect.</li>
-        <li>Diffs over 512 KB are not reviewed.</li>
+        <li>Diffs over 512 KB are not reviewed; deleted files' old content and lock files do not count.</li>
         <li>Automatic reviews pause after five reviewed heads of a pull request until someone comments <C>/atmin review</C>.</li>
         <li>Credit is bought in $10, $25, $50 or $100 and does not expire. Auto top-up charges the saved card when credit falls below $5.</li>
       </ul>

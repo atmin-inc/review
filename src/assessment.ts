@@ -1,4 +1,4 @@
-import { ReviewInputError, parsePacket, parseResult, PRIORITIES, type Packet, type Result, type Finding } from './contracts.js';
+import { ReviewInputError, lockFile, parsePacket, parseResult, PRIORITIES, type Packet, type Result, type Finding } from './contracts.js';
 import { rate, type Rating } from './rating.js';
 
 export function validateFix(finding: Finding): void {
@@ -112,9 +112,10 @@ export function assess(packet: Packet, result: Result, freshness: Freshness = un
   validateEvidence(packet, result);
   // Binary files are listed as not reviewed but do not hold the scope open: the model reads
   // text, so a PR adding an icon or a font could never be rated (Lors chose this on
-  // 2026-09-28). A change made only of binary files had nothing reviewed, so it stays partial.
+  // 2026-09-28). Lock files likewise, since 2026-10-08. A change made only of those had nothing
+  // reviewed, so it stays partial.
   const kinds = new Map(packet.changedFiles.map(file => [file.path, file.kind]));
-  const readable = result.coverage.filter(c => kinds.get(c.path) !== 'binary');
+  const readable = result.coverage.filter(c => kinds.get(c.path) !== 'binary' && !lockFile(c.path));
   const scope = result.status === 'not-started' ? 'unavailable'
     : result.status === 'completed' && readable.every(c => c.status === 'reviewed')
       && (readable.length > 0 || result.coverage.length === 0) ? 'complete' : 'partial';

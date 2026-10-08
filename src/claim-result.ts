@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { charges, modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { charges, modelFor, reviewDiff, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
-import { parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
+import { lockFile, parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
 import { git, loadReview, validateAnchor } from './snapshot.js';
 import type { Chain } from './evidence.js';
 import type { Model, Profile } from './investigation.js';
@@ -32,12 +32,14 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   const findings: Finding[] = [];
   const limitations = [...run.limitations];
 
-  // The whole diff is in the claim pass's first turn (under the 128 KB limit), so every
-  // changed text file was in front of the model. That is what "reviewed" means here, and
-  // only for a run that finished: a run that stopped early claims no coverage at all.
-  const text = packet.changedFiles.filter(file => file.kind === 'text');
+  // The whole diff is in the claim pass's first turn (under the 512 KB limit), so every
+  // changed text file but a lock file was in front of the model, a deleted one as its deletion.
+  // That is what "reviewed" means here, and only for a run that finished: a run that stopped
+  // early claims no coverage at all.
+  const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path);
+  const text = packet.changedFiles.filter(read);
   if (completed && text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',
-    summary: 'The complete change diff for this path was in the claim pass context.',
+    summary: 'The change diff for this path was in the claim pass context; a deleted file\'s as its deletion, without its old content.',
     anchors: text.map(file => ({ path: file.path, side: file.change === 'deleted' ? 'base' : 'head', line: null })) });
 
   const outside: string[] = [];
@@ -92,7 +94,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${merged ? `${merged} merged into a finding on the same line, ` : ''}${withheld.length} withheld as minor, `
       + `${counts.refuted} refuted, ${counts.inconclusive} inconclusive. Policy verdict ${run.verdict} (rule ${run.rule}).`,
     coverage: packet.changedFiles.map(file => ({ path: file.path,
-      status: completed && file.kind === 'text' ? 'reviewed' : 'unreviewed', evidenceIds: completed && file.kind === 'text' ? ['change-diff'] : [] })),
+      status: completed && read(file) ? 'reviewed' : 'unreviewed', evidenceIds: completed && read(file) ? ['change-diff'] : [] })),
     validation: packet.policy.requiredChecks.map(name => ({ name, status: 'not-run', reason: 'Required validation has not run.', evidenceIds: [] })),
     evidence, findings,
     limitations: limitations.length ? limitations.map(item => clip(item)) : ['No repository code was executed.'],
@@ -121,9 +123,9 @@ export function incrementalScope(directory: string, packet: Packet): { scope?: I
   const repository = join(directory, 'source.git');
   try { git(repository, ['merge-base', '--is-ancestor', previous.headSha, packet.headSha]); }
   catch { return { note: 'Full review: the earlier reviewed head is not an ancestor of this one, as after a force-push.' }; }
-  const diff = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', previous.headSha, packet.headSha, '--']);
   const changed = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', previous.headSha, packet.headSha, '--'])
     .toString('utf8').split('\0').filter(Boolean);
+  const diff = reviewDiff(repository, previous.headSha, packet.headSha, changed);
   const titles = Object.fromEntries(Object.entries(previous.titles ?? {}).filter(([, title]) => typeof title === 'string'));
   return { scope: { since: previous.headSha, diff, carried: previous.claims, changed }, titles,
     note: `Incremental review: new claims were sought only in the commits since ${previous.headSha.slice(0, 12)}; ${previous.claims.length} earlier finding(s) were re-checked against this head.` };
