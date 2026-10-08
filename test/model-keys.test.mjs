@@ -55,28 +55,41 @@ test('an organization\'s model key is stored sealed, shown only by its last four
 });
 
 // The organization pays its model provider for these reviews, so atmin's free allowance and
-// credit must not be spent or required. The daily limit still counts them: it protects this
-// service's runners, which still do the work.
-test('reviews on an organization\'s own key need no free reviews or credit and are not counted by its plan, but the daily limit and the off switch apply', t => {
+// credit must not be spent or required. Nor do the daily limits hold them: they bound this
+// service's model spend, and Mason neared the service's 100 a day on its own key (2026-10-08).
+test('reviews on an organization\'s own key need no free reviews or credit, and neither its plan nor the daily limits count or hold them; the off switch applies', t => {
   const f = setup(t);
   f.entry.store.enable(true);
   f.repositories.setPlan(99, { freeReviews: 0, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, 8);
   let n = 0;
-  const attempt = () => { f.entry.store.enqueue(`d${++n}`, n); return f.repositories.reserve(f.entry, f.entry.store.next('worker'), 'worker', 100); };
+  const attempt = (limit = 100) => { f.entry.store.enqueue(`d${++n}`, n); return f.repositories.reserve(f.entry, f.entry.store.next('worker'), 'worker', limit); };
   assert.match(attempt(), /has no review credit left/);
   f.keys.set(99, 'bedrock', key, 8);
-  assert.equal(attempt(), true);
-  assert.equal(attempt(), true);
+  f.config.maxReviewsPerDay = 1;
+  assert.equal(attempt(1), true);
+  assert.equal(attempt(1), true, 'past both the repository and the service daily limit');
   const jobs = f.entry.store.db.prepare('SELECT pr, modelKey, started FROM jobs ORDER BY pr').all();
   assert.deepEqual(jobs.map(job => [job.pr, job.modelKey, job.started !== null]), [[1, null, false], [2, 'bedrock', true], [3, 'bedrock', true]]);
   assert.equal(f.repositories.started(99, 0, Date.now() + 1).length, 0);
-  assert.equal(f.repositories.reviewsToday(), 2);
+  assert.equal(f.repositories.reviewsToday(), 0);
   f.repositories.setPlan(99, { freeReviews: 0, monthlyReviews: 0, multiplier: 2, minimumUsd: .05 }, 8);
   assert.match(attempt(), /^Reviews are turned off for this organization/);
   // Without its key, the organization is back on atmin's plan and credit.
   f.repositories.setPlan(99, { freeReviews: 0, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, 8);
   f.keys.remove(99, 8);
   assert.match(attempt(), /has no review credit left/);
+  // Reviews on this service's key are still held to both daily limits.
+  f.repositories.setPlan(99, { freeReviews: 1000, monthlyReviews: 1000, multiplier: 2, minimumUsd: .05 }, 8);
+  assert.equal(attempt(), true);
+  assert.equal(f.repositories.reviewsToday(), 1);
+  assert.match(attempt(), /rolling 24-hour review limit was reached/);
+  f.config.maxReviewsPerDay = 100;
+  assert.match(attempt(1), /rolling 24-hour review limit was reached/);
+  assert.equal(attempt(2), true);
+  // A day full of those does not stop a review on the organization's own key.
+  f.config.maxReviewsPerDay = 1;
+  f.keys.set(99, 'bedrock', key, 8);
+  assert.equal(attempt(1), true);
 });
 
 // The key goes only to this service's runners, with that organization's job, and the job
