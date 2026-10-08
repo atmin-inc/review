@@ -232,7 +232,7 @@ export class Worker {
       idle = failure?.reason.startsWith('Diff exceeds') ?? false;
       if (idle) check = { status: 'completed', conclusion: 'failure', output: { title: 'Review not run: diff too large', summary: `The diff is over the ${MAX_DIFF_BYTES / 1024} KB that atmin reviews. See the PR summary.` } };
       report = idle
-        ? `# atmin review — review not run\n\nThis PR's diff is over the ${MAX_DIFF_BYTES / 1024} KB that atmin reviews, so no model was asked and nothing is charged. A later push whose diff fits is reviewed as usual.`
+        ? `# atmin review — review not run\n\nThis PR's diff is over the ${MAX_DIFF_BYTES / 1024} KB that atmin reads in one review, and no changed file's part of it fits on its own, so no model was asked and nothing is charged. A later push whose diff fits is reviewed as usual.`
         : outcome === 'unclaimed'
         ? '# atmin review — review failed\n\nNo reviewer was free to take this review. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`.'
         : `# atmin review — review failed\n\nSource capture or investigation did not produce a validated report.${failure ? ` Cause (${failure.phase}): ${failure.reason}.` : ''} No successful review or merge approval is claimed. A maintainer may request a new run with \`/atmin review\`; it uses a new budget reservation.`;

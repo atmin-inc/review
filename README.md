@@ -127,8 +127,11 @@ review. Automatic reviews pause after five reviewed heads of one PR; comment
 `/atmin review` for a full review, which also restarts the count. Reviews are bounded by
 `maxReviewsPerDay`. The review reads a deleted file as its deletion (its old content stays readable
 through the source tools) and leaves lock files out; they are listed as not reviewed and, like
-binary files, do not hold the rating open. Diffs still over 512 KB are not reviewed: the PR gets a "review not run" comment
-saying so, and the review is neither counted nor charged. A failed review's comment and the
+binary files, do not hold the rating open. A diff still over 512 KB is read in part: deleted files
+first, then source files before tests, docs and generated files, smallest first, until 512 KB is full. The rest are listed
+as not reviewed, the review is incomplete, and a later push gets a full review rather than one
+built on it. When no file's part of the diff fits on its own, the PR gets a "review not run"
+comment saying so, and the review is neither counted nor charged. A failed review's comment and the
 service log name the phase that failed and its cause: one of atmin's own messages about its
 limits or input, or else only the error's kind, so no source or provider text is shown. Maintainers can comment
 `/atmin review` to rerun. Use a dedicated host user. Source review does not execute repository code.

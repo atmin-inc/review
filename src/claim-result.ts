@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { charges, modelFor, reviewDiff, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
+import { charges, MAX_DIFF_BYTES, modelFor, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { lockFile, parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
@@ -22,7 +22,7 @@ const CATEGORY: Record<ClaimType, Finding['category']> = {
 const clip = (value: string, limit = 16000): string => value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 
 export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: string; rule: string; limitations: string[];
-  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string> }
+  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; unread?: string[] }
 
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
@@ -36,7 +36,10 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   // changed text file but a lock file was in front of the model, a deleted one as its deletion.
   // That is what "reviewed" means here, and only for a run that finished: a run that stopped
   // early claims no coverage at all.
-  const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path);
+  // A diff over the limit is read in part, and the files left out of it are not reviewed.
+  const unread = new Set(run.unread ?? []);
+  const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path) && !unread.has(file.path);
+  if (unread.size) limitations.push(`The diff is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until it was full.`);
   const text = packet.changedFiles.filter(read);
   if (completed && text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',
     summary: 'The change diff for this path was in the claim pass context; a deleted file\'s as its deletion, without its old content.',
@@ -125,9 +128,8 @@ export function incrementalScope(directory: string, packet: Packet): { scope?: I
   catch { return { note: 'Full review: the earlier reviewed head is not an ancestor of this one, as after a force-push.' }; }
   const changed = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', previous.headSha, packet.headSha, '--'])
     .toString('utf8').split('\0').filter(Boolean);
-  const diff = reviewDiff(repository, previous.headSha, packet.headSha, changed);
   const titles = Object.fromEntries(Object.entries(previous.titles ?? {}).filter(([, title]) => typeof title === 'string'));
-  return { scope: { since: previous.headSha, diff, carried: previous.claims, changed }, titles,
+  return { scope: { since: previous.headSha, carried: previous.claims, changed }, titles,
     note: `Incremental review: new claims were sought only in the commits since ${previous.headSha.slice(0, 12)}; ${previous.claims.length} earlier finding(s) were re-checked against this head.` };
 }
 
@@ -138,6 +140,9 @@ export function previousReview(artifact: string): PreviousReview | null {
     const read = (name: string) => JSON.parse(readFileSync(join(artifact, name), 'utf8'));
     const packet = read('packet.json'), result = read('result.json');
     if (result.status !== 'completed' || !existsSync(join(artifact, 'claim-verification.json'))) return null;
+    // A review that read only part of its diff cannot stand in for the part a push review skips.
+    const kinds = new Map((packet.changedFiles as Packet['changedFiles']).map(file => [file.path, file.kind]));
+    if ((result.coverage as Result['coverage']).some(c => c.status !== 'reviewed' && kinds.get(c.path) === 'text' && !lockFile(c.path))) return null;
     const chains = (read('claim-verification.json').chains ?? []) as Chain[];
     const kept = new Set(chains.filter(chain => chain.verdict === 'confirmed' || chain.verdict === 'withheld').map(chain => chain.claimId));
     const claims = [...(existsSync(join(artifact, 'carried-claims.json')) ? read('carried-claims.json') : []), ...read('claims.json')] as Claim[];
@@ -201,6 +206,6 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,
     rule: review.verification.decision.rule, limitations, complete: review.investigation.complete,
     stopReason: review.investigation.stopReason, model: profile.model, titles: titling.titles,
-    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}) }));
+    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}), unread: review.unread }));
   return review;
 }
