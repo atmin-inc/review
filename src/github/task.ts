@@ -8,7 +8,7 @@ import { runClaimReviewAsResult } from '../claim-result.js';
 
 const [phase, input, output, cache] = process.argv.slice(2);
 // Failure messages this code writes about the review's input or limits (snapshot.ts, claim-run.ts).
-const ownReason = /^(Diff exceeds \d+ KB|Review deadline reached|Invalid inventory or more than 1000 changed paths|File exceeds the 16 MiB capture limit|PR changed during capture|Only open pull requests can be prepared|No valid common ancestor|Unsupported change type|Review JSON exceeds the 16 MiB limit|(git|gh) [a-z-]+ failed or exceeded its time\/output limit)/;
+const ownReason = /^(Diff exceeds \d+ KB|Diff parts do not match the changed paths|Review deadline reached|Invalid inventory or more than 1000 changed paths|File exceeds the 16 MiB capture limit|PR changed during capture|Only open pull requests can be prepared|No valid common ancestor|Unsupported change type|Review JSON exceeds the 16 MiB limit|(git|gh) [a-z-]+ failed or exceeded its time\/output limit)/;
 const abort = new AbortController();
 const parent = process.ppid;
 const parentMonitor = setInterval(() => { if (process.ppid !== parent) abort.abort(); }, 1000);

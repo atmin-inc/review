@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
 import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
 import { capture, loadReview } from '../dist/snapshot.js';
-import { MAX_DIFF_BYTES } from '../dist/claim-run.js';
+import { MAX_DIFF_BYTES, fitDiff, reviewDiff } from '../dist/claim-run.js';
 import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
 import { renderMarkdown } from '../dist/render.js';
@@ -190,15 +190,16 @@ test('Luna direct from OpenAI is priced with its cache writes and long-prompt ra
   assert.equal(meteredCost(direct, { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 800, cacheWriteTokens: 300 }), null);
 });
 
-// 128 KB refused 29% of mason-v1's merged PRs. A diff up to 512 KB is reviewed; past that
-// the run refuses before any model is asked, so nothing is spent on a review that cannot fit.
-test('a 300 KB diff is reviewed and a diff over 512 KB is refused before spending', async t => {
+// 128 KB refused 29% of mason-v1's merged PRs. A diff up to 512 KB is reviewed; one over it is
+// read in part (see the next tests), and one with no file that fits is refused before any
+// model is asked, so nothing is spent on a review that cannot fit.
+test('a 300 KB diff is reviewed and a diff whose only file is over 512 KB is refused before spending', async t => {
   withoutJev(t);
-  const sized = (bytes) => {
+  const sized = (bytes, alone = false) => {
     const fixture = repository(t);
     fixture.write('generated.ts', `export const rows = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(Math.ceil(bytes / 40))}];\n`);
     const headSha = fixture.commit('large change');
-    const captured = capture(fixture.source, { ...fixture.state, headSha });
+    const captured = capture(fixture.source, { ...fixture.state, ...(alone ? { baseSha: fixture.state.headSha } : {}), headSha });
     return persist({ ...fixture, ...captured });
   };
   const large = sized(300 * 1024);
@@ -207,7 +208,8 @@ test('a 300 KB diff is reviewed and a diff over 512 KB is refused before spendin
     action('end_investigation', { complete: true, limitations: [] })]));
   assert.equal(loadReview(large).result.status, 'completed');
 
-  const huge = sized(MAX_DIFF_BYTES + 64 * 1024);
+  const huge = sized(MAX_DIFF_BYTES + 64 * 1024, true);
+  assert.deepEqual(loadReview(huge).packet.changedFiles.map(file => file.path), ['generated.ts']);
   assert.ok(readFileSync(join(huge, 'change.diff')).length > MAX_DIFF_BYTES);
   let asked = false;
   await assert.rejects(runClaimReviewAsResult(huge, { ...profile, maxInputTokens: 1000000 }, undefined,
@@ -254,6 +256,65 @@ test('a deleted file is read as its deletion and a lock file is left out, so nei
   const assessment = assess(packet, result, current());
   assert.equal(assessment.scope, 'complete');
   assert.match(renderMarkdown(packet, result, assessment), /\*\*2\/2 files reviewed\*\* · 1 lock file not reviewed/);
+});
+
+// mason-v1#4832 is still 1.3 MB without its deletions. Lors chose on 2026-10-08 that such a PR is
+// reviewed in part, as Mira does, rather than not at all: deletions, then source files before tests
+// and docs, smallest first, until the diff is full; the rest are listed as not reviewed and the review is
+// incomplete. A push review never builds on it, since it would skip what was never read.
+test('a diff still over the limit is read in part: source before tests and docs, smallest first, and the rest not reviewed', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const rows = bytes => `export const rows = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(Math.ceil(bytes / 40))}];\n`;
+  // Smallest first fits small, mid and big (about 490 KB) but not huge; a 10 KB test then fits
+  // and a 100 KB doc does not. Read by size alone, the doc would have crowded out big.
+  fixture.write('src/huge.ts', rows(300 * 1024));
+  fixture.write('src/big.ts', rows(250 * 1024));
+  fixture.write('src/mid.ts', rows(150 * 1024));
+  fixture.write('src/small.ts', rows(100 * 1024));
+  fixture.write('docs/guide.md', rows(100 * 1024));
+  fixture.write('test/small.test.ts', rows(10 * 1024));
+  const headSha = fixture.commit('large change');
+  const directory = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, headSha }) });
+  const { seen, model: watched } = watching([done()]);
+  await runClaimReviewAsResult(directory, { ...profile, maxInputTokens: 1000000 }, undefined, watched);
+  const { diff, scope } = seen[0];
+  assert.ok(diff.length <= MAX_DIFF_BYTES);
+  for (const path of ['src/big.ts', 'src/mid.ts', 'src/small.ts', 'test/small.test.ts', 'update.ts']) assert.ok(diff.includes(`diff --git a/${path} b/${path}`), path);
+  assert.ok(!diff.includes('src/huge.ts') && !diff.includes('docs/guide.md'));
+  assert.match(scope, /only part of the change.* 2 changed files are left out/);
+  const { packet, result } = loadReview(directory);
+  assert.deepEqual(result.coverage.filter(c => c.status !== 'reviewed').map(c => c.path), ['docs/guide.md', 'src/huge.ts']);
+  assert.ok(result.limitations.some(item => item.startsWith('The diff is over the 512 KB a review reads, so 2 changed file(s) were not read')));
+  const assessment = assess(packet, result, current());
+  assert.equal(assessment.scope, 'partial');
+  assert.match(renderMarkdown(packet, result, assessment), /Not reviewed:\n- docs\/guide\.md · added\/text · unreviewed\n- src\/huge\.ts · added\/text · unreviewed/);
+  assert.equal(previousReview(directory), null);
+});
+
+// Each deletion costs only its header, and a deleted test is still a removal its callers may
+// depend on, so deletions are read before anything else. Here the source files fill the limit
+// to within less than the deletion's header: read source-first, the deletion would be left out.
+test('a diff read in part reads every deletion first', t => {
+  const fixture = repository(t);
+  fixture.write('test/old.test.ts', 'export const old = 1;\n');
+  const baseSha = fixture.commit('a test to delete');
+  fixture.run('rm', '-q', 'test/old.test.ts');
+  fixture.write('src/small.ts', `export const small = "${'s'.repeat(10 * 1024)}";\n`);
+  const huge = pad => `export const huge = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(13000)}];\n// ${'x'.repeat(pad)}\n`;
+  fixture.write('src/huge.ts', huge(0));
+  let headSha = fixture.commit('delete the test, add source');
+  const size = path => reviewDiff(fixture.source, baseSha, headSha, [path]).length;
+  const header = size('test/old.test.ts');
+  const pad = MAX_DIFF_BYTES - size('src/small.ts') - Math.floor(header / 2) - size('src/huge.ts');
+  fixture.write('src/huge.ts', huge(pad));
+  fixture.run('add', '-A'); fixture.run('commit', '-q', '--amend', '--no-edit');
+  headSha = fixture.run('rev-parse', 'HEAD');
+  assert.equal(size('src/small.ts') + size('src/huge.ts'), MAX_DIFF_BYTES - Math.floor(header / 2), 'the source files fill the limit but for half a header');
+  const paths = ['src/huge.ts', 'src/small.ts', 'test/old.test.ts'];
+  const { diff, unread } = fitDiff(fixture.source, baseSha, headSha, paths);
+  assert.deepEqual(unread, ['src/huge.ts']);
+  assert.match(diff.toString('utf8'), /^diff --git a\/src\/small\.ts b\/src\/small\.ts\n[^]*\ndiff --git a\/test\/old\.test\.ts b\/test\/old\.test\.ts\ndeleted file mode/);
 });
 
 // A push after a completed review: the model reads only the commits since, and the earlier

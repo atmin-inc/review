@@ -21,7 +21,8 @@ import { lockFile, type Packet } from './contracts.js';
 // The two passes share no state but the claims, which is the point.
 // `claims` is everything verified: carried claims first on an incremental run, then the
 // ones this run emitted, which are also `investigation.claims`.
-export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification }
+// `unread` lists the changed paths left out of a diff over the limit (see fitDiff).
+export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification; unread: string[] }
 
 // How rung 3 is answered for this run. 'none' leaves it silent, which is what every
 // run before this one did. 'jev' asks the TypeSafe API once per surviving claim,
@@ -47,12 +48,43 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
   return read.length ? git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', from, to, '--', ...read]) : Buffer.alloc(0);
 }
 
+// A diff still over the limit is read in part rather than not at all, as Mira does (Lors chose
+// this on 2026-10-08): deleted files first, each only a header (on mason-v1#4832, 503 of them took
+// 90 KB), then source files before tests, docs and generated files, and within each the smallest
+// first, so as many files as fit are read whole. The rest are returned as unread and listed as
+// not reviewed. Each file's part starts at git's "diff --git" line, which no line of
+// content can begin with, and is matched to its path through git's own path list.
+const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
+export function fitDiff(repository: string, from: string, to: string, paths: string[]): { diff: Buffer; unread: string[] } {
+  const diff = reviewDiff(repository, from, to, paths);
+  if (diff.length <= MAX_DIFF_BYTES) return { diff, unread: [] };
+  const names = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', '--name-only', '-z', from, to, '--',
+    ...paths.filter(path => !lockFile(path))]).toString('utf8').split('\0').filter(Boolean);
+  const starts: number[] = [], next = Buffer.from('\ndiff --git ');
+  for (let at = diff.indexOf('diff --git '); at !== -1; at = diff.indexOf(next, at + 1)) starts.push(at && at + 1);
+  const parts = names.map((path, index) => ({ path, index, bytes: diff.subarray(starts[index], starts[index + 1] ?? diff.length) }));
+  // A quoted path (one git escapes) cannot be compared here; every other part must name its path.
+  const named = (path: string, bytes: Buffer) => { const line = bytes.subarray(0, bytes.indexOf(10)).toString('utf8');
+    return line === `diff --git a/${path} b/${path}` || line.startsWith('diff --git "'); };
+  if (starts[0] !== 0 || starts.length !== names.length || parts.some(({ path, bytes }) => !named(path, bytes))) throw new Error('Diff parts do not match the changed paths');
+  const rank = ({ path, bytes }: { path: string; bytes: Buffer }) => {
+    const second = bytes.indexOf(10) + 1;
+    return bytes.subarray(second, second + 18).toString('utf8') === 'deleted file mode ' ? 0 : minor.test(path) ? 2 : 1;
+  };
+  const order = [...parts].sort((a, b) => rank(a) - rank(b) || a.bytes.length - b.bytes.length || a.index - b.index);
+  const kept = new Set<number>();
+  let size = 0;
+  for (const part of order) if (size + part.bytes.length <= MAX_DIFF_BYTES) { kept.add(part.index); size += part.bytes.length; }
+  return { diff: Buffer.concat(parts.filter(part => kept.has(part.index)).map(part => part.bytes)),
+    unread: parts.filter(part => !kept.has(part.index)).map(part => part.path) };
+}
+
 // An incremental review reads only the commits pushed since an earlier review of the same
 // PR, and re-verifies that review's surviving claims against the new revision instead of
-// asking a model to find them again. `diff` is the diff from `since` to the new head;
+// asking a model to find them again. Its diff runs from `since` to the new head;
 // verification still runs against the merge base, so every claim remains a claim about
 // the whole change. `changed` is the paths the pushed commits touch.
-export interface IncrementalScope { since: string; diff: Buffer; carried: Claim[]; changed: string[] }
+export interface IncrementalScope { since: string; carried: Claim[]; changed: string[] }
 
 // A carried claim is re-verified on the propositions it was recorded with, and a fix can
 // remove a premise none of them states. Measured 2026-09-24 on a real push (mason-v1):
@@ -161,8 +193,10 @@ export async function runClaimReview(directory: string, profile: Profile,
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
   const full = readFileSync(join(directory, 'change.diff'));
-  const diff = incremental ? incremental.diff : reviewDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
-  if (diff.length > MAX_DIFF_BYTES) throw new Error('Diff exceeds 512 KB investigation limit');
+  const { diff, unread } = incremental ? fitDiff(repository, incremental.since, packet.headSha, incremental.changed)
+    : fitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
+  if (unread.length && !diff.length) throw new Error('Diff exceeds 512 KB investigation limit');
+  const part = unread.length ? ` This diff holds only part of the change: it is over the ${MAX_DIFF_BYTES / 1024} KB a review reads, so ${unread.length} changed ${unread.length === 1 ? 'file is' : 'files are'} left out of it and reported as not reviewed.` : '';
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
   const { guidance, omitted } = targetGuidance(repository, packet);
@@ -170,10 +204,10 @@ export async function runClaimReview(directory: string, profile: Profile,
   const guided = { ...(guidance.length ? { targetGuidance: guidance } : {}), ...(called.length ? { calledCode: called } : {}) };
   const context = incremental
     ? { packet, ...guided, diff: diff.toString('utf8'), incrementalSince: incremental.since,
-      scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.`
+      scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.${part}`
         + (recheck.length ? ' earlierFindings are findings from that review in files these commits changed. They are not carried forward on their own: read the new code, and record again, with the same type, location symbol and suspectedCondition, each one that still holds at the new head. Leave out any the new commits fixed.' : ''),
       ...(recheck.length ? { earlierFindings: recheck.map(({ type, location, description, suspectedCondition }) => ({ type, location, description, suspectedCondition })) } : {}) }
-    : { packet, ...guided, diff: diff.toString('utf8') };
+    : { packet, ...guided, diff: diff.toString('utf8'), ...(part ? { scope: part.trim() } : {}) };
 
   const limits = (maxUsd: number) => ({
     maxTurns: profile.maxTurns, maxToolCalls: profile.maxToolCalls,
@@ -240,7 +274,7 @@ export async function runClaimReview(directory: string, profile: Profile,
       : `The cross-family rung did not reach ${unreached.length} of ${claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
   }
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
-  return { claims, investigation, verification };
+  return { claims, investigation, verification, unread };
 }
 
 // The same claims, verified again with the cross-family rung switched off. Emission is

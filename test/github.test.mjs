@@ -384,7 +384,7 @@ test('a diff over the limit is refused on the PR as too large, not counted, and 
   t.after(() => { process.stderr.write = write; });
   const huge = h.store.enqueue('huge', 1);
   await new Worker(h.config, h.store, h.github, inline(failing({ phase: 'investigate', reason: 'Diff exceeds 512 KB investigation limit' })), 'owner').tick();
-  assert.match(h.comment.body, /review not run/); assert.match(h.comment.body, /over the 512 KB that atmin reviews/);
+  assert.match(h.comment.body, /review not run/); assert.match(h.comment.body, /over the 512 KB that atmin reads in one review, and no changed file's part of it fits/);
   assert.equal(JSON.parse(h.store.get(huge).report).idle, true);
   assert.equal(h.checks.at(-1).output.title, 'Review not run: diff too large');
   assert.equal(h.store.authorReviews(1, 0), 0, 'no model was asked, so the plan does not count it');

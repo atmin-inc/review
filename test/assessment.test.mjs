@@ -97,6 +97,20 @@ test('a clean headline is impossible across incomplete, failing and stale combin
 // assets, and 13 of 304 mason-v1 main commits in 30 days touch a binary file. Lors chose on
 // 2026-09-28 that binary files are listed as not reviewed and the rating comes from the text
 // files. A change made only of binary files had nothing reviewed, so it is still not clean.
+// A diff read in part can leave hundreds of files out; GitHub cuts a comment past 65,536 characters.
+test('the comment lists at most 50 files not reviewed and says how many more', t => {
+  const f = repository(t);
+  for (let i = 0; i < 60; i++) f.write(`src/file-${String(i).padStart(2, '0')}.ts`, `export const n = ${i};\n`);
+  f.state.headSha = f.commit('sixty files');
+  Object.assign(f, capture(f.source, f.state));
+  const result = completed(f.packet);
+  result.coverage = result.coverage.map(c => c.path.startsWith('src/') ? { ...c, status: 'unreviewed', evidenceIds: [] } : c);
+  result.evidence = result.evidence.filter(item => !item.anchors[0].path.startsWith('src/'));
+  const body = renderMarkdown(f.packet, result, assess(f.packet, result, current()));
+  assert.equal((body.match(/^- src\/file-\d\d\.ts · added\/text · unreviewed$/gm) ?? []).length, 50);
+  assert.match(body, /^- and 10 more\.$/m);
+});
+
 test('binary files are listed as not reviewed without holding the rating open', t => {
   const f = repository(t);
   f.write('icon.png', Buffer.from([0, 255]));

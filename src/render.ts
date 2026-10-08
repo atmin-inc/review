@@ -122,7 +122,9 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
   lines.push('', '### Coverage and limitations', '');
   const open = packet.changedFiles.filter(file => result.coverage.find(c => c.path === file.path)!.status !== 'reviewed');
   lines.push(`${packet.changedFiles.length - open.length} of ${packet.changedFiles.length} changed files reviewed.${open.length ? ' Not reviewed:' : ''}`);
-  for (const file of open) lines.push(`- ${e(file.path)} · ${file.change}/${file.kind} · ${result.coverage.find(c => c.path === file.path)!.status}`);
+  // At most 50: a diff read in part can leave hundreds of files out.
+  for (const file of open.slice(0, 50)) lines.push(`- ${e(file.path)} · ${file.change}/${file.kind} · ${result.coverage.find(c => c.path === file.path)!.status}`);
+  if (open.length > 50) lines.push(`- and ${open.length - 50} more${linked ? '; the full review on atmin lists them' : ''}.`);
   const unsettled = result.limitations.filter(reason => reason.startsWith('grep: ')).length;
   lines.push(...result.limitations.filter(reason => !reason.startsWith('grep: ')).map(reason => `- Limitation: ${e(reason)}`),
     ...(unsettled ? [`- ${unsettled} source ${unsettled === 1 ? 'check' : 'checks'} settled nothing${linked ? '; the full review on atmin lists them' : ''}.`] : []), '',
