@@ -51,11 +51,11 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
 }
 
 // A diff over the limit is reviewed in parts (Lors, 2026-10-08: "if i make a PR and it is a bit
-// big, why cant i get it fully reviewed?"): each part holds up to MAX_DIFF_BYTES of whole files and
-// gets its own investigation, and the claims of every part are verified together. Files are packed
-// in git's path order, so a folder's files share a part. Each file's diff starts at git's
-// "diff --git" line, which no line of content can begin with, and is matched to its path through
-// git's own path list. A review splits into at most as many parts as its budget (the profile's
+// big, why cant i get it fully reviewed?"): each part holds up to PART_BYTES of whole files, or one
+// file up to MAX_DIFF_BYTES, and gets its own investigation, and the claims of every part are
+// verified together. Files are packed in git's path order, so a folder's files share a part. Each
+// file's diff starts at git's "diff --git" line, which no line of content can begin with, and is
+// matched to its path through git's own path list. A review splits into at most as many parts as its budget (the profile's
 // maxUsd, $2 by default) covers at PART_USD each, the parts sharing that one budget (Lors: "we
 // already have a cap of $2 per PR no? big prs should be well below that"). Past those parts, or for
 // one file whose diff alone is over the limit, files are left out and listed as not reviewed. Which files are read then is the order Lors chose
@@ -65,6 +65,12 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
 // One full 512 KB part cost $0.15 on mason-v1#4832 (Bedrock, 67 turns, 2026-10-08), the dearest
 // measured; the same part cost $0.08 to $0.11 on OpenRouter.
 export const PART_USD = 0.15;
+// Parts are 256 KB, though one investigation reads up to 512 KB: on mason-v1#4832 (OpenRouter,
+// 2026-10-08) three 512 KB parts left two unfinished, so none of their files counted as reviewed,
+// while six 256 KB parts all finished, every text file reviewed; both runs took about $0.25 and
+// 11 minutes. Lors chose to test the smaller parts. A diff up to MAX_DIFF_BYTES is still one
+// investigation.
+export const PART_BYTES = 256 * 1024;
 export const partsWithin = (maxUsd: number) => Math.max(1, Math.floor(maxUsd / PART_USD + 1e-9));
 const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
 export interface DiffPart { diff: Buffer; paths: string[] }
@@ -85,10 +91,12 @@ export function splitDiff(repository: string, from: string, to: string, paths: s
     const second = bytes.indexOf(10) + 1;
     return bytes.subarray(second, second + 18).toString('utf8') === 'deleted file mode ' ? 0 : minor.test(path) ? 2 : 1;
   };
+  // A file over PART_BYTES fills a part on its own, so it takes one part's room.
   const chosen: typeof files = [];
   let size = 0;
   for (const file of [...files].sort((a, b) => rank(a) - rank(b) || a.bytes.length - b.bytes.length || a.index - b.index)) {
-    if (file.bytes.length <= MAX_DIFF_BYTES && size + file.bytes.length <= maxParts * MAX_DIFF_BYTES) { chosen.push(file); size += file.bytes.length; }
+    const takes = Math.min(file.bytes.length, PART_BYTES);
+    if (file.bytes.length <= MAX_DIFF_BYTES && size + takes <= maxParts * PART_BYTES) { chosen.push(file); size += takes; }
   }
   // Packing in path order can leave room unused at the end of a part, so while the chosen files
   // need more than maxParts parts, the last one chosen is left out.
@@ -96,7 +104,7 @@ export function splitDiff(repository: string, from: string, to: string, paths: s
     const bins: (typeof files)[] = [];
     let room = 0;
     for (const file of [...chosen].sort((a, b) => a.index - b.index)) {
-      if (!bins.length || file.bytes.length > room) { bins.push([]); room = MAX_DIFF_BYTES; }
+      if (!bins.length || file.bytes.length > room) { bins.push([]); room = PART_BYTES; }
       bins.at(-1)!.push(file); room -= file.bytes.length;
     }
     if (bins.length <= maxParts) {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { repository, persist, current } from './helpers.mjs';
 import { previousReview, runClaimReviewAsResult } from '../dist/claim-result.js';
 import { capture, loadReview } from '../dist/snapshot.js';
-import { MAX_DIFF_BYTES, PART_USD, partsWithin, splitDiff, reviewDiff } from '../dist/claim-run.js';
+import { MAX_DIFF_BYTES, PART_BYTES, PART_USD, partsWithin, splitDiff, reviewDiff } from '../dist/claim-run.js';
 import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
 import { renderMarkdown } from '../dist/render.js';
@@ -259,8 +259,10 @@ test('a deleted file is read as its deletion and a lock file is left out, so nei
 });
 
 // mason-v1#4832 is still 1.3 MB without its deletions. Lors asked on 2026-10-08 why a PR that is
-// a bit big cannot be fully reviewed; it can: the diff is split into parts of up to 512 KB, in
-// path order so a folder's files share a part, each part gets its own investigation, and every
+// a bit big cannot be fully reviewed; it can: the diff is split into parts of up to 256 KB (a file
+// up to 512 KB gets a part to itself; on #4832 three 512 KB parts left two unfinished and six 256 KB
+// parts all finished), in path order so a folder's files share a part, each part gets its own
+// investigation, and every
 // file counts as reviewed. Each investigation is told what it holds and to judge completeness by
 // its own diff: told only that files were left out, the model ended every such review unfinished,
 // and an unfinished review claims no file (mason-v1#4832: 0/780 reviewed in 28 turns).
@@ -277,33 +279,35 @@ test('a diff over the limit is reviewed in parts, in path order, and every file 
   withoutJev(t);
   const fixture = repository(t);
   fixture.write('src/huge.ts', rows(300 * 1024));
-  fixture.write('src/big.ts', rows(250 * 1024));
+  fixture.write('src/big.ts', rows(200 * 1024));
   fixture.write('src/mid.ts', rows(150 * 1024));
-  fixture.write('src/small.ts', rows(100 * 1024));
+  fixture.write('src/small.ts', rows(60 * 1024));
   fixture.write('docs/guide.md', rows(100 * 1024));
   fixture.write('test/small.test.ts', rows(10 * 1024));
   const headSha = fixture.commit('large change');
   const directory = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, headSha }) });
   const { main, model: watched } = partsWatcher();
   await runClaimReviewAsResult(directory, { ...profile, maxInputTokens: 1000000 }, undefined, watched);
-  // About 900 KB packs into three parts; read in one, it would have been refused or cut.
-  assert.equal(main.length, 3);
+  // About 850 KB packs into four parts, huge.ts, over a part, in one of its own; read in one, it
+  // would have been refused or cut.
+  assert.equal(main.length, 4);
   const all = ['docs/guide.md', 'src/big.ts', 'src/huge.ts', 'src/mid.ts', 'src/small.ts', 'test/small.test.ts', 'update.ts'];
   const seen = main.map(context => filesOf(context.diff));
   assert.deepEqual(seen.flat(), all, 'each file is in exactly one part, in path order');
+  assert.deepEqual(seen, [['docs/guide.md'], ['src/big.ts'], ['src/huge.ts'], ['src/mid.ts', 'src/small.ts', 'test/small.test.ts', 'update.ts']]);
   for (const [index, context] of main.entries()) {
-    assert.ok(context.diff.length <= MAX_DIFF_BYTES);
-    assert.match(context.scope, new RegExp(`part ${index + 1} of 3 of the change`));
+    assert.ok(context.diff.length <= PART_BYTES || seen[index].length === 1, 'a part over 256 KB is one file');
+    assert.match(context.scope, new RegExp(`part ${index + 1} of 4 of the change`));
     assert.match(context.scope, /judge complete by the changes in this diff alone/);
     assert.ok(context.packet.changedFiles.length === all.length, 'every part sees the whole change listed');
   }
   const { packet, result } = loadReview(directory);
   assert.equal(result.status, 'completed');
   assert.deepEqual(result.coverage.filter(c => c.status !== 'reviewed'), []);
-  assert.ok(result.limitations.some(item => item.startsWith('The diff is over the 512 KB one investigation reads, so it was reviewed in 3 parts')));
+  assert.ok(result.limitations.some(item => item.startsWith('The diff is over the 512 KB one investigation reads, so it was reviewed in 4 parts')));
   assert.equal(assess(packet, result, current()).scope, 'complete');
   assert.notEqual(previousReview(directory), null, 'a push review can build on a review completed in parts');
-  assert.equal(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).parts, 3);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).parts, 4);
 });
 
 // On mason-v1#4832 two of three parts said they had not checked every changed file, and one
@@ -312,10 +316,8 @@ test('a diff over the limit is reviewed in parts, in path order, and every file 
 test('in a review split into parts, only the files of an unfinished part are not reviewed', async t => {
   withoutJev(t);
   const fixture = repository(t);
-  fixture.write('src/huge.ts', rows(300 * 1024));
-  fixture.write('src/big.ts', rows(250 * 1024));
-  fixture.write('src/mid.ts', rows(150 * 1024));
-  fixture.write('src/small.ts', rows(100 * 1024));
+  fixture.write('src/a.ts', rows(300 * 1024));
+  for (const name of ['b', 'c', 'd']) fixture.write(`src/${name}.ts`, rows(100 * 1024));
   const headSha = fixture.commit('large change');
   const directory = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, headSha }) });
   const ends = input => JSON.parse(input.context).scope.includes('part 2 of 3')
@@ -324,7 +326,7 @@ test('in a review split into parts, only the files of an unfinished part are not
   const { packet, result } = loadReview(directory);
   assert.equal(result.status, 'partial');
   assert.deepEqual(Object.fromEntries(result.coverage.map(c => [c.path, c.status])),
-    { 'src/big.ts': 'reviewed', 'src/huge.ts': 'unreviewed', 'src/mid.ts': 'unreviewed', 'src/small.ts': 'reviewed', 'update.ts': 'reviewed' });
+    { 'src/a.ts': 'reviewed', 'src/b.ts': 'unreviewed', 'src/c.ts': 'unreviewed', 'src/d.ts': 'reviewed', 'update.ts': 'reviewed' });
   assert.ok(result.limitations.includes('2 changed file(s) were in parts whose investigation did not finish, so they are not counted as reviewed.'));
   assert.ok(result.limitations.includes('Part 2 of 3: Did not read every changed file.'));
   assert.equal(assess(packet, result, current()).scope, 'partial');
@@ -336,15 +338,15 @@ test('in a review split into parts, only the files of an unfinished part are not
 // one budget, so a big PR never costs more than any review may. Past those parts, or for a file
 // whose own diff is over 512 KB, files are left out in the order Lors chose for reading in part:
 // deletions first, then source before tests and docs, smallest first. Here a budget of four parts
-// meets five 400 KB source files that cannot share parts, so the fifth is left out, as are the doc
-// (no room left) and a 585 KB file (fits no part).
+// meets five 240 KB source files that cannot share parts, so the fifth is left out, as are the doc
+// (no room left) and a 600 KB file (over what one investigation reads).
 test('past the parts its budget covers the lowest-ranked files are left out and listed as not reviewed', async t => {
   withoutJev(t);
   const fixture = repository(t);
   fixture.write('test/old.test.ts', 'export const old = 1;\n');
   const baseSha = fixture.commit('a test to delete');
   fixture.run('rm', '-q', 'test/old.test.ts');
-  for (const name of ['a', 'b', 'c', 'd', 'e']) fixture.write(`src/${name}.ts`, rows(410 * 1024));
+  for (const name of ['a', 'b', 'c', 'd', 'e']) fixture.write(`src/${name}.ts`, rows(240 * 1024));
   fixture.write('src/whole.ts', rows(600 * 1024));
   fixture.write('docs/guide.md', rows(100 * 1024));
   const headSha = fixture.commit('very large change');
