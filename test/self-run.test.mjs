@@ -160,6 +160,33 @@ test('the runner API signs in with GitHub and accepts only valid review records'
   assert.ok(!existsSync(join(extra, 'receipt.json')), 'a member\'s runner cannot write the receipt billing reads');
 });
 
+// An idle runner's poll is held open until work arrives or the poll time runs out, so idle runners
+// cost nothing. Node marks a request destroyed once its body is read, and the handler took that
+// for a runner gone away: every poll returned at once, and on review.atmin.ai (2026-10-08) each
+// idle runner polled about 380 times a second, a third of the server's CPU. Real sleep and real
+// HTTP here, because a fake sleep cannot tell a held poll from one answered at once.
+test('an idle poll is held for the poll time and ends when the runner goes away', async t => {
+  const { runners } = setup(t);
+  const pool = 'p'.repeat(32);
+  let ended = null;
+  const handler = runnerApi(runners, undefined, pool, fetch, undefined, 3000);
+  const server = createServer(async (request, response) => { await handler(request, response); ended = Date.now(); });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const poll = signal => fetch(`http://127.0.0.1:${server.address().port}/api/runner/v1/poll`, { method: 'POST', signal,
+    headers: { Authorization: `Bearer ${pool}`, 'x-atmin-runner-pool': 'hosted-1' }, body: '{}' });
+  let started = Date.now();
+  assert.equal((await (await poll()).json()).offer, null);
+  assert.ok(Date.now() - started >= 2900, `an idle poll was answered after ${Date.now() - started} ms, not held`);
+  ended = null; started = Date.now();
+  const gone = new AbortController();
+  const request = poll(gone.signal).catch(() => {});
+  setTimeout(() => gone.abort(), 200);
+  await request;
+  while (ended === null) await new Promise(done => setTimeout(done, 50));
+  assert.ok(ended - started < 2000, 'a poll whose runner went away stops before its poll time');
+});
+
 // This service's runners send every record of a run, including a failed one's receipt, which
 // billing reads; names that could leave the run directory are refused.
 test('a pool runner uploads every record of its run, and only plain record names', async t => {

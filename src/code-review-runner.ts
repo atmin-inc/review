@@ -215,8 +215,11 @@ async function start(pool: string | undefined, server: string | undefined): Prom
   };
   process.on('SIGINT', signalled); process.on('SIGTERM', signalled);
   say(`Waiting for reviews of ${who} from ${connection.server}.`);
+  // Copies idle for a day are found by reading the cache, which once a minute is often enough.
+  let expired = 0;
   while (!stopping) {
-    if (cache) expireIdleCopies(cache);
+    if (cache && Date.now() - expired >= 60_000) { expireIdleCopies(cache); expired = Date.now(); }
+    const asked = Date.now();
     let offer: Offer | null;
     try { offer = (await call(connection, '/poll', described) as { offer: Offer | null }).offer; }
     catch (error) {
@@ -224,7 +227,8 @@ async function start(pool: string | undefined, server: string | undefined): Prom
       say(`Could not reach atmin (${error instanceof Error ? error.message : 'unknown'}); retrying in 15 s.`);
       await sleep(15_000); continue;
     }
-    if (!offer) continue;
+    // atmin holds a poll until work arrives; one answered at once must not turn into a busy loop.
+    if (!offer) { await sleep(Math.max(0, 1000 - (Date.now() - asked))); continue; }
     say(`Reviewing ${offer.repository}#${offer.pr} (${offer.job})…`);
     const outcome = await runOffer(connection, offer, review, abort.signal);
     say(outcome === 'done' ? `Sent the review of ${offer.repository}#${offer.pr} to atmin.`

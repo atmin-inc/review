@@ -59,11 +59,11 @@ export function runnerApi(runners: Runners, clientId: string | undefined, poolTo
       if (request.method === 'POST' && path === '/api/runner/v1/poll') {
         const input = await body(request, 4096);
         const value = 'value' in input ? input.value as { cli?: unknown; model?: unknown; version?: unknown } : null;
-        if (runner.user === POOL) return await poll(request, response, runners, runner, pollMs, sleep);
+        if (runner.user === POOL) return await poll(response, runners, runner, pollMs, sleep);
         if (!value || !clis.includes(value.cli as Cli) || typeof value.model !== 'string' || !/^[A-Za-z0-9._:/-]{1,80}$/.test(value.model)
           || typeof value.version !== 'string' || !/^[A-Za-z0-9.+-]{1,40}$/.test(value.version)) { json(response, 400, { error: 'Invalid runner description.' }); return true; }
         const described = { cli: value.cli as Cli, model: value.model, version: value.version };
-        return await poll(request, response, runners, runner, pollMs, sleep, () => runners.seen(runner.id, described.cli, described.model, described.version));
+        return await poll(response, runners, runner, pollMs, sleep, () => runners.seen(runner.id, described.cli, described.model, described.version));
       }
       const match = /^\/api\/runner\/v1\/jobs\/([0-9a-f-]{36})\/(heartbeat|result|fail)$/.exec(path);
       if (request.method !== 'POST' || !match) { json(response, 404, { error: 'Not found.' }); return true; }
@@ -93,14 +93,18 @@ export function runnerApi(runners: Runners, clientId: string | undefined, poolTo
   };
 }
 
-async function poll(request: IncomingMessage, response: ServerResponse, runners: Runners, runner: RunnerRow, pollMs: number,
+async function poll(response: ServerResponse, runners: Runners, runner: RunnerRow, pollMs: number,
   sleep: (ms: number) => Promise<unknown>, seen = () => {}): Promise<boolean> {
   const until = Date.now() + pollMs;
+  // A runner that went away closes the response. Not `request.destroyed`: Node destroys a request
+  // once its body is read, which ended every poll at once (2026-10-08: ~380 polls a second per idle runner).
+  let gone = false;
+  response.once('close', () => { gone = true; });
   for (;;) {
     seen();
     const offer = runners.claim(runner);
     if (offer) { log(`${runner.id} claimed review ${offer.job}`); json(response, 200, { offer }); return true; }
-    if (Date.now() >= until || request.destroyed) { json(response, 200, { offer: null }); return true; }
+    if (Date.now() >= until || gone) { json(response, 200, { offer: null }); return true; }
     await sleep(1000);
   }
 }
