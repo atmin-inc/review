@@ -19,7 +19,8 @@ export const docsPages = [
     ['What gets reviewed', <>
       <ul>
         <li>The first review of a pull request reads the whole change. Each later push is reviewed incrementally: only the new commits are read for new findings, and earlier findings are re-checked against the new head. A force-push or a merge from the target branch gets a full review.</li>
-        <li>Automatic reviews pause after five reviewed heads of one pull request. Comment exactly <C>/atmin review</C> on the pull request for a full review; that also restarts the count.</li>
+        <li>Automatic reviews pause after five reviewed heads of one pull request. Comment exactly <C>/atmin review</C> or <C>@atmin review</C> on the pull request for a full review; that also restarts the count.</li>
+        <li>A repository administrator can turn off Automatic reviews in the repository's settings. Then opening, pushing to or readying a pull request starts nothing, and a review starts only when a maintainer comments <C>/atmin review</C> or <C>@atmin review</C>.</li>
         <li>A review reads up to 512 KB of diff. A deleted file counts only as its deletion, and lock files not at all. Past 512 KB, deleted files are read first, then source files before tests and docs, smallest first, and the rest are listed as not reviewed. Binary and lock files are listed but not reviewed and do not affect the rating.</li>
         <li>atmin never runs your repository's code during a review.</li>
       </ul>

@@ -124,7 +124,9 @@ reads the whole change. Each later push is reviewed incrementally: only the comm
 the last completed review are read for new findings, and that review's findings are
 re-checked against the new head. A force-push or a merge from the target branch gets a full
 review. Automatic reviews pause after five reviewed heads of one PR; comment
-`/atmin review` for a full review, which also restarts the count. Reviews are bounded by
+`/atmin review` (or `@atmin review`) for a full review, which also restarts the count. A
+repository's settings can turn automatic reviews off: then opening, pushing to or readying a PR
+starts nothing, and only that comment starts a review. Reviews are bounded by
 `maxReviewsPerDay`. The review reads a deleted file as its deletion (its old content stays readable
 through the source tools) and leaves lock files out; they are listed as not reviewed and, like
 binary files, do not hold the rating open. A diff still over 512 KB is read in part: deleted files
