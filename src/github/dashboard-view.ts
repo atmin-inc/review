@@ -7,7 +7,7 @@ import { assess, reviewSummary, unverified, type ValidationCheck } from '../asse
 import { compareCurrent } from '../snapshot.js';
 import type { ReviewPrice } from '../render.js';
 import type { PilotConfig } from './config.js';
-import type { Store, Job } from './store.js';
+import { counted, type Store, type Job } from './store.js';
 import { creditStart, month, type Plan, type Repositories } from './repositories.js';
 
 // Only this review-owned projection reads worker state. Raw provider responses,
@@ -141,7 +141,7 @@ function artifact(job: Job, file: string): any {
 function failureReason(job: Job): string {
   if (job.state === 'skipped' && job.error === 'auto-paused') return 'Automatic reviews paused after five reviews of this PR. Comment /atmin review for a full review.';
   if (job.state === 'skipped') return 'No review was started for this event. Draft and closed PRs do not trigger automatic reviews.';
-  if (job.state === 'cancelled') return `This run was cancelled. A newer commit or a pause can cancel a review.${job.report === null ? ' It was not counted toward the plan or charged.' : ''}`;
+  if (job.state === 'cancelled') return `This run was cancelled. A newer commit or a pause can cancel a review.${counted(job) ? '' : ' It was not counted toward the plan or charged.'}`;
   if (job.state === 'uncertain') return 'GitHub publication could not be confirmed. Check the PR before requesting another review.';
   if (['queued', 'running', 'dispatched', 'publishing'].includes(job.state)) return 'This review is still in progress. Refresh to check its status.';
   try {

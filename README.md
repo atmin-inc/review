@@ -239,7 +239,8 @@ App and sign in with GitHub. Repository administrators connect up to ten reposit
 per installation and pause or configure each one. Each installation is held to a
 monthly plan: 20 free reviews per UTC calendar month by default. A review counts
 once inference starts, failed runs included; one cancelled before it finished (by a newer
-commit or a pause) posted nothing and is neither counted nor charged. A `/atmin review`
+commit or a pause) posted nothing and is neither counted nor charged, and neither is one that
+asked no model because it had nothing new to read (a draft marked ready unchanged). A `/atmin review`
 comment while a full review of the PR is already running is ignored. Past the limit the PR gets a "review not
 run" comment with the reason and no model call is made. The daily `maxReviewsPerDay`
 cap still applies to every installation together.
