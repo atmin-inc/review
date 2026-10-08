@@ -10,7 +10,7 @@ import { GitHubError, type GitHub, type LivePull } from './api.js';
 import { DEFAULT_MIN_FREE_DISK_MB, freeDiskMb } from './runner.js';
 import { Checks, assessmentCheck } from './checks.js';
 import type { CheckOutput } from './api.js';
-import { Store, AUTO_PAUSE_AFTER, type Job } from './store.js';
+import { Store, AUTO_PAUSE_AFTER, INTERRUPTED, type Job } from './store.js';
 import type { ReviewSettings } from './settings.js';
 import { dailyLimitReached, authorLimitReached, month } from './repositories.js';
 import { InlineReviews } from './inline.js';
@@ -45,6 +45,14 @@ const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the autho
 // merge base, which a new target commit does not alter. On a busy target (mason: main moves
 // every few minutes) comparing the target tip cancelled reviews mid-run.
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
+// Whether a delivered review asked no model: its receipt records no prompt tokens. Unknown counts
+// as asked, so a review is only ever left uncharged on its receipt's word.
+function askedNoModel(artifact: string): boolean {
+  try {
+    const calls = JSON.parse(readFileSync(join(artifact, 'receipt.json'), 'utf8')).calls;
+    return Array.isArray(calls) && calls.length > 0 && calls.every(call => call?.inputTokens === 0);
+  } catch { return false; }
+}
 export class Worker {
   private checks: Checks;
   private inline: InlineReviews;
@@ -143,7 +151,7 @@ export class Worker {
       let report: string;
       let check: CheckOutput = { status: 'completed', conclusion: 'failure', output: { title: 'Review incomplete', summary: 'No completed review is available. See the PR summary.' } };
       // Save interruption context before starting the remote check.
-      this.store.update(job.id, { report: JSON.stringify({ initial, body: '# atmin review — interrupted\n\nReview did not finish.', check }) });
+      this.store.update(job.id, { report: JSON.stringify({ initial, body: `${INTERRUPTED}\n\nReview did not finish.`, check }) });
       await this.checks.publish(job, initial.headSha, { status: 'in_progress', output: { title: 'Review in progress', summary: `Reviewing head ${initial.headSha} against target ${initial.baseSha}.` } });
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       const preferences = this.settings?.current(), now = Date.now();
@@ -162,7 +170,7 @@ export class Worker {
         mkdirSync(artifact, { recursive: true, mode: 0o700 });
         // A crash publishes this honest interruption report; it never starts another model request.
         this.store.update(job.id, { artifact, report: JSON.stringify({ initial, check,
-          body: `# atmin review — interrupted\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.${this.identity(initial, job)}`,
+          body: `${INTERRUPTED}\n\nThe worker stopped before it saved a validated report. No completed review is claimed. A maintainer can explicitly rerun.${this.identity(initial, job)}`,
         }) });
         // Read again: the reservation recorded whose model key the review runs on.
         await this.dispatcher.offer(this.store.get(job.id), own && onOwn ? own : 'pool', artifact, this.store.previous(job));
@@ -194,7 +202,7 @@ export class Worker {
   private async collect(job: Job, outcome: Outcome, signal: AbortSignal): Promise<boolean> {
     const saved = JSON.parse(job.report!) as { initial: LivePull; check: CheckOutput };
     const { initial } = saved;
-    let check = saved.check, report: string, refused = false;
+    let check = saved.check, report: string, refused = false, idle = false;
     if (outcome !== 'done' && job.runner) {
       // Decision (Lors, 2026-10-01): a PR whose own runner does not deliver is reviewed by this
       // service's runners, as any other review.
@@ -225,6 +233,7 @@ export class Worker {
         const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
         report = renderMarkdown(packet, result, assessment, detailsUrl);
         check = assessmentCheck(assessment);
+        idle = askedNoModel(job.artifact!);
       } catch {
         report = '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
       }
@@ -232,7 +241,8 @@ export class Worker {
     this.dispatcher.close(job);
     if (!this.store.current(job, this.owner) || signal.aborted) return false;
     // Persist the report and its exact publication identity before any write.
-    this.store.update(job.id, { state: 'publishing', artifact: refused ? null : job.artifact, report: JSON.stringify({ initial, body: report + this.identity(initial, job), check }) });
+    this.store.update(job.id, { state: 'publishing', artifact: refused ? null : job.artifact, report: JSON.stringify({ initial, body: report + this.identity(initial, job), check, ...(idle ? { idle: true } : {}) }) });
+    if (idle) process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} asked no model; not counted toward the plan or charged\n`);
     return true;
   }
   private async publish(job: Job, signal: AbortSignal): Promise<void> {

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
-import { Store } from '../dist/github/store.js';
+import { Store, COUNTED } from '../dist/github/store.js';
 import { webhook, validSignature } from '../dist/github/webhook.js';
 import { assessmentCheck } from '../dist/github/checks.js';
 import { assess } from '../dist/assessment.js';
@@ -198,8 +198,38 @@ test('new push aborts active investigation and only replacement work can publish
   assert.equal(h.checks[0].conclusion, 'cancelled');
   assert.equal(aborted, true); assert.equal(h.store.get(id).state, 'cancelled');
   assert.equal(h.counts.creates, 0);
+  // It had started inference but posted nothing, so the customer's plan does not count it.
+  assert.notEqual(h.store.get(id).started, null);
+  assert.equal(h.store.db.prepare(`SELECT count(*) AS n FROM jobs WHERE id=? AND ${COUNTED}`).get(id).n, 0, 'the review cancelled before delivery is not counted');
   // The same tick offered the replacement, which a later tick collects and publishes.
   await worker.tick(); assert.equal(h.counts.creates, 1);
+  assert.equal(h.store.authorReviews(1, 0), 1, 'only the delivered replacement is counted');
+});
+
+// A push that changes nothing a review reads, such as marking a draft ready unchanged, used to
+// cost the organization a free review or the minimum price although no model was asked.
+test('a delivered review that asked no model is published but not counted toward the plan; one that asked is', async t => {
+  const h = await harness(t);
+  const receipt = tokens => async (job, signal) => {
+    const directory = await h.runner(job, signal);
+    writeFileSync(join(directory, 'receipt.json'), JSON.stringify({ calls: [{ inputTokens: tokens, outputTokens: 0, meteredUsd: 0 }] }));
+    return directory;
+  };
+  const idle = h.store.enqueue('idle', 1);
+  await new Worker(h.config, h.store, h.github, inline(receipt(0)), 'owner').tick();
+  assert.equal(h.store.get(idle).state, 'completed'); assert.equal(h.counts.creates, 1);
+  assert.equal(JSON.parse(h.store.get(idle).report).idle, true);
+  assert.equal(h.store.authorReviews(1, 0), 0);
+  h.setLive({ headSha: 'a'.repeat(40) });
+  const asked = h.store.enqueue('asked', 1);
+  await new Worker(h.config, h.store, h.github, inline(receipt(1200)), 'owner').tick();
+  assert.equal(h.store.get(asked).state, 'completed'); assert.equal(JSON.parse(h.store.get(asked).report).idle, undefined);
+  assert.equal(h.store.authorReviews(1, 0), 1);
+  // Without a readable receipt the review is counted: it is left uncharged only on its receipt's word.
+  h.setLive({ headSha: 'c'.repeat(40) });
+  const unknown = h.store.enqueue('unknown', 1);
+  await h.worker.tick();
+  assert.equal(h.store.get(unknown).state, 'completed'); assert.equal(h.store.authorReviews(1, 0), 2);
 });
 
 test('pausing an active rerun replaces the pending summary and cancels its check', async t => {

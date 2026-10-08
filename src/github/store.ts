@@ -16,10 +16,22 @@ export type ModelKeyProvider = 'bedrock';
 // Automatic reviews stop after this many distinct reviewed heads of one PR, as CodeRabbit
 // does after five reviewed commits; a `/atmin review` comment starts the count again.
 export const AUTO_PAUSE_AFTER = 5;
-// The started jobs an organization's plan counts and charges: all but those cancelled before
-// they finished (a newer commit, a second trigger or a pause), which post nothing. The daily
-// limits, which cap this service's spend, count those too.
-export const COUNTED = "NOT (state='cancelled' AND report IS NULL)";
+// The heading of the report a review holds from before inference starts until a runner delivers,
+// so a crash or a cancellation never claims a completed review.
+export const INTERRUPTED = '# atmin review — interrupted';
+// The started jobs an organization's plan counts and charges, all but two kinds. A review
+// cancelled before a runner delivered (a newer commit, a second trigger or a pause) still holds
+// the interrupted report, or none, and posts nothing. A review that asked no model (`idle`, set
+// when it is delivered: nothing new to read, as when only the target branch moved or a draft
+// is marked ready unchanged) costs nothing. The daily limits, which cap this service's spend,
+// count both. `counted` is the same rule for one job.
+export const COUNTED = `NOT (state='cancelled' AND (report IS NULL OR coalesce(json_extract(report,'$.body'),'') LIKE '${INTERRUPTED}%'))
+  AND json_extract(report,'$.idle') IS NOT 1`;
+export function counted(job: Pick<Job, 'state' | 'report'>): boolean {
+  const report = job.report === null ? null : JSON.parse(job.report) as { body?: unknown; idle?: unknown };
+  const undelivered = report === null || (typeof report.body === 'string' && report.body.startsWith(INTERRUPTED));
+  return !(job.state === 'cancelled' && undelivered) && report?.idle !== true;
+}
 // One service owns the worker lease. Local CLI controls share the WAL database.
 export class Store {
   readonly db: DatabaseSync;
