@@ -16,6 +16,7 @@ import { dailyLimitReached, authorLimitReached, month } from './repositories.js'
 import { InlineReviews } from './inline.js';
 import { runnerLabel, type Outcome, type RunnerRow } from './runners.js';
 import { Outcomes } from './outcomes.js';
+import { MAX_DIFF_BYTES } from '../claim-run.js';
 
 // Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
 // check turned "Review failed" after its comment was posted, and nothing said which step
@@ -45,6 +46,13 @@ const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the autho
 // merge base, which a new target commit does not alter. On a busy target (mason: main moves
 // every few minutes) comparing the target tip cancelled reviews mid-run.
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
+// Why a run failed, from the failure.json its review child wrote (see task.ts), or null.
+function runFailure(artifact: string): { phase: string; reason: string } | null {
+  try {
+    const value = JSON.parse(readFileSync(join(artifact, 'failure.json'), 'utf8'));
+    return typeof value?.phase === 'string' && typeof value?.reason === 'string' ? { phase: value.phase.slice(0, 20), reason: value.reason.slice(0, 200) } : null;
+  } catch { return null; }
+}
 // Whether a delivered review asked no model: its receipt records no prompt tokens. Unknown counts
 // as asked, so a review is only ever left uncharged on its receipt's word.
 function askedNoModel(artifact: string): boolean {
@@ -217,10 +225,17 @@ export class Worker {
       report = `# atmin review — review not run\n\n${reserved}`;
       refused = true;
     } else if (outcome !== 'done') {
-      process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId}: hosted runner ${outcome}\n`);
-      report = outcome === 'unclaimed'
+      const failure = job.artifact ? runFailure(job.artifact) : null;
+      process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId}: hosted runner ${outcome}${failure ? ` in ${failure.phase}: ${failure.reason}` : ''}\n`);
+      // A diff over the limit is refused before any model is asked, so it is not counted or
+      // charged, and the PR is told why rather than that the review failed.
+      idle = failure?.reason.startsWith('Diff exceeds') ?? false;
+      if (idle) check = { status: 'completed', conclusion: 'failure', output: { title: 'Review not run: diff too large', summary: `The diff is over the ${MAX_DIFF_BYTES / 1024} KB that atmin reviews. See the PR summary.` } };
+      report = idle
+        ? `# atmin review — review not run\n\nThis PR's diff is over the ${MAX_DIFF_BYTES / 1024} KB that atmin reviews, so no model was asked and nothing is charged. A later push whose diff fits is reviewed as usual.`
+        : outcome === 'unclaimed'
         ? '# atmin review — review failed\n\nNo reviewer was free to take this review. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`.'
-        : '# atmin review — review failed\n\nSource capture or investigation did not produce a validated report. No successful review or merge approval is claimed. A maintainer may request a new run with `/atmin review`; it uses a new budget reservation.';
+        : `# atmin review — review failed\n\nSource capture or investigation did not produce a validated report.${failure ? ` Cause (${failure.phase}): ${failure.reason}.` : ''} No successful review or merge approval is claimed. A maintainer may request a new run with \`/atmin review\`; it uses a new budget reservation.`;
     } else {
       try {
         const packet = parsePacket(JSON.parse(readFileSync(join(job.artifact!, 'packet.json'), 'utf8')));

@@ -11,6 +11,7 @@ import { assess } from '../dist/assessment.js';
 import { readVerification } from '../dist/verification.js';
 import { runView } from '../dist/github/dashboard-view.js';
 import { meteredCost, price, reservedCost } from '../dist/investigation.js';
+import { child, childEnvironment } from '../dist/github/runner.js';
 
 // The GitHub worker and the `review` command publish from result.json. These tests hold
 // the bridge to what the worker needs: a confirmed claim becomes a finding the existing
@@ -211,6 +212,16 @@ test('a 300 KB diff is reviewed and a diff over 512 KB is refused before spendin
   await assert.rejects(runClaimReviewAsResult(huge, { ...profile, maxInputTokens: 1000000 }, undefined,
     { ...model([]), async respond() { asked = true; } }), /Diff exceeds 512 KB/);
   assert.equal(asked, false);
+  // The review child on a runner leaves the cause in the run's failure.json, so the PR and the
+  // logs can say why, not only that the review failed (mason-v1#4832, 2026-10-07).
+  const home = mkdtempSync(join(huge, 'home-')), profilePath = join(home, 'profile.json');
+  writeFileSync(profilePath, JSON.stringify({ ...profile, maxInputTokens: 1000000 }));
+  await assert.rejects(child(['investigate', huge, profilePath], childEnvironment(home, { OPENAI_API_KEY: 'unused' }), AbortSignal.timeout(60_000), 60_000));
+  assert.deepEqual(JSON.parse(readFileSync(join(huge, 'failure.json'), 'utf8')), { phase: 'investigate', reason: 'Diff exceeds 512 KB investigation limit' });
+  // Any other failure leaves only the error's kind: its message may carry source or provider text.
+  rmSync(join(huge, 'failure.json'));
+  await assert.rejects(child(['investigate', huge, join(home, 'missing.json')], childEnvironment(home, {}), AbortSignal.timeout(60_000), 60_000));
+  assert.deepEqual(JSON.parse(readFileSync(join(huge, 'failure.json'), 'utf8')), { phase: 'investigate', reason: 'Error' });
 });
 
 // A push after a completed review: the model reads only the commits since, and the earlier

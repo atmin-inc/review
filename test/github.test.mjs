@@ -375,6 +375,29 @@ test('engine failures publish an honest failure summary; no successful review is
   assert.match(h.comment.body, /review failed/); assert.doesNotMatch(h.comment.body, /secret-provider-body/);
 });
 
+// mason-v1#4832 (6.5 MB of diff) failed as "review failed", with the cause lost.
+test('a diff over the limit is refused on the PR as too large, not counted, and its cause logged; other failures say theirs', async t => {
+  const h = await harness(t);
+  const failing = failure => async job => { writeFileSync(join(job.artifact, 'failure.json'), JSON.stringify(failure)); throw new Error('child failed'); };
+  const logged = []; const write = process.stderr.write;
+  process.stderr.write = (text, ...rest) => { logged.push(String(text)); return write.call(process.stderr, text, ...rest); };
+  t.after(() => { process.stderr.write = write; });
+  const huge = h.store.enqueue('huge', 1);
+  await new Worker(h.config, h.store, h.github, inline(failing({ phase: 'investigate', reason: 'Diff exceeds 512 KB investigation limit' })), 'owner').tick();
+  assert.match(h.comment.body, /review not run/); assert.match(h.comment.body, /over the 512 KB that atmin reviews/);
+  assert.equal(JSON.parse(h.store.get(huge).report).idle, true);
+  assert.equal(h.checks.at(-1).output.title, 'Review not run: diff too large');
+  assert.equal(h.store.authorReviews(1, 0), 0, 'no model was asked, so the plan does not count it');
+  assert.ok(logged.some(line => line.includes(`review ${huge} `) && line.includes('in investigate: Diff exceeds 512 KB investigation limit')));
+  h.setLive({ headSha: 'a'.repeat(40) });
+  const other = h.store.enqueue('other', 1);
+  await new Worker(h.config, h.store, h.github, inline(failing({ phase: 'capture', reason: 'PR changed during capture; prepare a new snapshot' })), 'owner').tick();
+  assert.match(h.comment.body, /review failed/); assert.match(h.comment.body, /Cause \(capture\): PR changed during capture/);
+  assert.equal(h.checks.at(-1).output.title, 'Review incomplete');
+  assert.equal(h.store.authorReviews(1, 0), 1, 'a failure after starting still counts');
+  assert.equal(JSON.parse(h.store.get(other).report).idle, undefined);
+});
+
 test('child environments omit controller secrets and separate source/model credentials', () => {
   const captured = childEnvironment('/private/job', { GH_TOKEN: 'read-token' });
   const inference = childEnvironment('/private/job', { OPENROUTER_API_KEY: 'model-key' });
