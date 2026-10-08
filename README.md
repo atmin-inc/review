@@ -125,7 +125,10 @@ the last completed review are read for new findings, and that review's findings 
 re-checked against the new head. A force-push or a merge from the target branch gets a full
 review. Automatic reviews pause after five reviewed heads of one PR; comment
 `/atmin review` for a full review, which also restarts the count. Reviews are bounded by
-`maxReviewsPerDay`. Diffs over 512 KB are not reviewed. Maintainers can comment
+`maxReviewsPerDay`. Diffs over 512 KB are not reviewed: the PR gets a "review not run" comment
+saying so, and the review is neither counted nor charged. A failed review's comment and the
+service log name the phase that failed and its cause: one of atmin's own messages about its
+limits or input, or else only the error's kind, so no source or provider text is shown. Maintainers can comment
 `/atmin review` to rerun. Use a dedicated host user. Source review does not execute repository code.
 Optional [isolated checks](docs/isolated-checks.md) run selected commands and
 verify proposed patches on a configured Linux worker. This private pilot is not
