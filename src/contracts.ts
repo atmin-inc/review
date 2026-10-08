@@ -39,6 +39,10 @@ export interface ChangedFile {
   change: 'added' | 'modified' | 'deleted';
   kind: 'text' | 'binary' | 'symlink' | 'submodule';
 }
+// Lock files are generated from a manifest the review reads, and are often the largest text
+// in a change, so the claim pass leaves them out and lists them as not reviewed, like binary
+// files (Lors chose this on 2026-10-08).
+export const lockFile = (path: string) => /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|go\.sum|[^/]+\.lockb?)$/.test(path);
 export interface Packet {
   schemaVersion: 1;
   repository: string;

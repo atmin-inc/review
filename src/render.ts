@@ -1,4 +1,4 @@
-import { PRIORITIES, QUALITY_CRITERIA, type EvidenceAnchor, type Finding, type Packet, type Result } from './contracts.js';
+import { lockFile, PRIORITIES, QUALITY_CRITERIA, type EvidenceAnchor, type Finding, type Packet, type Result } from './contracts.js';
 import { reviewSummary, type Assessment } from './assessment.js';
 import type { Verification } from './verification.js';
 import { criterionLabels } from './rating.js';
@@ -70,12 +70,13 @@ export function renderMarkdown(packet: Packet, result: Result, assessment: Asses
     : score === 5 && ['passed', 'not-applicable'].includes(assessment.validation) ? '5' : '3';
   const reviewed = result.coverage.filter(c => c.status === 'reviewed').length;
   const binary = packet.changedFiles.filter(file => file.kind === 'binary').length;
+  const locks = packet.changedFiles.filter(file => file.kind !== 'binary' && lockFile(file.path)).length;
   const validation = { passed: 'Required checks passed', failed: 'Required checks failed', missing: 'Required checks not verified', 'not-applicable': 'No required checks apply' }[assessment.validation];
   const lines = [
     `## ${icon(status, 24)} ${assessment.rating.score === null ? 'Not rated' : `${assessment.rating.score}/5`} — ${headline}`, '',
     '| P0 | P1 | P2 | P3 | P4 |', '| :---: | :---: | :---: | :---: | :---: |',
     `| ${PRIORITIES.map(p => { const n = assessment.findings.filter(f => f.priority === p).length; return n ? `**${n}**` : '0'; }).join(' | ')} |`, '',
-    `**${reviewed}/${packet.changedFiles.length - binary} files reviewed**${binary ? ` · ${binary} binary ${binary === 1 ? 'file' : 'files'} not reviewed` : ''} · ${validation}.`, '',
+    `**${reviewed}/${packet.changedFiles.length - binary - locks} files reviewed**${binary ? ` · ${binary} binary ${binary === 1 ? 'file' : 'files'} not reviewed` : ''}${locks ? ` · ${locks} lock ${locks === 1 ? 'file' : 'files'} not reviewed` : ''} · ${validation}.`, '',
     `**${e(assessment.rating.policy.label)}** · ${e(assessment.rating.reasons.at(-1)!)}`, '',
   ];
   if (assessment.freshness.status !== 'current') lines.push(`**${assessment.freshness.status === 'superseded' ? 'Historical result' : 'Freshness unverified'}:** ${e(assessment.freshness.reason)}`, '');

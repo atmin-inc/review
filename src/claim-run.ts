@@ -1,6 +1,6 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadReview, sourceText } from './snapshot.js';
+import { git, loadReview, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
 import { investigateClaims, type ClaimInvestigation } from './investigator.js';
 import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptions } from './lifecycle.js';
@@ -14,7 +14,7 @@ import { parseLocation, type Claim } from './claim.js';
 import { calledCode, MAX_CALLED_CODE_BYTES } from './callees.js';
 import { failureExcerpt } from './failure-excerpt.js';
 import type { Rung } from './evidence.js';
-import type { Packet } from './contracts.js';
+import { lockFile, type Packet } from './contracts.js';
 
 // The whole lifecycle over one prepared snapshot: a wide pass emits claims, a separate
 // pass settles them against the same frozen revision, and code composes the verdict.
@@ -36,6 +36,16 @@ export type CrossFamilySource = 'none' | 'jev';
 // so a diff counts about 1.2 times its size (measured on a 471 KB mason-v1 diff). The
 // production profile allows 1,000,000, under Luna's 1.05M-token window (`profiles/review-luna-openrouter.json`).
 export const MAX_DIFF_BYTES = 512 * 1024;
+
+// The diff the claim pass reads: a deleted file as its header only (git's --irreversible-delete;
+// the source tools still read its old content on the base side), and no lock files. Lors chose
+// this on 2026-10-08 after mason-v1#4832, whose 6.5 MB diff was mostly 498 deleted files.
+// `paths` is every changed path; the rest are named one by one because git runs with literal
+// pathspecs here (GIT_LITERAL_PATHSPECS), which turns off `:(exclude)`.
+export function reviewDiff(repository: string, from: string, to: string, paths: string[]): Buffer {
+  const read = paths.filter(path => !lockFile(path));
+  return read.length ? git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', from, to, '--', ...read]) : Buffer.alloc(0);
+}
 
 // An incremental review reads only the commits pushed since an earlier review of the same
 // PR, and re-verifies that review's surviving claims against the new revision instead of
@@ -151,7 +161,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const sourceOf = (path: string) => sourceText(repository, packet.headSha, path);
 
   const full = readFileSync(join(directory, 'change.diff'));
-  const diff = incremental ? incremental.diff : full;
+  const diff = incremental ? incremental.diff : reviewDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path));
   if (diff.length > MAX_DIFF_BYTES) throw new Error('Diff exceeds 512 KB investigation limit');
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));

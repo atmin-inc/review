@@ -8,6 +8,7 @@ import { capture, loadReview } from '../dist/snapshot.js';
 import { MAX_DIFF_BYTES } from '../dist/claim-run.js';
 import { failurePathInstruction } from '../dist/investigator.js';
 import { assess } from '../dist/assessment.js';
+import { renderMarkdown } from '../dist/render.js';
 import { readVerification } from '../dist/verification.js';
 import { runView } from '../dist/github/dashboard-view.js';
 import { meteredCost, price, reservedCost } from '../dist/investigation.js';
@@ -222,6 +223,37 @@ test('a 300 KB diff is reviewed and a diff over 512 KB is refused before spendin
   rmSync(join(huge, 'failure.json'));
   await assert.rejects(child(['investigate', huge, join(home, 'missing.json')], childEnvironment(home, {}), AbortSignal.timeout(60_000), 60_000));
   assert.deepEqual(JSON.parse(readFileSync(join(huge, 'failure.json'), 'utf8')), { phase: 'investigate', reason: 'Error' });
+});
+
+// mason-v1#4832's 6.5 MB diff was mostly the old content of 498 deleted files. Lors chose on
+// 2026-10-08 that the claim pass reads a deletion as its header only and leaves lock files out,
+// so such a PR fits, and a lock file is listed as not reviewed without holding the rating open.
+test('a deleted file is read as its deletion and a lock file is left out, so neither counts toward the limit', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const rows = bytes => `export const rows = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(Math.ceil(bytes / 40))}];\n`;
+  fixture.write('legacy.ts', rows(MAX_DIFF_BYTES));
+  fixture.write('pnpm-lock.yaml', 'lockfileVersion: 9\n');
+  const baseSha = fixture.commit('legacy code and a lock file');
+  fixture.run('rm', '-q', 'legacy.ts');
+  fixture.write('pnpm-lock.yaml', `lockfileVersion: 9\n${rows(128 * 1024)}`);
+  fixture.write('update.ts', 'export function update() {\n  return "removed";\n}\n');
+  const headSha = fixture.commit('delete legacy code');
+  const directory = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, baseSha, headSha }) });
+  assert.ok(readFileSync(join(directory, 'change.diff')).length > MAX_DIFF_BYTES);
+  const { seen, model: watched } = watching([done()]);
+  await runClaimReviewAsResult(directory, { ...profile, maxInputTokens: 1000000 }, undefined, watched);
+  const { diff } = seen[0];
+  assert.ok(diff.length < 1024, `the model read ${diff.length} bytes of diff`);
+  assert.match(diff, /diff --git a\/legacy\.ts b\/legacy\.ts\ndeleted file mode/);
+  assert.match(diff, /\+  return "removed";/);
+  assert.doesNotMatch(diff, /0123456789abcdef|pnpm-lock/);
+  const { packet, result } = loadReview(directory);
+  const status = Object.fromEntries(result.coverage.map(c => [c.path, c.status]));
+  assert.deepEqual(status, { 'legacy.ts': 'reviewed', 'pnpm-lock.yaml': 'unreviewed', 'update.ts': 'reviewed' });
+  const assessment = assess(packet, result, current());
+  assert.equal(assessment.scope, 'complete');
+  assert.match(renderMarkdown(packet, result, assessment), /\*\*2\/2 files reviewed\*\* · 1 lock file not reviewed/);
 });
 
 // A push after a completed review: the model reads only the commits since, and the earlier
