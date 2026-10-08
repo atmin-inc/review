@@ -21,9 +21,10 @@ import { lockFile, type Packet } from './contracts.js';
 // The two passes share no state but the claims, which is the point.
 // `claims` is everything verified: carried claims first on an incremental run, then the
 // ones this run emitted, which are also `investigation.claims`.
-// `parts` is how many investigations the diff was split across, and `unread` lists the changed
-// paths left out of every part (see splitDiff).
-export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification; parts: number; unread: string[] }
+// `parts` is how many investigations the diff was split across, `unread` lists the changed
+// paths left out of every part (see splitDiff), and `unfinished` the paths of parts whose
+// investigation did not finish complete.
+export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification; parts: number; unread: string[]; unfinished: string[] }
 
 // How rung 3 is answered for this run. 'none' leaves it silent, which is what every
 // run before this one did. 'jev' asks the TypeSafe API once per surviving claim,
@@ -66,9 +67,10 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
 export const PART_USD = 0.15;
 export const partsWithin = (maxUsd: number) => Math.max(1, Math.floor(maxUsd / PART_USD + 1e-9));
 const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
-export function splitDiff(repository: string, from: string, to: string, paths: string[], maxParts: number): { parts: Buffer[]; unread: string[] } {
+export interface DiffPart { diff: Buffer; paths: string[] }
+export function splitDiff(repository: string, from: string, to: string, paths: string[], maxParts: number): { parts: DiffPart[]; unread: string[] } {
   const diff = reviewDiff(repository, from, to, paths);
-  if (diff.length <= MAX_DIFF_BYTES) return { parts: diff.length ? [diff] : [], unread: [] };
+  if (diff.length <= MAX_DIFF_BYTES) return { parts: diff.length ? [{ diff, paths: paths.filter(path => !lockFile(path)) }] : [], unread: [] };
   const names = git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', '--name-only', '-z', from, to, '--',
     ...paths.filter(path => !lockFile(path))]).toString('utf8').split('\0').filter(Boolean);
   const starts: number[] = [], next = Buffer.from('\ndiff --git ');
@@ -90,15 +92,16 @@ export function splitDiff(repository: string, from: string, to: string, paths: s
   // Packing in path order can leave room unused at the end of a part, so while the chosen files
   // need more than maxParts parts, the last one chosen is left out.
   for (;;) {
-    const bins: Buffer[][] = [];
+    const bins: (typeof files)[] = [];
     let room = 0;
     for (const file of [...chosen].sort((a, b) => a.index - b.index)) {
       if (!bins.length || file.bytes.length > room) { bins.push([]); room = MAX_DIFF_BYTES; }
-      bins.at(-1)!.push(file.bytes); room -= file.bytes.length;
+      bins.at(-1)!.push(file); room -= file.bytes.length;
     }
     if (bins.length <= maxParts) {
       const read = new Set(chosen.map(file => file.index));
-      return { parts: bins.map(bin => Buffer.concat(bin)), unread: files.filter(file => !read.has(file.index)).map(file => file.path) };
+      return { parts: bins.map(bin => ({ diff: Buffer.concat(bin.map(file => file.bytes)), paths: bin.map(file => file.path) })),
+        unread: files.filter(file => !read.has(file.index)).map(file => file.path) };
     }
     chosen.pop();
   }
@@ -286,7 +289,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   });
   // One part's investigation within its share of the review's budget, so the parts together
   // never spend more than one review may.
-  const investigate = async (bytes: Buffer, index: number) => {
+  const investigate = async ({ diff: bytes }: DiffPart, index: number) => {
     const diff = bytes.toString('utf8');
     const { called, omitted: uncalled } = calledCode(diff, revisions.head);
     const context = contextFor(diff, note(index), called);
@@ -306,6 +309,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const results = parts.length ? await Promise.all(parts.map(investigate)) : [{ investigation: idle(), uncalled: [] }];
   const investigation = results.length === 1 ? results[0]!.investigation : acrossParts(results.map(result => result.investigation));
   const uncalled = [...new Set(results.flatMap(result => result.uncalled))];
+  const unfinished = parts.flatMap((part, index) => results[index]!.investigation.complete && results[index]!.investigation.stopReason === 'finished' ? [] : part.paths);
   // Earlier claims first, so a claim the model records again keeps the earlier wording
   // and checks; the verifier is then handed one list and cannot tell them apart.
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
@@ -330,7 +334,8 @@ export async function runClaimReview(directory: string, profile: Profile,
   // Both are written before verification, because a verification that throws must not
   // take the claims and the spend down with it: seen 2026-09-23, when a grep overflow did
   // exactly that on a live run.
-  persist('telemetry.json', { ...investigation.telemetry, parts: parts.length, unread: unread.length, stopReason: investigation.stopReason,
+  persist('telemetry.json', { ...investigation.telemetry, parts: parts.length, unread: unread.length,
+    unfinishedParts: results.filter(({ investigation: part }) => !part.complete || part.stopReason !== 'finished').length, stopReason: investigation.stopReason,
     complete: investigation.complete, claims: investigation.claims.length, spentUsd: investigation.spentUsd,
     toolErrors: investigation.toolErrors, limitations: investigation.limitations });
 
@@ -356,7 +361,7 @@ export async function runClaimReview(directory: string, profile: Profile,
       : `The cross-family rung did not reach ${unreached.length} of ${claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
   }
   persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
-  return { claims, investigation, verification, parts: parts.length, unread };
+  return { claims, investigation, verification, parts: parts.length, unread, unfinished };
 }
 
 // The same claims, verified again with the cross-family rung switched off. Emission is

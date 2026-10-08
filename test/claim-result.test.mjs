@@ -306,6 +306,32 @@ test('a diff over the limit is reviewed in parts, in path order, and every file 
   assert.equal(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).parts, 3);
 });
 
+// On mason-v1#4832 two of three parts said they had not checked every changed file, and one
+// unfinished investigation zeroed the coverage of all three. Each part now claims its own files:
+// a part that finished complete counts as reviewed, one that did not is listed as not reviewed.
+test('in a review split into parts, only the files of an unfinished part are not reviewed', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  fixture.write('src/huge.ts', rows(300 * 1024));
+  fixture.write('src/big.ts', rows(250 * 1024));
+  fixture.write('src/mid.ts', rows(150 * 1024));
+  fixture.write('src/small.ts', rows(100 * 1024));
+  const headSha = fixture.commit('large change');
+  const directory = persist({ ...fixture, ...capture(fixture.source, { ...fixture.state, headSha }) });
+  const ends = input => JSON.parse(input.context).scope.includes('part 2 of 3')
+    ? action('end_investigation', { complete: false, limitations: ['Did not read every changed file.'] }) : done();
+  await runClaimReviewAsResult(directory, { ...profile, maxInputTokens: 1000000 }, undefined, model([ends, ends, ends]));
+  const { packet, result } = loadReview(directory);
+  assert.equal(result.status, 'partial');
+  assert.deepEqual(Object.fromEntries(result.coverage.map(c => [c.path, c.status])),
+    { 'src/big.ts': 'reviewed', 'src/huge.ts': 'unreviewed', 'src/mid.ts': 'unreviewed', 'src/small.ts': 'reviewed', 'update.ts': 'reviewed' });
+  assert.ok(result.limitations.includes('2 changed file(s) were in parts whose investigation did not finish, so they are not counted as reviewed.'));
+  assert.ok(result.limitations.includes('Part 2 of 3: Did not read every changed file.'));
+  assert.equal(assess(packet, result, current()).scope, 'partial');
+  assert.equal(previousReview(directory), null);
+  assert.equal(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).unfinishedParts, 1);
+});
+
 // A review splits into as many parts as its budget covers at PART_USD each, the parts sharing the
 // one budget, so a big PR never costs more than any review may. Past those parts, or for a file
 // whose own diff is over 512 KB, files are left out in the order Lors chose for reading in part:
@@ -363,7 +389,8 @@ test('a diff read in part reads every deletion first', t => {
   // Read smallest first after the deletion, d and then a and b fit; c does not.
   assert.deepEqual(unread, ['src/c.ts']);
   assert.equal(parts.length, 4);
-  assert.match(parts.at(-1).toString('utf8'), /^diff --git a\/test\/old\.test\.ts b\/test\/old\.test\.ts\ndeleted file mode/);
+  assert.match(parts.at(-1).diff.toString('utf8'), /^diff --git a\/test\/old\.test\.ts b\/test\/old\.test\.ts\ndeleted file mode/);
+  assert.deepEqual(parts.map(part => part.paths), [['src/a.ts'], ['src/b.ts'], ['src/d.ts'], ['test/old.test.ts']]);
 });
 
 // A push after a completed review: the model reads only the commits since, and the earlier

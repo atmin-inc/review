@@ -22,7 +22,8 @@ const CATEGORY: Record<ClaimType, Finding['category']> = {
 const clip = (value: string, limit = 16000): string => value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 
 export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: string; rule: string; limitations: string[];
-  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; parts?: number; unread?: string[] }
+  complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; parts?: number; unread?: string[];
+  unfinished?: string[] }
 
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
@@ -36,13 +37,19 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   // parts that each are), so every changed text file but a lock file was in front of the model,
   // a deleted one as its deletion. That is what "reviewed" means here, and only for a run that
   // finished: a run that stopped early claims no coverage at all.
-  // Files left out of every part are not reviewed.
+  // Files left out of every part are not reviewed. In a review split into parts, each part
+  // claims its own files only if its investigation finished complete; `unfinished` lists the
+  // files of the parts that did not (mason-v1#4832: one unfinished part had zeroed all three).
   const unread = new Set(run.unread ?? []);
+  const unfinished = new Set(run.unfinished ?? []);
   const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path) && !unread.has(file.path);
+  const covered = (file: Packet['changedFiles'][number]) => read(file) && (completed
+    || (run.unfinished !== undefined && run.stopReason === 'finished' && !unfinished.has(file.path)));
   if ((run.parts ?? 1) > 1) limitations.push(`The diff is over the ${MAX_DIFF_BYTES / 1024} KB one investigation reads, so it was reviewed in ${run.parts} parts, files in path order, each investigated on its own; a defect visible only across two parts is less likely to be found.`);
   if (unread.size) limitations.push(`The diff is over the parts of ${MAX_DIFF_BYTES / 1024} KB this review's budget covers, or a file's own diff is over ${MAX_DIFF_BYTES / 1024} KB, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until the parts were full.`);
-  const text = packet.changedFiles.filter(read);
-  if (completed && text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',
+  if (!completed && unfinished.size) limitations.push(`${unfinished.size} changed file(s) were in parts whose investigation did not finish, so they are not counted as reviewed.`);
+  const text = packet.changedFiles.filter(covered);
+  if (text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',
     summary: 'The change diff for this path was in the claim pass context; a deleted file\'s as its deletion, without its old content.',
     anchors: text.map(file => ({ path: file.path, side: file.change === 'deleted' ? 'base' : 'head', line: null })) });
 
@@ -98,7 +105,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${merged ? `${merged} merged into a finding on the same line, ` : ''}${withheld.length} withheld as minor, `
       + `${counts.refuted} refuted, ${counts.inconclusive} inconclusive. Policy verdict ${run.verdict} (rule ${run.rule}).`,
     coverage: packet.changedFiles.map(file => ({ path: file.path,
-      status: completed && read(file) ? 'reviewed' : 'unreviewed', evidenceIds: completed && read(file) ? ['change-diff'] : [] })),
+      status: covered(file) ? 'reviewed' : 'unreviewed', evidenceIds: covered(file) ? ['change-diff'] : [] })),
     validation: packet.policy.requiredChecks.map(name => ({ name, status: 'not-run', reason: 'Required validation has not run.', evidenceIds: [] })),
     evidence, findings,
     limitations: limitations.length ? limitations.map(item => clip(item)) : ['No repository code was executed.'],
@@ -207,6 +214,6 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,
     rule: review.verification.decision.rule, limitations, complete: review.investigation.complete,
     stopReason: review.investigation.stopReason, model: profile.model, titles: titling.titles,
-    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}), parts: review.parts, unread: review.unread }));
+    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}), parts: review.parts, unread: review.unread, ...(review.parts > 1 ? { unfinished: review.unfinished } : {}) }));
   return review;
 }
