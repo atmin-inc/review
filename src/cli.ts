@@ -17,7 +17,7 @@ import { costReport } from './cost-report.js';
 const help = `atmin review — source investigation and evidence tools
 
   atmin-review [review] <https://github.com/owner/repo/pull/number> --profile <profile.json> [--out <new-directory>]
-  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>] [--cross-family none|jev] [--question-refutations] [--question-conclusion] [--show-minor] [--contract-pass]
+  atmin-review claim-review <https://github.com/owner/repo/pull/number|directory> --profile <profile.json> [--out <new-directory>] [--cross-family none|jev] [--question-refutations] [--question-conclusion] [--show-minor] [--contract-pass] [--literal-misses-unsettled]
   atmin-review claim-ablate <directory> [--rung symbolic|cross_family_llm]
   atmin-review prepare <https://github.com/owner/repo/pull/number> [--out <new-directory>]
   atmin-review render <directory> [--format markdown|json] [--check-current] [--out <new-file>]
@@ -46,6 +46,8 @@ propositions test the premises; nothing else tests the conclusion, which is how 
 whose propositions merely restate the diff is confirmed. The gate is agreement, so a
 hedged claim the model will not affirm becomes inconclusive. Off by default; it costs a
 call per surviving claim.
+--literal-misses-unsettled stops a literal text that is not found from refuting a claim; the
+step goes to rung 3 instead. Off by default and under measurement.
 --contract-pass adds a third investigation pass on values that cross into code the change
 does not touch: payload keys, formats, arguments, allowed values, limits. Off by default
 and under measurement; it costs about one more pass.
@@ -67,7 +69,7 @@ function localModel(profile: Profile) {
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({ allowPositionals: true, strict: true,
-    options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' }, 'cross-family': { type: 'string' }, 'question-refutations': { type: 'boolean' }, 'question-conclusion': { type: 'boolean' }, 'show-minor': { type: 'boolean' }, 'contract-pass': { type: 'boolean' } } });
+    options: { help: { type: 'boolean', short: 'h' }, out: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, rung: { type: 'string' }, 'check-current': { type: 'boolean' }, 'cross-family': { type: 'string' }, 'question-refutations': { type: 'boolean' }, 'question-conclusion': { type: 'boolean' }, 'show-minor': { type: 'boolean' }, 'contract-pass': { type: 'boolean' }, 'literal-misses-unsettled': { type: 'boolean' } } });
   if (values.help || !positionals.length) { process.stdout.write(help); return; }
   // `atmin review <PR URL>` reaches this binary as `atmin-review <PR URL>`: a bare pull request
   // URL is the review command.
@@ -75,7 +77,7 @@ async function main(): Promise<void> {
   const [operation, input] = positionals;
   if (!input || positionals.length !== 2) throw new Error('Expected one command and one input; use --help');
   if (operation === 'claim-ablate') {
-    if (values.profile || values.format || values['check-current'] || values.out || values['cross-family'] || values['question-refutations'] || values['question-conclusion'] || values['show-minor'] || values['contract-pass']) throw new Error('claim-ablate takes only a directory and --rung');
+    if (values.profile || values.format || values['check-current'] || values.out || values['cross-family'] || values['question-refutations'] || values['question-conclusion'] || values['show-minor'] || values['contract-pass'] || values['literal-misses-unsettled']) throw new Error('claim-ablate takes only a directory and --rung');
     const rung = values.rung ?? 'cross_family_llm';
     if (rung !== 'symbolic' && rung !== 'cross_family_llm') throw new Error('Measurable rungs are symbolic and cross_family_llm');
     process.stdout.write(renderContribution(ablate(resolve(input), rung)));
@@ -94,6 +96,7 @@ async function main(): Promise<void> {
       const { claims, investigation, verification } = await runClaimReview(directory, profile, undefined, controller.signal, undefined, crossFamily,
         { questionRefutations: values['question-refutations'] === true,
           questionConclusion: values['question-conclusion'] === true,
+          literalMissesUnsettled: values['literal-misses-unsettled'] === true,
           ...(values['show-minor'] ? { withhold: [] } : {}) }, {}, undefined, { contracts: values['contract-pass'] === true });
       process.stdout.write(renderClaimReview(claims, verification, investigation));
       process.stderr.write(`Private review artifacts: ${directory}\n`);
@@ -131,6 +134,7 @@ async function main(): Promise<void> {
   if (values['cross-family']) throw new Error('--cross-family is only valid for claim-review');
   if (values['question-refutations']) throw new Error('--question-refutations is only valid for claim-review');
   if (values['contract-pass']) throw new Error('--contract-pass is only valid for claim-review');
+  if (values['literal-misses-unsettled']) throw new Error('--literal-misses-unsettled is only valid for claim-review');
   if (values['question-conclusion']) throw new Error('--question-conclusion is only valid for claim-review');
   if (operation === 'cost') {
     if (values.format || values['check-current']) throw new Error('cost accepts only --out');
