@@ -2,7 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git, loadReview, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
-import { investigateClaims, type ClaimInvestigation } from './investigator.js';
+import { investigateClaims, type ClaimInvestigation, type ClaimTelemetry } from './investigator.js';
 import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptions } from './lifecycle.js';
 import { contributionOf, recordedRung, type RungContribution } from './ablation.js';
 import { askJev } from './jev.js';
@@ -162,9 +162,10 @@ export function targetGuidance(repository: string, packet: Packet): { guidance: 
   return { guidance, omitted };
 }
 
-// Both passes as one investigation: a claim either recorded counts once, the run is
-// complete only if both were, and the second pass's limitations say which pass they are from.
-function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: number): ClaimInvestigation {
+// Two passes as one investigation: a claim either recorded counts once, the run is
+// complete only if both were, and the focused pass's limitations say which pass they are from.
+// `own` is the focused pass's share of the telemetry, so what it adds is measured on its own.
+function combined(main: ClaimInvestigation, focus: ClaimInvestigation, pass: string, own: Partial<ClaimTelemetry>): ClaimInvestigation {
   const ids = new Set(main.claims.map(claim => claim.claimId));
   const byName = { ...main.telemetry.toolCallsByName };
   for (const [name, count] of Object.entries(focus.telemetry.toolCallsByName)) byName[name] = (byName[name] ?? 0) + count;
@@ -172,12 +173,13 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
   return {
     claims: [...main.claims, ...focus.claims.filter(claim => !ids.has(claim.claimId))],
     complete: main.complete && focus.complete,
-    limitations: [...main.limitations, ...focus.limitations.map(line => `Failure-path pass: ${line}`)],
+    limitations: [...main.limitations, ...focus.limitations.map(line => `${pass}: ${line}`)],
     toolErrors: [...main.toolErrors, ...focus.toolErrors],
     stopReason: main.stopReason === 'finished' ? focus.stopReason : main.stopReason,
     spentUsd: main.spentUsd + focus.spentUsd,
     unsettledCalls: main.unsettledCalls + focus.unsettledCalls,
     telemetry: {
+      ...main.telemetry,
       turns: main.telemetry.turns + focus.telemetry.turns,
       toolCalls: main.telemetry.toolCalls + focus.telemetry.toolCalls,
       toolCallsByName: byName,
@@ -189,10 +191,7 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, sites: nu
       failure: main.telemetry.failure ?? focus.telemetry.failure,
       reads: [...main.telemetry.reads, ...focus.telemetry.reads],
       retries: [...main.telemetry.retries, ...focus.telemetry.retries],
-      failurePathClaimIds: focus.claims.map(claim => claim.claimId),
-      failurePathSpentUsd: focus.spentUsd,
-      failurePathTurns: focus.telemetry.turns,
-      failurePathSites: sites,
+      ...own,
     },
     ...(transcript ? { transcript } : {}),
   };
@@ -231,6 +230,11 @@ function acrossParts(parts: ClaimInvestigation[]): ClaimInvestigation {
       failurePathSpentUsd: sum(part => part.telemetry.failurePathSpentUsd),
       failurePathTurns: sum(part => part.telemetry.failurePathTurns),
       failurePathSites: sum(part => part.telemetry.failurePathSites),
+      ...(parts.some(part => part.telemetry.contractClaimIds) ? {
+        contractClaimIds: parts.flatMap(part => part.telemetry.contractClaimIds ?? []),
+        contractSpentUsd: sum(part => part.telemetry.contractSpentUsd),
+        contractTurns: sum(part => part.telemetry.contractTurns),
+      } : {}),
     },
     ...(transcripts.every(Boolean) ? { transcript: transcripts.flatMap(transcript => transcript!) } : {}),
   };
@@ -259,7 +263,8 @@ export function modelFor(profile: Profile, injectedModel?: Model): Model {
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
   crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
-  capture: { transcript?: boolean } = {}, incremental?: IncrementalScope): Promise<ClaimReview> {
+  capture: { transcript?: boolean } = {}, incremental?: IncrementalScope,
+  passes: { contracts?: boolean } = {}): Promise<ClaimReview> {
   const { packet } = loadReview(directory);
   const model = modelFor(profile, injectedModel);
   const repository = join(directory, 'source.git');
@@ -310,7 +315,14 @@ export async function runClaimReview(directory: string, profile: Profile,
     const failure = failureExcerpt(diff);
     const failurePaths = !failure.excerpt ? idle()
       : await investigateClaims(revisions, sourceOf, { ...context, diff: failure.excerpt }, model, { ...limits(budget - main.spentUsd), focus: 'failure_paths' }, signal);
-    return { investigation: combined(main, failurePaths, failure.sites), uncalled };
+    const both = combined(main, failurePaths, 'Failure-path pass', { failurePathClaimIds: failurePaths.claims.map(claim => claim.claimId),
+      failurePathSpentUsd: failurePaths.spentUsd, failurePathTurns: failurePaths.telemetry.turns, failurePathSites: failure.sites });
+    // A third pass, only when asked for: values crossing into code the change does not
+    // touch, on the whole diff, within what the first two left. See contractInstruction.
+    if (!passes.contracts) return { investigation: both, uncalled };
+    const contracts = await investigateClaims(revisions, sourceOf, context, model, { ...limits(budget - both.spentUsd), focus: 'contracts' }, signal);
+    return { investigation: combined(both, contracts, 'Contract pass', { contractClaimIds: contracts.claims.map(claim => claim.claimId),
+      contractSpentUsd: contracts.spentUsd, contractTurns: contracts.telemetry.turns }), uncalled };
   };
   // Nothing to read, as in a PR with no changes or a push that only moved the target
   // branch: no model is asked. Asked anyway, a model can only call the review incomplete.
