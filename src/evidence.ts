@@ -9,7 +9,9 @@ export type Rung = 'symbolic' | 'ci_output' | 'cross_family_llm';
 export type Verdict = 'confirmed' | 'refuted' | 'inconclusive' | 'withheld';
 export type Confidence = 'low' | 'moderate' | 'high';
 
-export interface Evidence { rung: Rung; check: string; result: 'hit' | 'miss' | number }
+// `exhaustive` marks an absence read over a whole revision: no file has the pattern.
+// Nothing narrower than the proposition was checked, so no rung can report on the proxy.
+export interface Evidence { rung: Rung; check: string; result: 'hit' | 'miss' | number; exhaustive?: true }
 
 // Which rung settled which step, recorded rather than inferred. A rung's contribution
 // is only measurable if the chain says what it actually settled, and a claim that
