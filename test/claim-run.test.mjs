@@ -5,7 +5,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repository, persist } from './helpers.mjs';
 import { ablate, runClaimReview, MAX_GUIDANCE_BYTES } from '../dist/claim-run.js';
-import { claimInstructions, failurePathInstruction } from '../dist/investigator.js';
+import { claimInstructions, failurePathInstruction, contractInstruction } from '../dist/investigator.js';
 import { capture } from '../dist/snapshot.js';
 import { PRIORITY_RUBRIC } from '../dist/contracts.js';
 import { renderClaimReview } from '../dist/render-claim.js';
@@ -38,14 +38,16 @@ const FALSE_CLAIM = {
 // The failure-path pass is a second investigation over the same change. A test that
 // scripts only the main pass has it end at once with nothing recorded.
 const failurePathPass = input => input.instructions.includes(failurePathInstruction);
-function model(steps, failurePathSteps = []) {
-  let index = 0, focusIndex = 0;
+function model(steps, failurePathSteps = [], contractSteps = []) {
+  let index = 0, focusIndex = 0, contractIndex = 0;
   return {
     async count() { return 1000; },
     async respond(input) {
       const step = failurePathPass(input)
         ? failurePathSteps[focusIndex++] ?? action('end_investigation', { complete: true, limitations: [] })
-        : steps[index++];
+        : input.instructions.includes(contractInstruction)
+          ? contractSteps[contractIndex++] ?? action('end_investigation', { complete: true, limitations: [] })
+          : steps[index++];
       return { model: profile.model, inputTokens: 1000, outputTokens: 50, cachedInputTokens: 0,
         status: 'completed', continuation: [], calls: Array.isArray(step) ? step : step ? [step] : [] };
     },
@@ -212,9 +214,9 @@ test('the report lists a withheld P3 finding by location and keeps its text out'
 });
 
 // A fake that keeps what each turn was asked, so a test can see what the model was shown.
-function recording(steps, failurePathSteps) {
+function recording(steps, failurePathSteps, contractSteps) {
   const inputs = [];
-  const inner = model(steps, failurePathSteps);
+  const inner = model(steps, failurePathSteps, contractSteps);
   return { inputs, ...inner, async respond(input, ...rest) { inputs.push(input); return inner.respond(input, ...rest); } };
 }
 
@@ -338,4 +340,26 @@ test('the failure-path pass runs after the main pass and its claims are verified
   assert.equal(JSON.parse(fake.inputs[2].context).diff, failureExcerpt(readFileSync(join(directory, 'change.diff'), 'utf8')).excerpt,
     'the pass is shown the excerpt around error handling, not the whole diff');
   assert.equal(telemetry.failurePathSites, 1);
+});
+
+// On mason-v1 the largest group of reachable misses was a value one side writes and an
+// unchanged file reads differently (#4910, #4890), so values crossing into unchanged code
+// get a pass of their own. It is off unless asked for, so every default review is asked
+// exactly what was measured before it.
+test('the contract pass runs third, on the whole diff, only when asked for', async t => {
+  const fixture = repository(t);
+  const end = action('end_investigation', { complete: true, limitations: [] });
+  const fake = recording([end], [end], [[action('record_claim', TRUE_CLAIM)], end]);
+  const directory = persist(fixture);
+
+  const { claims, verification } = await runClaimReview(directory, profile, fake, undefined, undefined, 'none', {}, {}, undefined, { contracts: true });
+
+  assert.deepEqual(fake.inputs.map(input => input.instructions.includes(contractInstruction)), [false, false, true, true]);
+  assert.equal(JSON.parse(fake.inputs[3].context).diff, readFileSync(join(directory, 'change.diff'), 'utf8'),
+    'the pass reads the whole diff, since a crossing can start on any changed line');
+  assert.deepEqual(verification.chains.map(chain => chain.verdict), ['confirmed']);
+  const telemetry = JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8'));
+  assert.deepEqual(telemetry.contractClaimIds, claims.map(claim => claim.claimId));
+  assert.equal(telemetry.contractTurns, 2);
+  assert.equal(telemetry.failurePathTurns, 1, 'the failure-path share survives the third pass');
 });

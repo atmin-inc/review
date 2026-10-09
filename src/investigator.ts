@@ -119,6 +119,18 @@ For each throw, rejected promise, error result or catch that the change adds or 
 Claim a defect when the outcome is wrong for the failure: an expected condition such as bad input, a missing record or an empty result reported as an outage, a timeout or a retryable error; a retry advised for a failure that retrying cannot fix; an error swallowed so the caller sees success; or a failure reported without what the user needs to correct it.
 If no failure path is wrong, end without claims.`;
 
+// The third pass, asked with `focus: 'contracts'`, off unless asked for. Seen 2026-10-09 on mason-v1: of the
+// defects atmin missed that another reviewer or the author found, the largest group a pass
+// could reach is a value one side writes and another side, in a file the change does not
+// touch, reads differently (#4910: citation anchors the importer reads but the builder
+// drops; #4890: a wrapper refusing methods its callers send). The main pass reasons about
+// the changed side only, so the other side gets a pass of its own.
+export const contractInstruction = `
+This pass has one focus: values that cross between this change and code it does not change. Another pass covers everything else, so record only claims about such a crossing.
+For each value the change writes for other code to read, find that reader with search_repository and read it: an object or JSON payload and its keys, a file or comment format, function or CLI arguments, an enum or list of allowed values, an environment variable, a database row or column, a request or response body, a limit or constant. Do the same in reverse for each value the change reads that other code writes. Prefer the reader or writer that the change's own files name or that a search for the key, field or symbol finds.
+Claim a defect when the two sides disagree: a key, field or member one side sets and the other ignores, drops, rejects or does not know; a type or format one side produces and the other does not accept; a limit, default or allowed set that differs between them; a value the change adds that a separate list, switch or validator elsewhere was not updated for. Locate the claim where the change is, and check the other side with file_contains or body_contains on its path or symbol.
+If every crossing agrees, end without claims.`;
+
 // The investigator spends money, so its bound is a reservation rather than a turn
 // count alone: each request is priced before it is made and settled after, and a
 // request that cannot be reserved is not made. costOf and charged stay with the caller,
@@ -138,8 +150,9 @@ export interface ClaimLimits {
   // Under measurement (pre-registration 2026-09-23): a claim must name what the code
   // should have carried, and the code checks it. Off until the run set says otherwise.
   requireCorrection?: boolean;
-  // Runs the pass on failure paths only; see failurePathInstruction.
-  focus?: 'failure_paths';
+  // Runs a focused pass: failure paths only (failurePathInstruction) or values crossing
+  // into unchanged code (contractInstruction).
+  focus?: 'failure_paths' | 'contracts';
   // Waits before each retry of a failed request; its length is the number of retries.
   retryDelaysMs?: number[];
 }
@@ -179,6 +192,10 @@ export interface ClaimTelemetry {
   failurePathTurns?: number;
   // Error-handling lines the pass was shown; 0 means it did not run.
   failurePathSites?: number;
+  // The same three for the contract pass, which runs only when asked for.
+  contractClaimIds?: string[];
+  contractSpentUsd?: number;
+  contractTurns?: number;
 }
 export interface ClaimInvestigation {
   claims: Claim[];
@@ -239,7 +256,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       roundStart.push(transcript.length);
       let status = statusFor(0);
       if (status) append(status);
-      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: JSON.stringify({ ...(context as object), controllerBudget: { instruction: 'Read the change and its dependencies, then emit every claim you can support with propositions.' } }), transcript, tools };
+      const input: TurnInput = { instructions: claimInstructions + (guided ? guidanceInstruction : '') + (calling ? calledCodeInstruction : '') + (limits.focus === 'failure_paths' ? failurePathInstruction : limits.focus === 'contracts' ? contractInstruction : '') + (limits.requireCorrection ? correctionInstruction : ''), context: JSON.stringify({ ...(context as object), controllerBudget: { instruction: 'Read the change and its dependencies, then emit every claim you can support with propositions.' } }), transcript, tools };
       let inputTokens = await model.count(input, signal);
       signal.throwIfAborted();
       // A long investigation on a real PR outgrows the window: measured 2026-09-21 over
