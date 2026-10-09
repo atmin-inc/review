@@ -172,7 +172,7 @@ test('a model that contradicts a check accuses that check, and the claim does no
 // Rung 3 is asked at the merge base about a file the change adds, sees no such file, and
 // says no. A check that searched the whole base and found the pattern nowhere is not a
 // proxy for "this is new", so that answer must not hold the claim back. On mason-v1
-// (2026-10-07 to 08) it alone held back 3 real defects with every proposition established.
+// (2026-10-07 to 08) it alone held back 16 claims with every proposition established.
 // Any other base check the model contradicts still stops the claim.
 test('a model cannot contradict a pattern no file at the merge base contains', t => {
   const atBaseSaysNo = { settle: (proposition, claim, revision) =>

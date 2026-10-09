@@ -169,8 +169,8 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
   // Except a check that searched the whole revision and found the pattern nowhere: it is
   // not a proxy, so a contradiction there is the model's error. Rung 3 is asked at the
   // merge base about a file the change adds and sees no such file. On mason-v1, 2026-10-07
-  // to 08, that alone held back 3 claims with every proposition established (#4890, #4833),
-  // all real defects by their authors' replies.
+  // to 08, that alone held back 16 claims with every proposition established: 11 of them P2,
+  // 3 matching defects the authors fixed (#4890, #4893), none matching a declined finding.
   const contradicted = asked.filter(item => item.status === 'established' && item.signal === 'disagrees'
     && !(item.evidence.length && item.evidence.every(one => one.exhaustive)));
   if (contradicted.length) {

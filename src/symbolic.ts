@@ -324,7 +324,12 @@ export function checkedSite(revision: Revision, check: SymbolicCheck, path: stri
   const here = found.filter(site => site.path === path);
   const has = (site: Declaration) => check.assertion === 'declaration_contains' ? site.text.includes(check.pattern)
     : bodyOf(revision, site.path, site.line, site.span)?.text.includes(check.pattern) ?? false;
-  const site = here.find(has) ?? (here.length === 1 ? here[0] : !here.length && found.length === 1 && !truncated ? found[0] : undefined);
+  // Elsewhere, the declaration whose body the check matched is the one it read, so that is
+  // not a guess. Seen 2026-10-07 on mason-v1 #4887 and #4890: two claims with every
+  // proposition established were held back because a symbol declared twice in another
+  // file was never shown to rung 3, which then contradicted the check.
+  const site = here.find(has) ?? (here.length === 1 ? here[0]
+    : !here.length ? found.find(has) ?? (found.length === 1 && !truncated ? found[0] : undefined) : undefined);
   return site ? { path: site.path, line: site.line } : null;
 }
 

@@ -251,13 +251,15 @@ test('the state carries the declaration a symbol check reads when the claim wind
         check: { assertion: 'body_contains', symbol: 'helper', pattern: 'return 1' } },
       { proposition: 'handler returns one.',
         check: { assertion: 'body_contains', symbol: 'handler', pattern: 'return 1' } },
+      { proposition: 'No handler returns three.',
+        check: { assertion: 'body_contains', symbol: 'handler', pattern: 'return 3', expect: 'absent' } },
       { proposition: 'mapError did not exist before.',
         check: { assertion: 'declaration_contains', symbol: 'mapError', pattern: 'mapError', expect: 'absent', revision: 'base' } },
     ],
   };
   const head = jevState(claim, { head: revision, base: revision }, 'diff text');
-  assert.deepEqual(head.files.map(file => file.path), ['broker.ts', 'broker.ts', 'other.ts'],
-    'the claim window, the far declaration, then another file\'s only declaration; create sits inside the claim window, and a name declared twice elsewhere is not guessed at');
+  assert.deepEqual(head.files.map(file => file.path), ['broker.ts', 'broker.ts', 'other.ts', 'a.ts'],
+    'the claim window, the far declaration, another file\'s only declaration, then the one of two declarations whose body the check matched; create sits inside the claim window, and when no body matches, a name declared twice elsewhere is not guessed at');
   assert.doesNotMatch(head.files[0].source, /retryAfterMs/, 'the claim window alone does not hold the fallback');
   assert.match(head.files[1].source, /^function mapError[\s\S]*retryAfterMs: 5000/, 'the added window starts at the declaration');
   assert.equal(jevState(claim, { head: revision, base: revision }, 'diff text', 'base').files.length, 2,
