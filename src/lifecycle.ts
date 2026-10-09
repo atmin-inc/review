@@ -29,7 +29,7 @@ export interface Verification { chains: Chain[]; decision: Decision; limitations
 // 0.96 while acceptable ones went 0.95 to 0.79 and no golden comment was lost. It is the
 // model's own rating at emission, not a later judgement of the claim, which is why it
 // separates where every after-the-fact scorer failed. See AGENTS.md.
-export interface VerifyOptions { questionRefutations?: boolean; questionConclusion?: boolean; withhold?: Priority[] }
+export interface VerifyOptions { questionRefutations?: boolean; questionConclusion?: boolean; withhold?: Priority[]; literalMissesUnsettled?: boolean }
 export const DEFAULT_WITHHOLD: Priority[] = ['P3'];
 // Every question the cross-family rung was asked and what it answered. Recording them
 // is what makes the rung's contribution measurable: the same claims can be verified
@@ -69,7 +69,7 @@ function removedByTheChange(revisions: Revisions, check: SymbolicCheck): boolean
   return runCheck(other, { ...check, revision: otherSide }).evidence[0]?.result === 'hit';
 }
 
-export function settleProposition(revisions: Revisions, item: Proposition): PropositionOutcome {
+export function settleProposition(revisions: Revisions, item: Proposition, options: VerifyOptions = {}): PropositionOutcome {
   // Resolved once, here, and carried on the outcome, so rung 1 and rung 3 cannot end up
   // asking about different sides of the change. A check that omits the side inherits the
   // proposition's rather than silently defaulting to head, which is the case that used to
@@ -83,6 +83,15 @@ export function settleProposition(revisions: Revisions, item: Proposition): Prop
   const result = outcome.evidence[0]?.result;
   let status: PropositionStatus = result === 'hit' ? 'established' : result === 'miss' ? 'refuted' : 'unsettled';
   const limitations = [...outcome.limitations];
+  // `literalMissesUnsettled` (off by default) extends the same reasoning to every
+  // expected-present miss, and the proposition then goes to rung 3 like any unreached one.
+  // Replayed 2026-10-09 over the 96 refuted claims in 141 mason-v1 production runs: 14 more
+  // P1/P2 findings would have shipped, 4 matching defects the authors fixed (#4883, #4887,
+  // #4890, #4899), 1 a deliberate removal (#4896), 9 with no verdict.
+  if (status === 'refuted' && options.literalMissesUnsettled && (check.expect ?? 'present') === 'present') {
+    limitations.push(`${outcome.evidence[0]!.check}: a literal text that is not found does not show the property is absent, so this miss refutes nothing.`);
+    return { proposition: item.proposition, revision, status: 'unsettled', evidence: [], limitations };
+  }
   if (status === 'refuted' && removedByTheChange(revisions, check)) {
     // The miss is dropped from the evidence, not just downgraded here, because
     // `composeChain` reads any symbolic miss as a refutation and returns `refuted` at
@@ -100,7 +109,7 @@ export function settleProposition(revisions: Revisions, item: Proposition): Prop
 
 export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: CrossFamilyRung,
   thresholds: Thresholds = DEFAULT_THRESHOLDS, options: VerifyOptions = {}): { chain: Chain; limitations: string[]; asked: CrossFamilyAnswer[] } {
-  const outcomes = claim.evidenceToCheck.map(item => settleProposition(revisions, item));
+  const outcomes = claim.evidenceToCheck.map(item => settleProposition(revisions, item, options));
   const collected = outcomes.flatMap(outcome => outcome.limitations);
   const symbolic = outcomes.flatMap(outcome => outcome.evidence);
   const log: CrossFamilyAnswer[] = [];

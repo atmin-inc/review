@@ -292,6 +292,28 @@ test('a miss the change did not cause still refutes', t => {
   assert.equal(chains[0].propositions[0].status, 'refuted');
 });
 
+// Under `literalMissesUnsettled`, the same miss proves nothing either way: the text may be
+// spelled differently (`1_000` for `1000` killed a real mason-v1 #4887 defect). It goes to
+// rung 3, so the claim ships only if the model affirms it, and dies if the model denies it.
+test('with literalMissesUnsettled, a literal miss is handed to rung 3 instead of refuting', t => {
+  const spelled = { ...TRUE_CLAIM, evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
+    { proposition: 'update() returns the result without a guard.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: "return 'updated'" } }] };
+  const fixture = repository(t);
+  const claims = assignClaimIds([spelled], path => sourceText(fixture.source, fixture.packet.headSha, path));
+  // The model answers the handed-over step with p and agrees with the established one.
+  const answer = p => ({ settle: proposition => [{ rung: 'cross_family_llm', check: 'jev noul',
+    result: proposition.includes('without a guard') ? p : 0.97 }] });
+  const verify = (rung, options) => verifyClaims(claims, revisionsOf(fixture), BALANCED, rung, undefined, options).chains[0];
+
+  assert.equal(verify(answer(0.97), {}).verdict, 'refuted', 'off by default: the miss still refutes');
+  const on = { literalMissesUnsettled: true };
+  assert.notEqual(verify(answer(0.97), on).verdict, 'refuted', 'the model affirms what the grep could not find');
+  assert.equal(verify(answer(0.97), on).propositions[1].settledBy, 'cross_family_llm');
+  assert.equal(verify(answer(0.03), on).verdict, 'refuted', 'a model that denies it still kills the claim');
+  assert.equal(verify(undefined, on).verdict, 'inconclusive', 'with no rung 3, unproven, not false');
+});
+
 // An `expect: absent` miss rests on having FOUND the pattern, which is positive
 // evidence and contradicts the proposition outright. It must keep refuting whether or
 // not the other side also has it, or the rule above would swallow the legitimate
