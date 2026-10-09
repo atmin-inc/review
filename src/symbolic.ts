@@ -282,7 +282,7 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     if (revision.slice(check.path, 1, 1) === null) {
       const anywhere = expect === 'absent' ? revision.search(check.pattern) : undefined;
       if (anywhere && !anywhere.matches.length && !anywhere.truncated) {
-        return { evidence: [{ rung: 'symbolic', check: `${label} (${check.path} does not exist here, and no file has the pattern)`, result: 'hit' }], limitations: [] };
+        return { evidence: [{ rung: 'symbolic', check: `${label} (${check.path} does not exist here, and no file has the pattern)`, result: 'hit', exhaustive: true }], limitations: [] };
       }
       return inconclusive(label, `${check.path} does not exist in this revision`);
     }

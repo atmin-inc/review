@@ -165,7 +165,14 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
   // A model that disagrees with a check is not a vote against the code. It means the
   // check is a text proxy that may not mean what its proposition says, so the claim
   // does not ship and the check is recorded for tightening.
-  const contradicted = asked.filter(item => item.status === 'established' && item.signal === 'disagrees');
+  //
+  // Except a check that searched the whole revision and found the pattern nowhere: it is
+  // not a proxy, so a contradiction there is the model's error. Rung 3 is asked at the
+  // merge base about a file the change adds and sees no such file. On mason-v1, 2026-10-07
+  // to 08, that alone held back 3 claims with every proposition established (#4890, #4833),
+  // all real defects by their authors' replies.
+  const contradicted = asked.filter(item => item.status === 'established' && item.signal === 'disagrees'
+    && !(item.evidence.length && item.evidence.every(one => one.exhaustive)));
   if (contradicted.length) {
     return chain('inconclusive', 'low', evidence, records,
       ['A check the model contradicts may not establish what its proposition says.'],

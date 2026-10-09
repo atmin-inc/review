@@ -169,6 +169,27 @@ test('a model that contradicts a check accuses that check, and the claim does no
   assert.equal(decision.verdict, 'merge');
 });
 
+// Rung 3 is asked at the merge base about a file the change adds, sees no such file, and
+// says no. A check that searched the whole base and found the pattern nowhere is not a
+// proxy for "this is new", so that answer must not hold the claim back. On mason-v1
+// (2026-10-07 to 08) it alone held back 3 real defects with every proposition established.
+// Any other base check the model contradicts still stops the claim.
+test('a model cannot contradict a pattern no file at the merge base contains', t => {
+  const atBaseSaysNo = { settle: (proposition, claim, revision) =>
+    [{ rung: 'cross_family_llm', check: 'jev noul', result: revision === 'base' ? 0.03 : 0.97 }] };
+  const added = { proposition: 'The guard helper is added by this change.',
+    check: { assertion: 'file_contains', path: 'owner-guard.ts', pattern: 'assertOwner', expect: 'absent', revision: 'base' } };
+  const [nowhere] = run(t, [{ ...TRUE_CLAIM, evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0], added] }], atBaseSaysNo).chains;
+  assert.notEqual(nowhere.verdict, 'inconclusive', 'the whole base was searched, so the model is wrong, not the check');
+  assert.deepEqual(nowhere.suspectChecks, []);
+
+  const existed = { proposition: 'The comparison was there before this change.',
+    check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'present', revision: 'base' } };
+  const [proxy] = run(t, [{ ...TRUE_CLAIM, evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0], existed] }], atBaseSaysNo).chains;
+  assert.equal(proxy.verdict, 'inconclusive', 'a narrower base check is still a proxy the model may be right about');
+  assert.match(proxy.suspectChecks[0], /body of `update` at the merge base contains/);
+});
+
 test('a claim no rung can touch is inconclusive, not quietly confirmed', t => {
   const bare = { ...TRUE_CLAIM, evidenceToCheck: [{ proposition: 'Any account can update any record.' }] };
   const { chains, decision } = run(t, [bare]);
