@@ -22,14 +22,17 @@ const TRUE_CLAIM = {
       check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts', expect: 'absent' } },
   ],
 };
+// Rung 1 refutes only on text it FOUND: a literal it did not find proves nothing, since
+// the property may be spelled another way (see lifecycle.ts). So the false claim is
+// refuted by the return it says no longer exists.
 const FALSE_CLAIM = {
   type: 'contract_break', location: 'update.ts:1',
-  description: 'update() is called from other modules that assume the old signature.',
-  suspectedCondition: 'Another module calls update() and relies on the throw.',
+  description: 'update() now throws for every caller instead of returning.',
+  suspectedCondition: 'Any caller of update() gets an exception.',
   severity: 'P1',
   evidenceToCheck: [
-    { proposition: 'update is referenced outside update.ts.',
-      check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts' } },
+    { proposition: 'update() never returns a result.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'return "updated"', expect: 'absent' } },
   ],
 };
 
@@ -56,7 +59,7 @@ test('a true claim survives verification and a false one dies on rung 1', t => {
   assert.match(confirmed.evidence[0].check, /body of `update` lacks/);
 
   assert.equal(refuted.verdict, 'refuted');
-  assert.equal(refuted.verifierConfidence, 'high', 'nothing references update outside its own file');
+  assert.equal(refuted.verifierConfidence, 'high', 'the return the claim denies is in the body');
 
   assert.equal(decision.verdict, 'security_review');
   assert.equal(decision.rule, 'security-surface');
@@ -272,30 +275,11 @@ test('a miss that the change itself caused does not refute the claim about it', 
   assert.equal(chains[0].propositions[0].settledBy, null, 'it is handed on, not settled');
 });
 
-// The other half of the rule, and the reason it is narrow. A miss still refutes when it
-// is not the change that caused it: the pattern is absent on both sides, so the model
-// was simply wrong about the code. Keeping this conclusive is what stops the fix above
-// from turning every failed lookup into a shrug.
-test('a miss the change did not cause still refutes', t => {
-  const wrong = {
-    type: 'auth_bypass', location: 'update.ts:2',
-    description: 'update() delegates to a permissions service.',
-    suspectedCondition: 'A different account submits a known record id.',
-    severity: 'P1',
-    evidenceToCheck: [
-      { proposition: 'update() calls the permissions service.',
-        check: { assertion: 'body_contains', symbol: 'update', pattern: 'permissions.check(' } },
-    ],
-  };
-  const { chains } = run(t, [wrong]);
-  assert.equal(chains[0].verdict, 'refuted');
-  assert.equal(chains[0].propositions[0].status, 'refuted');
-});
-
-// Under `literalMissesUnsettled`, the same miss proves nothing either way: the text may be
-// spelled differently (`1_000` for `1000` killed a real mason-v1 #4887 defect). It goes to
-// rung 3, so the claim ships only if the model affirms it, and dies if the model denies it.
-test('with literalMissesUnsettled, a literal miss is handed to rung 3 instead of refuting', t => {
+// A literal miss proves nothing either way, even where the change did not cause it: the
+// text may be spelled differently (`1_000` for `1000` killed a real mason-v1 #4887 defect).
+// It goes to rung 3, so the claim ships only if the model affirms it, and dies if the model
+// denies it. Replayed over 141 mason-v1 runs before becoming the rule (see lifecycle.ts).
+test('a literal miss is handed to rung 3 instead of refuting', t => {
   const spelled = { ...TRUE_CLAIM, evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
     { proposition: 'update() returns the result without a guard.',
       check: { assertion: 'body_contains', symbol: 'update', pattern: "return 'updated'" } }] };
@@ -304,14 +288,12 @@ test('with literalMissesUnsettled, a literal miss is handed to rung 3 instead of
   // The model answers the handed-over step with p and agrees with the established one.
   const answer = p => ({ settle: proposition => [{ rung: 'cross_family_llm', check: 'jev noul',
     result: proposition.includes('without a guard') ? p : 0.97 }] });
-  const verify = (rung, options) => verifyClaims(claims, revisionsOf(fixture), BALANCED, rung, undefined, options).chains[0];
+  const verify = rung => verifyClaims(claims, revisionsOf(fixture), BALANCED, rung).chains[0];
 
-  assert.equal(verify(answer(0.97), {}).verdict, 'refuted', 'off by default: the miss still refutes');
-  const on = { literalMissesUnsettled: true };
-  assert.notEqual(verify(answer(0.97), on).verdict, 'refuted', 'the model affirms what the grep could not find');
-  assert.equal(verify(answer(0.97), on).propositions[1].settledBy, 'cross_family_llm');
-  assert.equal(verify(answer(0.03), on).verdict, 'refuted', 'a model that denies it still kills the claim');
-  assert.equal(verify(undefined, on).verdict, 'inconclusive', 'with no rung 3, unproven, not false');
+  assert.notEqual(verify(answer(0.97)).verdict, 'refuted', 'the model affirms what the grep could not find');
+  assert.equal(verify(answer(0.97)).propositions[1].settledBy, 'cross_family_llm');
+  assert.equal(verify(answer(0.03)).verdict, 'refuted', 'a model that denies it still kills the claim');
+  assert.equal(verify(undefined).verdict, 'inconclusive', 'with no rung 3, unproven, not false');
 });
 
 // An `expect: absent` miss rests on having FOUND the pattern, which is positive
@@ -390,8 +372,8 @@ test('a neutral answer leaves the refutation standing too', t => {
 test('only a lone refuting check is questioned, not a claim refuted several ways', t => {
   const twoWays = { ...MISMATCHED, evidenceToCheck: [
     MISMATCHED.evidenceToCheck[0],
-    { proposition: 'update() calls a permissions service.',
-      check: { assertion: 'body_contains', symbol: 'update', pattern: 'permissions.check(' } },
+    { proposition: 'update() never returns a result.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'return "updated"', expect: 'absent' } },
   ] };
   const { chains, crossFamilyLog } = withOptions(t, [twoWays], answering(0.95), { questionRefutations: true });
   assert.equal(chains[0].verdict, 'refuted');
@@ -466,7 +448,7 @@ test('a miss that cannot refute does not refute the chain', t => {
   assert.equal(chains[0].verdict, 'confirmed', 'the rule downgraded the miss, so nothing refutes this');
   // The check is still reported, as a limitation rather than as live evidence, which is
   // where every other check that ran and settled nothing goes.
-  assert.ok(limitations.some(one => /cannot refute a claim about it/.test(one)));
+  assert.ok(limitations.some(one => /this miss refutes nothing/.test(one)));
   assert.equal(chains[0].evidence.filter(one => one.result === 'miss').length, 0);
 });
 

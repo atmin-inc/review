@@ -71,7 +71,7 @@ test('the captured self-refuting claims are no longer refuted by the change itse
     assert.equal(ownerId.status, 'unsettled', 'the circular miss is handed on, not treated as false');
     assert.equal(ownerId.settledBy, null);
   }
-  assert.equal(verification.limitations.filter(line => /cannot refute a claim about it/.test(line)).length, 2,
+  assert.equal(verification.limitations.filter(line => /this miss refutes nothing/.test(line)).length, 2,
     'both downgrades name the check they came from');
 });
 

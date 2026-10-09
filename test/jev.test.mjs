@@ -27,12 +27,13 @@ const SURVIVES = {
     { proposition: 'Concurrent callers can reach this write for the same record.' },
   ],
 };
+// Refuted by text rung 1 FOUND (the return it denies), since a literal miss refutes nothing.
 const DIES = {
   type: 'contract_break', location: 'update.ts:1', severity: 'P1',
-  description: 'update() is called from other modules that assume the old signature.',
-  suspectedCondition: 'Another module calls update() and relies on the throw.',
-  evidenceToCheck: [{ proposition: 'update is referenced outside update.ts.',
-    check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts' } }],
+  description: 'update() now throws for every caller instead of returning.',
+  suspectedCondition: 'Any caller of update() gets an exception.',
+  evidenceToCheck: [{ proposition: 'update() never returns a result.',
+    check: { assertion: 'body_contains', symbol: 'update', pattern: 'return "updated"', expect: 'absent' } }],
 };
 
 const setUp = (t, drafts) => {
