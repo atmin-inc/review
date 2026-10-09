@@ -24,14 +24,15 @@ const TRUE_CLAIM = {
       check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', expect: 'absent' } },
   ],
 };
+// Refuted by text rung 1 FOUND (the return it denies), since a literal miss refutes nothing.
 const FALSE_CLAIM = {
   type: 'contract_break', location: 'update.ts:1',
-  description: 'update() is called from other modules that assume the old signature.',
-  suspectedCondition: 'Another module calls update() and relies on the throw.',
+  description: 'update() now throws for every caller instead of returning.',
+  suspectedCondition: 'Any caller of update() gets an exception.',
   severity: 'P1',
   evidenceToCheck: [
-    { proposition: 'update is referenced outside update.ts.',
-      check: { assertion: 'referenced_outside', symbol: 'update', path: 'update.ts' } },
+    { proposition: 'update() never returns a result.',
+      check: { assertion: 'body_contains', symbol: 'update', pattern: 'return "updated"', expect: 'absent' } },
   ],
 };
 
