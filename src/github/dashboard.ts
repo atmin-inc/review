@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PilotConfig } from './config.js';
 import type { Store } from './store.js';
@@ -31,7 +31,6 @@ const redirect = (response: ServerResponse, location: string) => {
 class Denied extends Error {}
 interface User { id: number; login: string; }
 interface Session { token: string; user: User; expires: number; }
-interface Flow { verifier: string; expires: number; returnTo: string; }
 interface Installation { id: number; account: string; accountType: string; }
 const login = (value: unknown) => typeof value === 'string' && /^[a-zA-Z0-9-]{1,39}$/.test(value);
 const accountType = (value: unknown) => typeof value === 'string' && /^[A-Za-z]{1,20}$/.test(value);
@@ -44,7 +43,22 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
   // ponytail: one process, bounded in-memory sessions (five per GitHub user); restart signs everyone
   // out. Tokens never touch disk. Add shared encrypted sessions only with multiple web workers.
   const sessions = new Map<string, Session>();
-  const flows = new Map<string, Flow>();
+  // A sign-in in progress lives only in its own cookie, signed with a key this process made, so
+  // no number of unfinished sign-ins can fill memory or lock others out (1,000 requests to
+  // /auth/github used to refuse every sign-in for ten minutes). A restart ends sign-ins in progress.
+  const flowKey = randomBytes(32);
+  const mac = (value: string) => createHmac('sha256', flowKey).update(value).digest('base64url');
+  const verifierOf = (state: string) => mac(`verifier:${state}`);
+  // Finished sign-ins, so a callback is not replayed while its cookie is valid. When full the
+  // oldest is forgotten; GitHub still refuses a code used twice.
+  const used = new Map<string, number>();
+  const flowOf = (value: string | undefined): { state: string; returnTo: string } | null => {
+    const [state, expires, returnTo, signature, ...rest] = (value ?? '').split('.');
+    if (!state || !expires || returnTo === undefined || !signature || rest.length) return null;
+    const expected = Buffer.from(mac(`${state}.${expires}.${returnTo}`)), given = Buffer.from(signature);
+    if (expected.length !== given.length || !timingSafeEqual(expected, given) || Number(expires) <= Date.now()) return null;
+    return { state, returnTo: Buffer.from(returnTo, 'base64url').toString('utf8') };
+  };
   const callback = `${options.origin}/auth/github/callback`;
   const initial = { config, store, settings };
   const api = async (path: string, token: string, repositoryId = config.repositoryId): Promise<any> => {
@@ -153,33 +167,33 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
     catch { json(response, 400, { error: 'Invalid request URL.' }); return true; }
     if (!url.pathname.startsWith('/api/review/') && !url.pathname.startsWith('/auth/github')) return false;
     for (const [key, value] of sessions) if (value.expires <= Date.now()) sessions.delete(key);
-    for (const [key, value] of flows) if (value.expires <= Date.now()) flows.delete(key);
     const jar = cookies(request), sessionId = hash(jar.get(sessionCookie) ?? ''), session = sessions.get(sessionId);
     try {
       if (request.method === 'GET' && url.pathname === '/auth/github') {
-        if (flows.size >= 1000) { json(response, 429, { error: 'Sign-in is busy. Try again shortly.' }); return true; }
-        const state = random(), verifier = random();
+        const state = random(), verifier = verifierOf(state);
         const repository = url.searchParams.get('repository') ?? '', review = url.searchParams.get('review') ?? '';
         const repositories = url.searchParams.getAll('repository').length, reviews = url.searchParams.getAll('review').length;
         const returnTo = repositories !== 1 || reviews > 1 || !/^[1-9][0-9]{0,15}$/.test(repository) ? '/'
           : !reviews ? `/?repository=${repository}` : /^[a-zA-Z0-9-]{1,100}$/.test(review) ? `/?repository=${repository}#review/${review}` : '/';
-        flows.set(hash(state), { verifier, expires: Date.now() + 600_000, returnTo });
-        response.setHeader('Set-Cookie', cookie(flowCookie, state, 600));
+        const signed = `${state}.${Date.now() + 600_000}.${Buffer.from(returnTo).toString('base64url')}`;
+        response.setHeader('Set-Cookie', cookie(flowCookie, `${signed}.${mac(signed)}`, 600));
         const query = new URLSearchParams({ client_id: options.clientId, redirect_uri: callback, state,
           code_challenge: hash(verifier), code_challenge_method: 'S256' });
         redirect(response, `https://github.com/login/oauth/authorize?${query}`); return true;
       }
       if (request.method === 'GET' && url.pathname === '/auth/github/callback') {
         const state = url.searchParams.get('state') ?? '', code = url.searchParams.get('code');
-        const flow = flows.get(hash(state));
-        if (!flow || state !== jar.get(flowCookie) || !code || code.length > 500 || url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length !== 1) {
+        const flow = flowOf(jar.get(flowCookie));
+        for (const [key, expires] of used) if (expires <= Date.now()) used.delete(key);
+        if (!flow || state !== flow.state || used.has(state) || !code || code.length > 500 || url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length !== 1) {
           redirect(response, '/?signin=expired'); return true;
         }
-        flows.delete(hash(state));
+        used.set(state, Date.now() + 600_000);
+        if (used.size > 10_000) used.delete(used.keys().next().value!);
         response.setHeader('Set-Cookie', cookie(flowCookie, '', 0));
         if (sessions.size >= 1000) { redirect(response, '/?signin=busy'); return true; }
         const exchanged = await fetcher('https://github.com/login/oauth/access_token', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ client_id: options.clientId, client_secret: options.clientSecret, code, redirect_uri: callback, code_verifier: flow.verifier, ...(repositories ? {} : { repository_id: String(initial.config.repositoryId) }) }), redirect: 'error', signal: AbortSignal.timeout(8000) });
+          body: new URLSearchParams({ client_id: options.clientId, client_secret: options.clientSecret, code, redirect_uri: callback, code_verifier: verifierOf(flow.state), ...(repositories ? {} : { repository_id: String(initial.config.repositoryId) }) }), redirect: 'error', signal: AbortSignal.timeout(8000) });
         if (!exchanged.ok) throw new Error('Token exchange failed');
         const grant = await exchanged.json();
         if (typeof grant.access_token !== 'string' || !/^ghu_[a-zA-Z0-9]{10,255}$/.test(grant.access_token)
