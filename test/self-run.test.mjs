@@ -237,3 +237,18 @@ test('the runner is offered work only where the repository turned self-run on', 
   assert.equal(offered[1][4].profile.provider, 'openrouter');
   assert.equal(offered[1][4].token, 'read-only');
 });
+
+// The pool secret runs reviews on this service's model key and hands out each job's GitHub token,
+// so it works only from this machine: through the public proxy it is refused even when correct.
+test('the pool secret is refused on a request that came through the public proxy', async t => {
+  const { runners } = setup(t);
+  const pool = 'p'.repeat(32);
+  const handler = runnerApi(runners, undefined, pool, fetch, async () => {}, 0);
+  const server = createServer(async (request, response) => { await handler(request, response); });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const poll = extra => fetch(`http://127.0.0.1:${server.address().port}/api/runner/v1/poll`, { method: 'POST',
+    headers: { Authorization: `Bearer ${pool}`, 'x-atmin-runner-pool': 'hosted-1', ...extra }, body: '{}' });
+  assert.equal((await poll({ 'X-Forwarded-For': '203.0.113.7' })).status, 401);
+  assert.equal((await poll({})).status, 200);
+});

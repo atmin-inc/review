@@ -120,6 +120,19 @@ test('OAuth binds browser/state/PKCE/repository; tokens stay server-side; codes 
   for (const kept of later) assert.equal((await f.get('/api/review/v1/dashboard', kept)).status, 200);
 });
 
+// Anyone can start a sign-in. Unfinished ones once filled a 1,000-entry table and refused every
+// sign-in for ten minutes; a sign-in now lives in its signed cookie, which cannot be altered.
+test('unfinished sign-ins cannot lock others out, and a sign-in cookie cannot be altered', async t => {
+  const f = await setup(t);
+  for (let i = 0; i < 1001; i++) assert.equal((await f.get('/auth/github')).status, 303);
+  const flow = await f.begin('?repository=42');
+  const [state, expires, , signature] = flow.cookie.split('=')[1].split('.');
+  const altered = `${flow.cookie.split('=')[0]}=${state}.${expires}.${Buffer.from('https://evil.test/').toString('base64url')}.${signature}`;
+  assert.equal((await f.get(flow.path, altered)).headers.get('location'), '/?signin=expired'); assert.equal(f.state.exchanges, 0);
+  const { response } = await f.finish(flow);
+  assert.equal(response.headers.get('location'), '/?repository=42');
+});
+
 test('repository admin and actual installation access are required and revalidated', async t => {
   const f = await setup(t); f.state.admin = false;
   const flow = await f.begin();

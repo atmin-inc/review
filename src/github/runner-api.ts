@@ -54,7 +54,11 @@ export function runnerApi(runners: Runners, clientId: string | undefined, poolTo
       const authorization = request.headers.authorization ?? '';
       const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
       const pool = request.headers['x-atmin-runner-pool'];
-      const runner = typeof pool === 'string' ? Runners.hosted(token, poolToken, pool) : token ? runners.authenticate(token) : null;
+      // This service's runners call it on localhost; a pool request that came through the public
+      // proxy (Caddy always sets X-Forwarded-For) is refused, so the pool secret alone, if it
+      // leaked, does not let anyone on the internet take jobs with their tokens and model keys.
+      const proxied = request.headers['x-forwarded-for'] !== undefined;
+      const runner = typeof pool === 'string' ? (proxied ? null : Runners.hosted(token, poolToken, pool)) : token ? runners.authenticate(token) : null;
       if (!runner) { json(response, 401, { error: 'Sign in again with `atmin-code-review-runner login`.' }); return true; }
       if (request.method === 'POST' && path === '/api/runner/v1/poll') {
         const input = await body(request, 4096);
