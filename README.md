@@ -166,7 +166,7 @@ on their own machine without this sandbox.
 
 Register an App with repository Contents read, Issues read, Pull requests write and
 Checks write. Issues read is what makes GitHub offer the Issue comment event, which carries
-`/atmin review`. Subscribe to Pull request, Push, Issue comment and Check run events. Install it only
+`/atmin review`. Subscribe to Pull request, Push, Issue comment, Pull request review comment and Check run events. A maintainer accepts a finding that needs no change by replying `/atmin accept` under its inline comment, or accepts every finding of the latest review by commenting `/atmin accept` on the PR; accepted findings leave the summary and the check, without another model call. Install it only
 on the intended repository. Set its webhook to your HTTPS proxy's
 `/webhooks/github`, forwarding to the worker on loopback port 8787.
 

@@ -15,7 +15,7 @@ import type { ReviewSettings } from './settings.js';
 import { dailyLimitReached, authorLimitReached, month } from './repositories.js';
 import { InlineReviews } from './inline.js';
 import { runnerLabel, type Outcome, type RunnerRow } from './runners.js';
-import { Outcomes } from './outcomes.js';
+import { Outcomes, findingKey } from './outcomes.js';
 import { MAX_DIFF_BYTES } from '../claim-run.js';
 
 // Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
@@ -269,7 +269,11 @@ export class Worker {
     // Reconciliation refreshes CI and formatting from saved source evidence, without inference.
     if (job.artifact && existsSync(join(job.artifact, 'packet.json')) && existsSync(join(job.artifact, 'result.json'))) {
       const packet = parsePacket(JSON.parse(readFileSync(join(job.artifact, 'packet.json'), 'utf8')));
-      const result = parseResult(JSON.parse(readFileSync(join(job.artifact, 'result.json'), 'utf8')));
+      const reviewed = parseResult(JSON.parse(readFileSync(join(job.artifact, 'result.json'), 'utf8')));
+      // Findings a maintainer accepted with `/atmin accept` are left out of everything published.
+      const accepted = this.store.accepted(job.pr);
+      const result = { ...reviewed, findings: reviewed.findings.filter(finding => !accepted.has(findingKey(finding))) };
+      const acceptedCount = reviewed.findings.length - result.findings.length;
       const live = await this.github.pull(job.pr);
       if (packet.repository !== this.config.repository || packet.pr !== job.pr || !same(saved.initial, live)
         || compareCurrent(packet, live).status !== 'current') { this.cancel(job); return; }
@@ -280,7 +284,8 @@ export class Worker {
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       writeFileSync(join(job.artifact, 'validation.json'), JSON.stringify({ headSha: packet.headSha, baseSha: packet.baseSha,
         checkedAt: new Date().toISOString(), checks: [...ci, ...verification.checks] }, null, 2), { mode: 0o600 });
-      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification, this.price?.(job) ?? undefined)}${ranOn(job)}\nRun: \`${job.id}\`\n`;
+      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification, this.price?.(job) ?? undefined)}${ranOn(job)}`
+        + `${acceptedCount ? `\n${acceptedCount} finding(s) accepted by a maintainer with \`/atmin accept\` and not counted.\n` : ''}\nRun: \`${job.id}\`\n`;
       saved.check = assessmentCheck(assessment);
       this.store.update(job.id, { report: JSON.stringify(saved) });
     }

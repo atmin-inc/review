@@ -22,6 +22,14 @@ export const findingKey = (finding: Pick<Finding, 'anchor' | 'title'>): string =
 // Hidden in each inline comment so its reactions can be tied back to the finding.
 export const findingMarker = (finding: Pick<Finding, 'anchor' | 'title'>): string => `<!-- atmin-finding:${findingKey(finding)} -->`;
 
+// The findings of the PR's latest completed review, which a PR-wide `/atmin accept` accepts.
+export function latestFindings(store: Store, pr: number): Finding[] {
+  const job = store.db.prepare("SELECT * FROM jobs WHERE pr=? AND state='completed' AND artifact IS NOT NULL ORDER BY created DESC, rowid DESC LIMIT 1").get(pr) as unknown as Job | undefined;
+  if (!job || !existsSync(join(job.artifact!, 'result.json'))) return [];
+  const packet = parsePacket(JSON.parse(readFileSync(join(job.artifact!, 'packet.json'), 'utf8')));
+  return assess(packet, parseResult(JSON.parse(readFileSync(join(job.artifact!, 'result.json'), 'utf8')))).findings;
+}
+
 const trimmed = (text: string) => text.split('\n').map(line => line.trim());
 function flagged(text: string, line: number): string[] | null {
   const lines = trimmed(text);
@@ -81,19 +89,20 @@ export class Outcomes {
       } catch (error) { note = failureCause(error); }
       rows.push({ key, job, head, finding, code, note });
     }
+    const accepted = this.store.accepted(pr);
     this.store.transaction(() => {
       this.store.db.prepare('DELETE FROM outcomes WHERE pr=?').run(pr);
-      const insert = this.store.db.prepare('INSERT INTO outcomes(pr,finding,job,head,final,merged,priority,path,line,title,code,note,up,down,replies,recorded) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+      const insert = this.store.db.prepare('INSERT INTO outcomes(pr,finding,job,head,final,merged,priority,path,line,title,code,note,up,down,replies,recorded,accepted) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
       for (const { key, job, head, finding, code, note } of rows) {
         const counts = comments === null ? null : reactions.get(key) ?? null;
         insert.run(pr, key, job, head, live.headSha, Number(live.merged), finding.priority, finding.anchor.path, finding.anchor.line, finding.title, code, note,
-          counts?.up ?? null, counts?.down ?? null, counts?.replies ?? null, now);
+          counts?.up ?? null, counts?.down ?? null, counts?.replies ?? null, now, Number(accepted.has(key)));
       }
     });
     const tally = (code: CodeOutcome) => rows.filter(row => row.code === code).length, sum = (field: 'up' | 'down' | 'replies') => [...reactions.values()].reduce((n, counts) => n + counts[field], 0);
     const notes = [...new Set(rows.filter(row => row.note).map(row => row.note))];
     process.stderr.write(`atmin review: outcomes of PR ${pr} in repository ${this.repositoryId} (${live.merged ? 'merged' : 'closed unmerged'} at ${live.headSha.slice(0, 12)}): `
-      + `${rows.length} finding(s), ${tally('changed')} changed, ${tally('unchanged')} unchanged, ${tally('unknown')} unknown; `
+      + `${rows.length} finding(s), ${tally('changed')} changed, ${tally('unchanged')} unchanged, ${tally('unknown')} unknown, ${rows.filter(row => accepted.has(row.key)).length} accepted; `
       + (comments === null ? `reactions not read: ${commentsFailed}` : `${sum('up')} thumbs up, ${sum('down')} thumbs down, ${sum('replies')} replies on inline comments`)
       + (unreadable ? `; ${unreadable} completed review(s) had unreadable results` : '') + (notes.length ? `; notes: ${notes.join('; ')}` : '') + '\n');
   }

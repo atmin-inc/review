@@ -51,6 +51,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS outcomes (pr INTEGER NOT NULL, finding TEXT NOT NULL, job TEXT NOT NULL, head TEXT NOT NULL, final TEXT NOT NULL, merged INTEGER NOT NULL,
         priority TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL, title TEXT NOT NULL, code TEXT NOT NULL, note TEXT, up INTEGER, down INTEGER, replies INTEGER,
         recorded INTEGER NOT NULL, PRIMARY KEY(pr, finding));
+      CREATE TABLE IF NOT EXISTS accepted (pr INTEGER NOT NULL, finding TEXT NOT NULL, user INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(pr, finding));
       CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, created);`);
     // Databases created before incremental review lack the column; old jobs read as events.
     if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'trigger')) {
@@ -70,6 +71,11 @@ export class Store {
     // and credit never count them. Jobs from before such keys ran on this service's.
     if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'modelKey')) {
       this.db.exec('ALTER TABLE jobs ADD COLUMN modelKey TEXT');
+    }
+    // Whether a maintainer accepted the finding with `/atmin accept`; outcomes recorded before
+    // acceptance existed have none.
+    if (!this.db.prepare('PRAGMA table_info(outcomes)').all().some(column => column.name === 'accepted')) {
+      this.db.exec('ALTER TABLE outcomes ADD COLUMN accepted INTEGER');
     }
   }
   close(): void { this.db.close(); }
@@ -230,6 +236,25 @@ export class Store {
         SELECT jobs.id FROM jobs JOIN pulls ON jobs.id=pulls.desired
         WHERE pulls.active=1 AND jobs.state IN ('running','dispatched','publishing','completed')
           AND json_extract(jobs.report,'$.initial.headSha')=?`).run(head);
+    });
+  }
+  // Findings (by `findingKey`) a maintainer accepted on this PR with `/atmin accept`. They stay
+  // in outcomes but leave the summary, the inline comments and the check (Lors, 2026-10-11).
+  accepted(pr: number): Set<string> {
+    return new Set(this.db.prepare('SELECT finding FROM accepted WHERE pr=?').all(pr).map(row => String(row.finding)));
+  }
+  // Records the acceptances and republishes the PR's current review without inference, as a CI
+  // refresh does. Returns how many findings were not already accepted.
+  accept(delivery: string, pr: number, findings: string[], user: number, now = Date.now()): number {
+    return this.transaction(() => {
+      if (this.seen(delivery)) return 0;
+      this.db.prepare('INSERT INTO deliveries VALUES(?,?)').run(delivery, now);
+      const insert = this.db.prepare('INSERT OR IGNORE INTO accepted(pr,finding,user,at) VALUES(?,?,?,?)');
+      const added = findings.reduce((n, finding) => n + Number(insert.run(pr, finding, user, now).changes), 0);
+      if (added && this.enabled()) this.db.prepare(`INSERT OR IGNORE INTO ci_refreshes(job)
+        SELECT jobs.id FROM jobs JOIN pulls ON jobs.id=pulls.desired
+        WHERE pulls.pr=? AND pulls.active=1 AND jobs.state IN ('running','dispatched','publishing','completed')`).run(pr);
+      return added;
     });
   }
   status(): unknown {
