@@ -5,6 +5,7 @@ import type { GitHub } from './api.js';
 import type { Store } from './store.js';
 import type { Repository } from './repositories.js';
 import type { ReviewSettings } from './settings.js';
+import { findingKey, latestFindings } from './outcomes.js';
 
 export function validSignature(body: Buffer, header: string | undefined, secret: string): boolean {
   if (!header || !/^sha256=[a-f0-9]{64}$/.test(header)) return false;
@@ -46,6 +47,23 @@ export function webhookServer(secret: string, dispatch: (event: string | string[
 // A maintainer's comment that asks for a full review. `@atmin review` is accepted because people
 // address a bot by mention; it does not need to resolve to a GitHub account.
 const commands = ['/atmin review', '@atmin review'];
+// A maintainer accepting findings: as a reply to one of atmin's inline findings, that finding;
+// as a PR comment, every finding of the latest completed review. Accepted findings leave the
+// summary, the inline comments and the check, and outcomes record them (Lors, 2026-10-11).
+const acceptCommands = ['/atmin accept', '@atmin accept'];
+
+// Only the commenting maintainer's own comment counts, and only one who may review the PR.
+async function permitted(github: GitHub, payload: any): Promise<string | null> {
+  if (payload.comment.user?.type !== 'User' || payload.sender?.id !== payload.comment.user?.id) return 'ignored actor';
+  // GitHub expects a prompt acknowledgement. On timeout, accept nothing and allow redelivery.
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const allowed = await Promise.race([github.canReview(payload.comment.user.login), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Permission lookup deadline')), 8000);
+    })]);
+    return allowed ? null : 'insufficient permission';
+  } finally { clearTimeout(timer); }
+}
 
 export async function repositoryEvent(config: PilotConfig, store: Store, github: GitHub, event: string | string[] | undefined, delivery: string, payload: any, settings?: Pick<ReviewSettings, 'current'>): Promise<[number, string]> {
   if (payload.installation?.id !== config.installationId) { return [202, 'ignored installation']; }
@@ -76,17 +94,29 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     return [202, 'automatic reviews off'];
   }
   if (starts || (event === 'pull_request' && ['converted_to_draft', 'closed'].includes(payload.action))) pr = payload.number;
-  if (event === 'issue_comment' && payload.action === 'created' && payload.issue?.pull_request && commands.includes(payload.comment?.body?.trim())) {
-    if (payload.comment.user?.type !== 'User' || payload.sender?.id !== payload.comment.user?.id) { return [202, 'ignored actor']; }
-    // GitHub expects a prompt acknowledgement. On timeout, accept nothing and allow redelivery.
-    let timer: NodeJS.Timeout | undefined;
-    let allowed: boolean;
-    try {
-      allowed = await Promise.race([github.canReview(payload.comment.user.login), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Permission lookup deadline')), 8000);
-      })]);
-    } finally { clearTimeout(timer); }
-    if (!allowed) { return [202, 'insufficient permission']; }
+  const body = typeof payload.comment?.body === 'string' ? payload.comment.body.trim() : '';
+  if (payload.action === 'created' && acceptCommands.includes(body)
+    && ((event === 'issue_comment' && payload.issue?.pull_request) || (event === 'pull_request_review_comment' && Number.isSafeInteger(payload.comment?.in_reply_to_id)))) {
+    const refused = await permitted(github, payload);
+    if (refused) return [202, refused];
+    const number = event === 'issue_comment' ? payload.issue.number : payload.pull_request?.number;
+    if (!Number.isSafeInteger(number) || number < 1) return [202, 'ignored event'];
+    let keys: string[];
+    if (event === 'issue_comment') keys = latestFindings(store, number).map(findingKey);
+    else {
+      // The finding is named by the marker in atmin's own comment being replied to, never a person's.
+      const parent = (await github.reviewComments(number)).find(comment => comment.id === payload.comment.in_reply_to_id && !comment.human);
+      const key = parent && /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(parent.body)?.[1];
+      if (!key) return [202, 'not a reply to an atmin finding'];
+      keys = [key];
+    }
+    const added = store.accept(delivery, number, keys, payload.comment.user.id);
+    process.stderr.write(`atmin review: ${payload.comment.user.login} accepted ${added} finding(s) on ${config.repository}#${number}\n`);
+    return [202, `${added} finding(s) accepted`];
+  }
+  if (event === 'issue_comment' && payload.action === 'created' && payload.issue?.pull_request && commands.includes(body)) {
+    const refused = await permitted(github, payload);
+    if (refused) return [202, refused];
     if (store.fullReviewActive(payload.issue.number)) {
       process.stderr.write(`atmin review: ${payload.comment.body.trim()} on ${config.repository}#${payload.issue.number} ignored: a full review of it is already running\n`);
       return [202, 'full review already running'];

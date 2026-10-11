@@ -1229,3 +1229,55 @@ test('a runner that does not deliver leaves an ordinary hosted review', async t 
   assert.match(h.comment.body, /review not run[\s\S]*Credit used up\./);
   assert.equal(h.store.get(second).started, null, 'a refused review never counts as started');
 });
+
+// Lors, 2026-10-11 (pilot PR #4954): a maintainer who decides a finding needs no change had no way
+// to say so, and the check stayed red. Replying `/atmin accept` under one inline finding accepts
+// that one; commenting it on the PR accepts every finding of the latest review. Accepted findings
+// leave the summary and the check without another model call, stay accepted across pushes, and
+// outcomes record them; only a maintainer's own comment counts.
+test('/atmin accept takes a finding out of the check and summary without another review', async t => {
+  const second = { ...finding('P2'), id: 'second', title: 'Failed copy leaves copied files behind' };
+  const h = await harness(t, [finding(), second]); const post = await http(t, h);
+  h.store.enqueue('source', 1); await h.worker.tick();
+  assert.equal(h.checks[0].output.title, 'Changes needed');
+  const [first, other] = h.reviews[0].comments.map((c, i) => ({ id: h.reviews[0].id * 100 + i, body: c.body }));
+  assert.match(other.body, /Failed copy/);
+  const reply = (body, login, inReplyTo) => ({ action: 'created', number: 1, pull_request: { number: 1 }, sender: { id: 9 },
+    comment: { body, in_reply_to_id: inReplyTo, user: { id: 9, login, type: 'User' } } });
+
+  // A stranger, a reply to a person's comment and other text accept nothing.
+  await post('pull_request_review_comment', reply('/atmin accept', 'stranger', first.id), 'stranger');
+  const listed = h.github.reviewComments;
+  h.github.reviewComments = async pr => [...await listed(pr), { id: 7, reviewId: null, replyTo: null, human: true, body: first.body, up: 0, down: 0 }];
+  assert.equal(await (await post('pull_request_review_comment', reply('/atmin accept', 'maintainer', 7), 'human-parent')).text(), 'not a reply to an atmin finding\n');
+  await post('pull_request_review_comment', reply('/atmin accept please', 'maintainer', first.id), 'chatter');
+  assert.equal(h.store.accepted(1).size, 0);
+
+  // One reply accepts the one finding it answers; the other still holds the check.
+  await post('pull_request_review_comment', reply('/atmin accept', 'maintainer', first.id), 'one');
+  assert.deepEqual([...h.store.accepted(1)], [findingKey(finding())]);
+  await h.worker.tick();
+  assert.equal(h.checks[0].output.title, 'Changes needed');
+  assert.doesNotMatch(h.comment.body, /Account owner guard removed/);
+  assert.match(h.comment.body, /1 finding\(s\) accepted by a maintainer/);
+
+  // A PR comment accepts the rest, and the check stops asking for changes.
+  await post('issue_comment', { action: 'created', issue: { number: 1, pull_request: {} }, sender: { id: 9 },
+    comment: { body: '@atmin accept', user: { id: 9, login: 'maintainer', type: 'User' } } }, 'all');
+  assert.equal(h.store.accepted(1).size, 2);
+  await h.worker.tick();
+  assert.notEqual(h.checks[0].output.title, 'Changes needed');
+  assert.match(h.comment.body, /2 finding\(s\) accepted/);
+  assert.equal(h.counts.runs, 1, 'accepting asks no model');
+  assert.equal(h.reviews.length, 1, 'nothing is posted inline again');
+
+  // A later push keeps them accepted, and outcomes record it when the PR closes.
+  h.setLive({ headSha: 'a'.repeat(40) });
+  h.store.enqueue('push', 1); await h.worker.tick();
+  assert.equal(h.counts.runs, 2);
+  assert.notEqual(h.checks.at(-1).output.title, 'Changes needed');
+  h.setLive({ state: 'closed', merged: true });
+  h.store.enqueue('closed', 1); await h.worker.tick();
+  assert.deepEqual(h.store.db.prepare('SELECT title, accepted FROM outcomes ORDER BY title').all().map(row => [row.title, row.accepted]),
+    [['Account owner guard removed', 1], ['Failed copy leaves copied files behind', 1]]);
+});
