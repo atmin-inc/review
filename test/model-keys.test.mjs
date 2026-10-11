@@ -56,7 +56,7 @@ test('an organization\'s model key is stored sealed, shown only by its last four
 
 // The organization pays its model provider for these reviews, so atmin's free allowance and
 // credit must not be spent or required. Nor do the daily limits hold them: they bound this
-// service's model spend, and The pilot customer neared the service's 100 a day on its own key (2026-10-08).
+// service's model spend, and the pilot customer neared the service's 100 a day on its own key (2026-10-08).
 test('reviews on an organization\'s own key need no free reviews or credit, and neither its plan nor the daily limits count or hold them; the off switch applies', t => {
   const f = setup(t);
   f.entry.store.enable(true);

@@ -251,7 +251,7 @@ test('pausing an active rerun replaces the pending summary and cancels its check
 });
 
 test('the target branch moving on during a review does not cancel it', async t => {
-  // the pilot repository's main moves every few minutes; a review that takes several would never finish.
+  // The pilot repository's main moves every few minutes; a review that takes several would never finish.
   const h = await harness(t);
   const runner = async (job, signal) => { const path = await h.runner(job, signal); h.setLive({ baseSha: 'b'.repeat(40) }); return path; };
   const worker = new Worker(h.config, h.store, h.github, inline(runner), 'owner');
@@ -375,7 +375,7 @@ test('engine failures publish an honest failure summary; no successful review is
   assert.match(h.comment.body, /review failed/); assert.doesNotMatch(h.comment.body, /secret-provider-body/);
 });
 
-// pilot PR #4832 (6.5 MB of diff) failed as "review failed", with the cause lost.
+// Pilot PR #4832 (6.5 MB of diff) failed as "review failed", with the cause lost.
 test('a diff over the limit is refused on the PR as too large, not counted, and its cause logged; other failures say theirs', async t => {
   const h = await harness(t);
   const failing = failure => async job => { writeFileSync(join(job.artifact, 'failure.json'), JSON.stringify(failure)); throw new Error('child failed'); };
@@ -789,7 +789,7 @@ test('inline publication is commit-bound, hides optional findings and survives C
   h.store.refreshValidation('ci-finished', h.live.headSha); await h.worker.tick();
   assert.equal(h.reviews.length, 1); assert.equal(h.counts.runs, 1);
 });
-// pilot PR #4787 (2026-10-07): each re-review of the PR posted the same finding again, five
+// Pilot PR #4787 (2026-10-07): each re-review of the PR posted the same finding again, five
 // inline comments on one line. The author reads one; the rest are noise that buries new ones.
 test('a finding already posted inline on the PR is not posted again by a later review, on any head', async t => {
   const findings = [finding()];

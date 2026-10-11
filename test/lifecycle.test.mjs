@@ -276,7 +276,7 @@ test('a miss that the change itself caused does not refute the claim about it', 
 });
 
 // A literal miss proves nothing either way, even where the change did not cause it: the
-// text may be spelled differently (`1_000` for `1000` killed a real pilot PR #4887 defect).
+// text may be spelled differently (`1_000` for `1000` killed a real defect on pilot PR #4887).
 // It goes to rung 3, so the claim ships only if the model affirms it, and dies if the model
 // denies it. Replayed over 141 pilot-repository runs before becoming the rule (see lifecycle.ts).
 test('a literal miss is handed to rung 3 instead of refuting', t => {

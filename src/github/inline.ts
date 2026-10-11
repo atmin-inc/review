@@ -79,7 +79,7 @@ export class InlineReviews {
       if (row) throw new Error('Inline review creation uncertain; reconcile explicitly');
       // A finding already on the PR from an earlier review (same path and title, on any head)
       // is not posted again: it stays in the summary. Only bot comments count, so a person
-      // cannot hide a finding by pasting its marker. pilot PR #4787 got one finding five times
+      // cannot hide a finding by pasting its marker. Pilot PR #4787 got one finding five times
       // on one commit when the PR was re-reviewed; CodeRabbit posted no repeats over two days.
       const posted = new Set((await this.github.reviewComments(job.pr))
         .flatMap(comment => comment.human ? [] : /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(comment.body)?.[1] ?? []));

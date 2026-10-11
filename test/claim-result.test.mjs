@@ -227,7 +227,7 @@ test('a 300 KB diff is reviewed and a diff whose only file is over 512 KB is ref
   assert.deepEqual(JSON.parse(readFileSync(join(huge, 'failure.json'), 'utf8')), { phase: 'investigate', reason: 'Error' });
 });
 
-// pilot PR #4832's 6.5 MB diff was mostly the old content of 498 deleted files. Lors chose on
+// Pilot PR #4832's 6.5 MB diff was mostly the old content of 498 deleted files. Lors chose on
 // 2026-10-08 that the claim pass reads a deletion as its header only and leaves lock files out,
 // so such a PR fits, and a lock file is listed as not reviewed without holding the rating open.
 test('a deleted file is read as its deletion and a lock file is left out, so neither counts toward the limit', async t => {
@@ -258,7 +258,7 @@ test('a deleted file is read as its deletion and a lock file is left out, so nei
   assert.match(renderMarkdown(packet, result, assessment), /\*\*2\/2 files reviewed\*\* · 1 lock file not reviewed/);
 });
 
-// pilot PR #4832 is still 1.3 MB without its deletions. Lors asked on 2026-10-08 why a PR that is
+// Pilot PR #4832 is still 1.3 MB without its deletions. Lors asked on 2026-10-08 why a PR that is
 // a bit big cannot be fully reviewed; it can: the diff is split into parts of up to 256 KB (a file
 // up to 512 KB gets a part to itself; on #4832 three 512 KB parts left two unfinished and six 256 KB
 // parts all finished), in path order so a folder's files share a part, each part gets its own

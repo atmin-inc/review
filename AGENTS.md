@@ -3,6 +3,10 @@
 Operational facts that are expensive to rediscover. Keep it short; if a section stops
 being true, fix it rather than adding a second one.
 
+**This repository is meant to be public.** Never name a customer, a customer's repository
+or people, or paste customer code or finding text, in code, tests, docs or commit messages.
+Write "the pilot repository" or "a customer PR" instead.
+
 ## Running the reviewer in a container
 
 - `npm ci` before `npm run build` — a fresh clone has no `node_modules`. Node here is 22
@@ -1026,6 +1030,6 @@ sample of 56 labelled claims harmful shipped held at 33 of 40 and acceptable wen
 
 Inline findings are posted once per PR (2026-10-08). Before posting, the worker lists the
 PR's review comments and skips any finding whose `atmin-finding` marker a bot comment already
-carries (same path and title, any head); the summary still lists it. Over two days of the pilot customer
+carries (same path and title, any head); the summary still lists it. Over two days of pilot-repository
 PRs atmin posted 27 repeat comments of 99 (one finding five times on one commit, pilot PR #4787),
 Mira 10 of 75, CodeRabbit none. A reworded title on a later head is not caught.
