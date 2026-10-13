@@ -21,6 +21,8 @@ export const findingKey = (finding: Pick<Finding, 'anchor' | 'title'>): string =
   createHash('sha256').update(`${finding.anchor.path}\0${finding.title}`).digest('hex').slice(0, 16);
 // Hidden in each inline comment so its reactions can be tied back to the finding.
 export const findingMarker = (finding: Pick<Finding, 'anchor' | 'title'>): string => `<!-- atmin-finding:${findingKey(finding)} -->`;
+// The finding key a comment's marker names, if it carries one. Callers decide whose comments count.
+export const markedFinding = (body: string): string | undefined => /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(body)?.[1];
 
 // The findings of the PR's latest completed review, which a PR-wide `/atmin accept` accepts.
 export function latestFindings(store: Store, pr: number): Finding[] {
@@ -61,7 +63,7 @@ export class Outcomes {
     if (reviews.size && first.size) try { comments = await this.github.reviewComments(pr); } catch (error) { comments = null; commentsFailed = failureCause(error); }
     const reactions = new Map<string, { up: number; down: number; replies: number }>();
     for (const comment of comments ?? []) {
-      const key = comment.reviewId !== null && reviews.has(comment.reviewId) ? /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(comment.body)?.[1] : undefined;
+      const key = comment.reviewId !== null && reviews.has(comment.reviewId) ? markedFinding(comment.body) : undefined;
       if (!key) continue;
       const counts = reactions.get(key) ?? { up: 0, down: 0, replies: 0 };
       counts.up += comment.up; counts.down += comment.down;

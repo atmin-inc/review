@@ -4,7 +4,7 @@ import { renderFinding } from '../render.js';
 import { validateFix } from '../assessment.js';
 import type { GitHub, InlineComment, PullFile } from './api.js';
 import type { Job, Store } from './store.js';
-import { findingKey, findingMarker } from './outcomes.js';
+import { findingKey, findingMarker, markedFinding } from './outcomes.js';
 
 // GitHub's per-file patch avoids parsing quoted Git paths or guessing rename mappings.
 function diffLines(patch: string) {
@@ -81,7 +81,7 @@ export class InlineReviews {
       // is not posted again, since each push review would otherwise repeat it; it stays in the
       // summary. Only bot comments count, so a person cannot hide a finding by pasting its marker.
       const posted = new Set((await this.github.reviewComments(job.pr))
-        .flatMap(comment => comment.human ? [] : /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(comment.body)?.[1] ?? []));
+        .flatMap(comment => comment.human ? [] : markedFinding(comment.body) ?? []));
       const comments = inlineComments(packet, findings.filter(finding => !posted.has(findingKey(finding))),
         await this.github.files(job.pr), verification);
       if (!comments.length || !await current()) return;
