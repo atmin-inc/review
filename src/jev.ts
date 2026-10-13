@@ -212,7 +212,7 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
       const response = await transport(ENDPOINT, { method: 'POST', body, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
       status = response.status;
-      // SMOKE_TEST_JEV.md, gotcha 1: an unauthenticated POST returns 403, not the
+      // docs/jev-smoke-test.md, gotcha 1: an unauthenticated POST returns 403, not the
       // documented 401. ProviderRequestError reads both as authentication.
       if (!response.ok) throw new ProviderRequestError('inference', response.status);
       const text = await response.text();

@@ -88,5 +88,10 @@ fi
 if journalctl -u atmin-review --since "-1min" --no-pager | grep -q 'dashboard UI not built'; then log "warning: dashboard UI not built"; fi
 log "deployed $sha (previous $(basename "${previous:-none}"))"
 runners
-# Keep the five newest releases for rollback.
-ls -1dt "$root"/releases/*/ | tail -n +6 | xargs -r rm -rf
+# Keep the five newest releases for rollback, and never the live or previous one: redeploying an
+# older commit does not make its directory newer.
+live="$(readlink -f "$root/current")"
+ls -1dt "$root"/releases/*/ | tail -n +6 | while read -r dir; do
+  dir="${dir%/}"
+  [[ "$dir" == "$live" || "$dir" == "$previous" ]] || rm -rf -- "$dir"
+done

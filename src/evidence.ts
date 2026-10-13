@@ -35,7 +35,7 @@ export interface Chain {
 
 // A Noul returns the probability of yes and carries no separate confidence, so
 // "agrees" needs a boundary the spec does not fix. The neutral band is not
-// decoration: SMOKE_TEST_JEV.md found merge_ready at 0.49, 0.41 and 0.27 and called
+// decoration: docs/jev-smoke-test.md found merge_ready at 0.49, 0.41 and 0.27 and called
 // it almost no information, so a probability near the middle must not be read as
 // either agreement or disagreement. These defaults are a starting point for
 // calibration, not a measured result.

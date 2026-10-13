@@ -9,7 +9,7 @@ import { decide, findingsFrom, policyRejection, type Decision, type Policy } fro
 // out. The investigator is not here, and that is the point. This runs after a context
 // reset, over claims alone, so nothing the investigator argued for survives except
 // what a rung can establish about the code.
-// Rung 3 answers one proposition at a time, never the claim. SMOKE_TEST_JEV.md is the
+// Rung 3 answers one proposition at a time, never the claim. docs/jev-smoke-test.md is the
 // reason: factual checks came back sharp, and composite judgments clustered around a
 // coin flip. "Is this an auth bypass?" is the composite question. "Does any caller
 // compare owner to account before update()?" is the factual one, and it is also the

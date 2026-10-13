@@ -165,7 +165,7 @@ test('a failed call leaves the proposition unsettled instead of answering it', a
   assert.equal(chain.verdict, 'inconclusive');
 });
 
-// SMOKE_TEST_JEV.md, gotcha 1: an unauthenticated POST returns 403 where the docs
+// docs/jev-smoke-test.md, gotcha 1: an unauthenticated POST returns 403 where the docs
 // promise 401. A bad key must stop the run rather than quietly producing a review with
 // every rung-3 question unanswered.
 test('a rejected key stops the run rather than silently emptying rung 3', async t => {

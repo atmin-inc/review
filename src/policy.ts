@@ -3,7 +3,7 @@ import type { ClaimType } from './claim.js';
 import type { Chain, Confidence } from './evidence.js';
 
 // The verdict is composed by code from typed signals a model supplied. It is not a
-// model's judgment. SMOKE_TEST_JEV.md is the evidence: factual checks were sharp,
+// model's judgment. docs/jev-smoke-test.md is the evidence: factual checks were sharp,
 // composite judgments clustered around a coin flip. See spec/verdict-policy.md.
 export type ReviewVerdict = 'block' | 'security_review' | 'nits' | 'merge';
 

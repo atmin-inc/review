@@ -49,8 +49,8 @@ export function openAIModel(profile: Profile, apiKey = process.env[profile.provi
       return { model: response.model, inputTokens: response.usage?.input_tokens ?? NaN,
         responseId: response.id,
         outputTokens: response.usage?.output_tokens ?? NaN,
-        cachedInputTokens: response.usage?.input_tokens_details.cached_tokens ?? NaN,
-        cacheWriteTokens: response.usage?.input_tokens_details.cache_write_tokens ?? NaN,
+        cachedInputTokens: response.usage?.input_tokens_details?.cached_tokens ?? NaN,
+        cacheWriteTokens: response.usage?.input_tokens_details?.cache_write_tokens ?? NaN,
         status: response.status ?? 'unknown', continuation: response.output,
         calls: response.output.filter(item => item.type === 'function_call')
           .map(item => ({ id: item.call_id, name: item.name, arguments: item.arguments })),
