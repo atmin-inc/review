@@ -7,8 +7,8 @@ import { join, delimiter } from 'node:path';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 
-// `atmin` must stay a dispatcher that no tool owns (Lors, 2026-10-01): every atmin tool adds
-// commands by shipping `atmin-<name>`, so this command must reach any of them unchanged.
+// `atmin` is a dispatcher that no tool owns: every atmin tool adds commands by shipping
+// `atmin-<name>`, so this command must reach any of them unchanged.
 const atmin = fileURLToPath(new URL('../packaging/atmin-cli/atmin.mjs', import.meta.url));
 function bin(t, tools) {
   const directory = mkdtempSync(join(tmpdir(), 'atmin-cli-'));
@@ -37,8 +37,8 @@ test('an unknown or malformed command fails without running anything', t => {
 
 // The review runner finishes its review on the first stop signal; a service manager stopping
 // `atmin code-review-runner` must reach the runner, not just kill the wrapper.
-// If the signal is lost, the tool outlives atmin and holds this test's pipes open, which hung a
-// CI run until its time limit (2026-10-08); the tool is killed here, so a failure fails.
+// If the signal is lost, the tool outlives atmin and holds this test's pipes open until the CI
+// time limit; the tool is killed here, so a lost signal fails the test instead of hanging it.
 test('a stop signal reaches the tool, and atmin waits for it to finish', async t => {
   const env = bin(t, { 'atmin-slow': '#!/bin/sh\ntrap \'echo stopping; exit 7\' TERM\necho "ready $$"\nwhile true; do sleep 0.1; done\n' });
   const child = spawn(process.execPath, [atmin, 'slow'], { env });

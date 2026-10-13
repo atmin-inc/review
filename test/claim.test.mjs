@@ -92,13 +92,12 @@ test('a control-flow statement is never mistaken for a definition', () => {
   }
 });
 
-// Measured on 2026-09-20 against PR #4, a documentation-only change: one run in five
-// emitted 9 claims about the prose — a stale commit hash, an unreproducible test count,
-// undefined jargon — typed error_handling_gap and contract_break because those are the
-// only words the vocabulary offers. Six were confirmed at high confidence, because as
-// statements about the text their propositions really are established. Verification
-// settles propositions and never asks whether the type fits what it is about, so the
-// claim has to be refused where it is made.
+// A documentation-only change draws claims about the prose — a stale commit hash, an
+// unreproducible test count, undefined jargon — typed error_handling_gap or contract_break
+// because those are the only words the vocabulary offers. They confirm at high confidence,
+// because as statements about the text their propositions really are established.
+// Verification settles propositions and never asks whether the type fits what it is
+// about, so the claim has to be refused where it is made.
 test('a claim about a document is rejected, whatever type it is given', () => {
   for (const path of ['docs/handoff.md', 'README.markdown', 'notes.txt', 'guide.rst', 'book.adoc', 'page.mdx']) {
     assert.match(claimRejection(draft({ location: `${path}:3` }), null), /does not describe documents/,
@@ -112,10 +111,9 @@ test('a claim about a document is rejected, whatever type it is given', () => {
 });
 
 // Rung 1 searches for a single literal line of at most 200 characters. A claim carrying
-// anything else names a check that cannot be run, and before this it was accepted at
-// emit time and threw during verification, ending the review and losing every other
-// claim in it. Measured 2026-09-21 on Martian case-016: three runs out of three, after
-// the pilot had recorded that case as a clean merge.
+// anything else names a check that cannot be run. Accepted at emit time, it would throw
+// during verification, ending the review and losing every other claim in it; models emit
+// such patterns often enough that some benchmark cases produce one on every run.
 test('a check pattern the search cannot run is refused at emit time', () => {
   const draft = {
     type: 'auth_bypass', location: 'update.ts:2',
@@ -144,7 +142,7 @@ test('a check pattern the search cannot run is refused at emit time', () => {
 
 // Every human comment on the benchmark says what the code should have been; the noise
 // says what might happen. The corrective form is checked, not requested: asked for in the
-// prompt alone it appeared 0 times (2026-09-22). So when it is required, a claim with no
+// prompt alone, models do not produce it. So when it is required, a claim with no
 // departure to name cannot be recorded, a fix that is already there names nothing, and a
 // convention the claim cites has to exist where it says it does.
 test('a required correction is checked against the code, not taken on trust', () => {

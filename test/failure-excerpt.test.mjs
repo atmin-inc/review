@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { failureExcerpt, FAILURE_WINDOW } from '../dist/failure-excerpt.js';
 
-// The failure-path pass re-sends its context every turn and nothing is cached, so the
-// whole diff made it 2-3x a review's cost on pilot PR #4590. It is shown only the lines
-// around error handling, and a change with none gets no pass at all.
+// The failure-path pass re-sends its context every turn and nothing is cached, so sending
+// it the whole diff can cost two to three times the review itself. It is shown only the
+// lines around error handling, and a change with none gets no pass at all.
 const newFile = (path, lines) => [`diff --git a/${path} b/${path}`, 'new file mode 100644', '--- /dev/null', `+++ b/${path}`,
   `@@ -0,0 +1,${lines.length} @@`, ...lines.map(line => `+${line}`)].join('\n') + '\n';
 

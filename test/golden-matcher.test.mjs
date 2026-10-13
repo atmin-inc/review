@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matches } from '../benchmarks/golden-matcher.mjs';
 
-// Hand matching of golden comments was wrong twice on 2026-09-21, in both directions, and
-// every experiment result rests on it. These cases pin the decisions the matcher was
-// tuned on, so a change to a rule that silently moves a benchmark number fails here first.
+// Hand matching of golden comments errs in both directions, and every experiment result
+// rests on matching. These cases pin the decisions the matcher was tuned on, so a change
+// to a rule that silently moves a benchmark number fails here first.
 const SMS = 'packages/features/ee/workflows/api/scheduleSMSReminders.ts:28';
 const MIX = 'app/assets/stylesheets/common/foundation/mixins.scss:115';
 const IDP = 'model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/idp/InfinispanIdentityProviderStorageProvider.java:249';
@@ -39,7 +39,7 @@ test('a different defect in the same file does not match', () => {
     description: 'The getForLogin cache key does not include organizationId, causing all organization searches to share the same cache entry' }), []);
   assert.deepEqual(matches({ location: IDP,
     description: 'The getForLogin method may throw NullPointerException if idpDelegate.getForLogin returns null' }), []);
-  // From the pilot set: names WhatsApp and deletion, but says WhatsApp lacks the logic,
+  // From the tuning set: names WhatsApp and deletion, but says WhatsApp lacks the logic,
   // not that the delete reaches WhatsApp reminders.
   assert.deepEqual(matches({ location: SMS,
     description: 'The retry logic is inconsistent with WhatsApp reminders, which don\'t have retryCount increments or deletion logic.' }), []);

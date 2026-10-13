@@ -286,8 +286,8 @@ test('auto top-up charges the saved card the chosen amount below $5, once even w
   assert.deepEqual([f.repositories.billing(99).topUpFailed, f.repositories.toppedUp(), f.repositories.balance(99)], [null, [99], 13]);
 });
 
-// Going live on a server that ran in test mode: atmin-inc's test customer and card do not exist
-// for a live key, so keeping them would fail every purchase with "No such customer".
+// Going live on a server that ran in test mode: test-mode customers and cards do not exist for
+// a live key, so keeping them would fail every purchase with "No such customer".
 test('a Stripe key of the other mode forgets the old mode\'s customers, cards and open payments, keeps credit, and buys with a new customer', async t => {
   const f = setup(t);
   const live = { calls: [] };
@@ -299,7 +299,7 @@ test('a Stripe key of the other mode forgets the old mode\'s customers, cards an
     if (path === '/checkout/sessions') return Response.json({ id: 'cs_live_1', url: 'https://checkout.stripe.com/c/pay/cs_live_1' });
     throw new Error(`Unexpected Stripe call ${path}`);
   };
-  // Billing state from before the mode was recorded, as on the server today: it ran only test keys.
+  // Billing state written before the mode was recorded, which only test keys ever wrote.
   f.repositories.root.db.exec('DELETE FROM stripe');
   f.card(); f.repositories.setTopUp(99, 2500, 7);
   f.repositories.addCredit(99, 'cs_test_paid', 'purchase', 10_000_000, 7, null, null);
@@ -337,9 +337,9 @@ test('operators add or take credit with a note, within bounds', t => {
   for (const [usd, note] of [[0, 'x'], [NaN, 'x'], [1000.01, 'x'], [-1000.01, 'x'], ['5', 'x'], [5, ''], [5, ' '], [5, 'x'.repeat(201)], [5, undefined]]) {
     assert.throws(() => f.repositories.grant(99, usd, note, 8), /Invalid grant/);
   }
-  assert.equal(f.repositories.grant(99, 12.5, ' pilot credit ', 8), 12.5);
+  assert.equal(f.repositories.grant(99, 12.5, ' trial credit ', 8), 12.5);
   assert.equal(f.repositories.grant(99, -2.5, 'correction', 8), 10);
-  assert.deepEqual(f.repositories.creditHistory(99).map(({ kind, usd, by, note }) => [kind, usd, by, note]), [['grant', -2.5, 8, 'correction'], ['grant', 12.5, 8, 'pilot credit']]);
+  assert.deepEqual(f.repositories.creditHistory(99).map(({ kind, usd, by, note }) => [kind, usd, by, note]), [['grant', -2.5, 8, 'correction'], ['grant', 12.5, 8, 'trial credit']]);
 });
 
 test('the PR comment says what credit is left and warns when it runs low or out, unless auto top-up refills it', () => {

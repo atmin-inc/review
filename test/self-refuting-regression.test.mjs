@@ -9,11 +9,11 @@ import { revisionFrom } from '../dist/symbolic.js';
 import { verifyClaims } from '../dist/lifecycle.js';
 import { BALANCED } from '../dist/policy.js';
 
-// A live emitter produced these two claims against PR #2 on 2026-09-20. Both are
-// correct about the code, and rung 1 refuted both — the strongest verdict there is —
+// A live emitter produced these two claims against PR #2 of this repository. Both are
+// correct about the code, yet rung 1 could refute both — the strongest verdict there is —
 // because each carries a proposition about the account object's shape checked with
 // body_contains inside renameAccount, where the deleted guard was the only mention of
-// ownerId. The change refuted a claim about the change. This freezes that exact input
+// ownerId, so the change refuted a claim about the change. This freezes that exact input
 // so the behaviour cannot silently return.
 const { claims: CAPTURED } = JSON.parse(readFileSync(new URL('./fixtures/self-refuting-claims.json', import.meta.url), 'utf8'));
 
@@ -61,7 +61,7 @@ const verify = t => {
   return { claims, verification: verifyClaims(claims, revisions, BALANCED) };
 };
 
-test('the captured self-refuting claims are no longer refuted by the change itself', t => {
+test('a claim about a change is not refuted by the change itself', t => {
   const { verification } = verify(t);
 
   for (const chain of verification.chains) {
@@ -75,11 +75,11 @@ test('the captured self-refuting claims are no longer refuted by the change itse
     'both downgrades name the check they came from');
 });
 
-// The other half of the measurement, kept as a test so the limit stays visible. The
-// soundness fix buys correctness, not recall: it removes a wrong answer and leaves no
-// answer, and a claim whose proposition no rung can settle still does not ship. Getting
-// the finding back needs the check to reach the file that defines the object — which is
-// what the prompt now asks for, and what file_contains exists to express.
+// The limit of the rule above, kept as a test so it stays visible. Handing the circular
+// miss on buys correctness, not recall: it removes a wrong answer and leaves no answer,
+// and a claim whose proposition no rung can settle still does not ship. Getting the
+// finding back needs the check to reach the file that defines the object, which is what
+// the prompt asks for and what file_contains exists to express.
 test('and they still do not ship, because nothing can settle the proposition', t => {
   const { verification } = verify(t);
   assert.deepEqual(verification.chains.map(chain => chain.verdict), ['inconclusive', 'inconclusive']);

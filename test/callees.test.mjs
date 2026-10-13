@@ -6,8 +6,8 @@ import { revisionFrom } from '../dist/symbolic.js';
 import { calledCode, MAX_CALLED_CODE_BYTES } from '../dist/callees.js';
 
 // The change under review hands its errors to a mapper it does not touch. That mapper is
-// where the defect shows (every plain error becomes "vendor unavailable, retry"), and on
-// pilot PR #4590 the model never opened it, so it has to arrive with the change.
+// where the defect shows (every plain error becomes "vendor unavailable, retry"), and a
+// model reviewing the change does not reliably open it, so it has to arrive with the change.
 function change(t, files) {
   const f = repository(t);
   f.run('checkout', '-q', '--detach', f.state.baseSha);

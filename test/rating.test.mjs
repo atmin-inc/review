@@ -41,8 +41,8 @@ test('balanced uses quality evidence when there is some, and otherwise always sc
   f.result.findings = [finding('P4')];
   assert.equal(f.rating().score, 5);
   assert.equal(f.result.findings[0].fix, undefined);
-  // The claim pipeline makes no quality assessment; its reviews must still get a score
-  // (Lors, 2026-09-24), and a clean one earns 5/5 while defects keep their caps.
+  // The claim pipeline makes no quality assessment; its reviews must still get a score,
+  // and a clean one earns 5/5 while defects keep their caps.
   delete f.result.quality;
   assert.equal(f.rating().score, 5);
   assert.match(f.rating().reasons.join(' '), /rated by its findings alone/);

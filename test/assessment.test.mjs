@@ -92,11 +92,6 @@ test('a clean headline is impossible across incomplete, failing and stale combin
   }
 });
 
-// A model reads text, so counting an added icon or font as unfinished work meant such a PR
-// could never be rated: atmin-inc/review PR 12 had 0 findings and stayed red over six brand
-// assets, and 13 of 304 pilot-repository main commits in 30 days touch a binary file. Lors chose on
-// 2026-09-28 that binary files are listed as not reviewed and the rating comes from the text
-// files. A change made only of binary files had nothing reviewed, so it is still not clean.
 // A diff read in part can leave hundreds of files out; GitHub cuts a comment past 65,536 characters.
 test('the comment lists at most 50 files not reviewed and says how many more', t => {
   const f = repository(t);
@@ -111,6 +106,10 @@ test('the comment lists at most 50 files not reviewed and says how many more', t
   assert.match(body, /^- and 10 more\.$/m);
 });
 
+// A model reads text, so counting an added icon or font as unfinished work would leave such a
+// PR unrated even with no findings, and ordinary changes touch binary files often. Binary files
+// are listed as not reviewed and the rating comes from the text files. A change made only of
+// binary files had nothing reviewed, so it is still not clean.
 test('binary files are listed as not reviewed without holding the rating open', t => {
   const f = repository(t);
   f.write('icon.png', Buffer.from([0, 255]));
@@ -280,10 +279,9 @@ test('icons: every finding carries its priority, the headline follows the score,
   }
 });
 
-// On the pilot repository the details listed every changed file and every grep check that settled
-// nothing: PR 4420's comment carried 21 file lines and 11 such checks under 2 findings.
-// The comment names only what was not reviewed and counts the unsettled checks; the run
-// record and the dashboard keep both lists whole.
+// Listing every changed file and every grep check that settled nothing buries a few findings
+// under dozens of lines. The comment names only what was not reviewed and counts the
+// unsettled checks; the run record and the dashboard keep both lists whole.
 test('the PR comment lists only unreviewed files and counts checks that settled nothing', t => {
   const { packet } = repository(t);
   const result = completed(packet);

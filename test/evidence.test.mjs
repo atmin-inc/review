@@ -54,8 +54,8 @@ test('a refutation is not weakened by a model that disagrees with it', () => {
   assert.equal(compose([symbolic('miss'), jev(0.97)]).verifierConfidence, 'high');
 });
 
-// The smoke test found merge_ready at 0.49, 0.41 and 0.27 and called it almost no
-// information. A probability in that band must not count as agreement or denial.
+// A probability near one half carries almost no information about the claim, so a
+// probability in the neutral band must not count as agreement or denial.
 test('a probability in the neutral band is neither agreement nor disagreement', () => {
   for (const probability of [0.49, 0.41, 0.31, 0.69]) {
     assert.equal(compose([symbolic('hit'), jev(probability)]).verifierConfidence, 'moderate',
