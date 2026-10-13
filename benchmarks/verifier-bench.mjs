@@ -5,11 +5,11 @@
 // emitter's.
 //
 // Usage: node benchmarks/verifier-bench.mjs <bench-dir> [--save out.json] [--against old.json]
-//   <bench-dir> holds claims.json and snapshots/case-<id>/{packet.json,source.git.tar};
-//   the frozen copy is /mnt/project-files/verifier-bench. --save writes each claim's
+//   <bench-dir> holds claims.json and snapshots/case-<id>/{packet.json,source.git.tar}.
+//   The labelled set is not part of this repository. --save writes each claim's
 //   verdict; --against lists the claims whose verdict differs from a saved run, with labels.
 //
-// Labels (rubric in /mnt/project-files/labelled-claims-2026-09-22/rubric.md): G golden,
+// Labels (defined in docs/research-log.md): G golden,
 // R real, P plausible, S restatement, X speculation, O overstated. Harmful = X + O.
 //
 // The replay trap applies: a change that sends rung 3 a question it was never asked gets
@@ -64,7 +64,7 @@ for (const entry of claims) {
   } };
   try {
     // Nothing withheld: the bench measures what verification settles, and the P3 rule is
-    // a display decision measured separately (AGENTS.md, 2026-09-23).
+    // a display decision measured separately (docs/research-log.md).
     verdicts[entry.origin] = verifyClaims([entry.claim], revisions(entry.case), BALANCED, counting, undefined, { withhold: [] }).chains[0].verdict;
   } catch { verdicts[entry.origin] = 'error'; errors++; }
 }
@@ -81,7 +81,7 @@ const reproduced = replayed.filter(c => verdicts[c.origin] === c.recordedVerdict
 console.log(JSON.stringify({
   byLabel: rows,
   shipped: { harmful: sum(['X', 'O']), acceptable: sum(['G', 'R', 'P']), wasteful: sum(['S']) },
-  // The 2026-09-23 runs were verified by nearly this build; their recorded verdicts are the
+  // The exp-0923 runs were verified by nearly this build; their recorded verdicts are the
   // check that the bench replays faithfully. Older runs used older verifiers on purpose.
   reproducesRecent: `${reproduced} of ${replayed.length}`,
   unanswered, errors,

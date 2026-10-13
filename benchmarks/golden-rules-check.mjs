@@ -2,7 +2,8 @@
 // Each golden comment, used as a claim at its own file, must match its own rule and no other.
 import { readFileSync } from 'node:fs';
 import { RULES, matches } from './golden-matcher.mjs';
-const S = process.argv[2] ?? '/tmp/claude-0/-home-user-review/a22f72dd-0d77-5818-afcd-a7ade87227ea/scratchpad'; // holds golden/<project>.json
+const S = process.argv[2];
+if (!S) { console.error('usage: node benchmarks/golden-rules-check.mjs <dir with golden/<project>.json>'); process.exit(2); }
 const split = JSON.parse(readFileSync(new URL('./martian-development-split.json', import.meta.url)));
 const where = { '009[0]': 'packages/app-store/_utils/getCalendar.ts:10', '009[1]': 'packages/features/bookings/lib/handleCancelBooking.ts:300',
   '022[1]': 'public/app/features/alerting/unified/rule-list/components/RuleActionsButtons.V2.tsx:40',

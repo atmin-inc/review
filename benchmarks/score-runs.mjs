@@ -3,9 +3,9 @@
 // runClaimReview. Usage: node benchmarks/score-runs.mjs <run-set-directory> [maxRepeat]
 //
 // Reports per-run golden comments found rather than only "found at least once", because
-// the per-run mean has a measurable spread and the at-least-once count does not: on
-// 2026-09-22 the baseline measured 0.73 golden per run with SD 0.70, which is what sizes
-// an experiment. See /mnt/project-files/method-2026-09-22.md.
+// the per-run mean has a measurable spread and the at-least-once count does not. On the
+// benchmark cases the SD is about as large as the mean, and that spread is what sizes an
+// experiment (docs/research-log.md).
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { matches } from './golden-matcher.mjs';
