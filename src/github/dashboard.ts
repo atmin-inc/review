@@ -41,8 +41,8 @@ const manageUrl = (i: Installation) => `https://github.com/${i.accountType === '
 // `billing` is set when a Stripe key is configured; without it no credit can be bought, so
 // reviews past the free ones run only on credit an operator adds.
 export function dashboard(config: PilotConfig, options: DashboardConfig, store: Store, settings: ReviewSettings, fetcher: typeof fetch = fetch, repositories?: Repositories, app?: { id: string; key: string }, billing?: Billing) {
-  // ponytail: one process, bounded in-memory sessions (five per GitHub user); restart signs everyone
-  // out. Tokens never touch disk. Add shared encrypted sessions only with multiple web workers.
+  // Sessions live in this one process, at most five per GitHub user, so a restart signs everyone
+  // out and tokens never touch disk. Several web workers would need shared encrypted sessions.
   const sessions = new Map<string, Session>();
   const flows = new Map<string, Flow>();
   const callback = `${options.origin}/auth/github/callback`;

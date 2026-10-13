@@ -58,7 +58,7 @@ export function inlineComments(packet: Packet, findings: Finding[], files: PullF
       } catch { /* Retain the finding as ordinary review feedback. */ }
     }
     comments.push(comment);
-    // ponytail: one bounded batch per run; all remaining findings stay in the summary.
+    // One bounded batch per run; the remaining findings stay in the summary.
     if (comments.length === 20) break;
   }
   return comments;
@@ -78,9 +78,8 @@ export class InlineReviews {
       // Persist intent before POST. A lost response cannot cause a duplicate batch.
       if (row) throw new Error('Inline review creation uncertain; reconcile explicitly');
       // A finding already on the PR from an earlier review (same path and title, on any head)
-      // is not posted again: it stays in the summary. Only bot comments count, so a person
-      // cannot hide a finding by pasting its marker. Pilot PR #4787 got one finding five times
-      // on one commit when the PR was re-reviewed; CodeRabbit posted no repeats over two days.
+      // is not posted again, since each push review would otherwise repeat it; it stays in the
+      // summary. Only bot comments count, so a person cannot hide a finding by pasting its marker.
       const posted = new Set((await this.github.reviewComments(job.pr))
         .flatMap(comment => comment.human ? [] : /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(comment.body)?.[1] ?? []));
       const comments = inlineComments(packet, findings.filter(finding => !posted.has(findingKey(finding))),

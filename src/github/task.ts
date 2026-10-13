@@ -18,7 +18,7 @@ try {
   if (!input || !output) throw new Error('Invalid child arguments');
   if (phase === 'capture') withGitDeadline(120_000, () => prepare(input, output, cache));
   else if (phase === 'investigate') {
-    // The claim pipeline, as measured on the Martian development cases (2026-09-24).
+    // The claim pipeline: the configuration the benchmark numbers were measured on.
     await runClaimReviewAsResult(input, readProfile(output), abort.signal);
     withGitDeadline(30_000, () => loadReview(input));
   } else if (phase === 'verify') await verifyReview(input, JSON.parse(readFileSync(output, 'utf8')), abort.signal);

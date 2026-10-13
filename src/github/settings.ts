@@ -6,14 +6,15 @@ import type { PilotConfig } from './config.js';
 import type { Store } from './store.js';
 
 export interface ModelChoice { id: string; label: string; profile: Profile; }
-// maxReviewsPerAuthor caps the reviews of one PR author's PRs in this repository per UTC month;
-// null is no limit. Lors asked (2026-09-24) that customers can cap spend per person.
+// maxReviewsPerAuthor caps the reviews of one PR author's PRs in this repository per UTC month,
+// so an organization can cap spend per person; null is no limit.
 // selfRun lets a PR author's own runner review their PRs, with their own CLI subscription.
 // automatic: whether opening, reopening, pushing to or readying a PR starts a review. When off,
-// only a maintainer's `/atmin review` or `@atmin review` comment does (Lors, 2026-10-08, for the pilot customer).
+// only a maintainer's `/atmin review` or `@atmin review` comment does.
 export interface ReviewPreferences { model: string; maxUsd: number; maxReviewsPerDay: number; maxReviewsPerAuthor: number | null; selfRun: boolean; automatic: boolean; }
-// operators: GitHub user IDs (immutable, unlike logins) who may connect repositories from any
-// installation they can see. Everyone else sees only installations an operator already approved.
+// operators: GitHub user IDs (immutable, unlike logins) allowed into the operator panel (/admin),
+// where they set plans, credit and model keys for any installation, and allowed to manage any
+// organization's billing.
 export interface DashboardConfig { origin: string; clientId: string; clientSecret: string; models: ModelChoice[]; operators: number[]; appSlug?: string; }
 export function readDashboardConfig(path: string, secret: string): DashboardConfig {
   const raw = JSON.parse(readFileSync(path, 'utf8'));

@@ -18,9 +18,9 @@ import { runnerLabel, type Outcome, type RunnerRow } from './runners.js';
 import { Outcomes, findingKey } from './outcomes.js';
 import { MAX_DIFF_BYTES } from '../claim-run.js';
 
-// Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
-// check turned "Review failed" after its comment was posted, and nothing said which step
-// broke. A GitHub failure names its request; anything else is thrown by this code.
+// Why a job failed, kept on the job and in the log, so a failure after publication started
+// still says which step broke. A GitHub failure names its request and never its response;
+// anything else is thrown by this code.
 export function failureCause(error: unknown): string {
   if (error instanceof GitHubError) return `GitHub ${error.status || error.detail} on ${error.request}`;
   return error instanceof Error ? `${error.name}: ${error.message.slice(0, 200)}` : 'non-error thrown';
@@ -43,8 +43,8 @@ export interface Dispatcher {
 const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n`
   : job.modelKey === 'bedrock' ? `\nRan on this organization's own Amazon Bedrock key. atmin charged nothing for this review.\n` : '';
 // The target branch moving on is not a change to the PR: a review is of the head against its
-// merge base, which a new target commit does not alter. On a busy target (the pilot repository: main moves
-// every few minutes) comparing the target tip cancelled reviews mid-run.
+// merge base, which a new target commit does not alter. On a busy target branch, comparing its
+// tip would cancel reviews mid-run.
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 // Why a run failed, from the failure.json its review child wrote (see task.ts), or null.
 function runFailure(artifact: string): { phase: string; reason: string } | null {
@@ -212,8 +212,8 @@ export class Worker {
     const { initial } = saved;
     let check = saved.check, report: string, refused = false, idle = false;
     if (outcome !== 'done' && job.runner) {
-      // Decision (Lors, 2026-10-01): a PR whose own runner does not deliver is reviewed by this
-      // service's runners, as any other review.
+      // A PR whose author's runner does not deliver is reviewed by this service's runners, as
+      // any other review.
       process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} on ${job.runner}: ${outcome}; offering it to the hosted runners\n`);
       rmSync(job.artifact!, { recursive: true, force: true }); mkdirSync(job.artifact!, { recursive: true, mode: 0o700 });
       this.store.releaseRunner(job);

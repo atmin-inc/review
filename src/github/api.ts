@@ -199,8 +199,8 @@ export class AppGitHub implements GitHub {
         const query = new URLSearchParams({ check_name: trusted.name, app_id: String(trusted.appId), filter: 'latest', per_page: '100' });
         const data = await this.request(`/repos/${this.config.repository}/commits/${head}/check-runs?${query}`, await this.token('checks'));
         // One head can carry several runs of the same check from the same App: a workflow on
-        // both push and pull_request runs once per event (atmin-inc/review PR 9, 2026-09-25).
-        // Every run must be completed; any failure fails, and only all successes pass.
+        // both push and pull_request runs once per event. Every run must be completed; any
+        // failure fails, and only all successes pass.
         const runs = data.check_runs;
         if (!Array.isArray(runs) || !runs.length || data.total_count !== runs.length
           || runs.some(run => run.name !== trusted.name || run.app?.id !== trusted.appId || run.head_sha !== head

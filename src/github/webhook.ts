@@ -49,7 +49,7 @@ export function webhookServer(secret: string, dispatch: (event: string | string[
 const commands = ['/atmin review', '@atmin review'];
 // A maintainer accepting findings: as a reply to one of atmin's inline findings, that finding;
 // as a PR comment, every finding of the latest completed review. Accepted findings leave the
-// summary, the inline comments and the check, and outcomes record them (Lors, 2026-10-11).
+// summary, the inline comments and the check, and outcomes record them.
 const acceptCommands = ['/atmin accept', '@atmin accept'];
 
 // Only the commenting maintainer's own comment counts, and only one who may review the PR.
@@ -83,7 +83,8 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     return [202, 'validation refresh recorded'];
   }
   // A push to a target branch starts nothing: it does not change what a PR changes, and
-  // re-reviewing every open PR on each one billed the pilot repository for unchanged code several times a day.
+  // re-reviewing every open PR on each one would bill a busy repository for unchanged code
+  // several times a day.
   if (event === 'push') return [202, 'target branch push ignored'];
   let pr: number | undefined;
   const starts = event === 'pull_request' && (['opened', 'reopened', 'synchronize', 'ready_for_review'].includes(payload.action)

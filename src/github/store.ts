@@ -149,7 +149,7 @@ export class Store {
       if (!this.current(job, owner)) return false;
       // The daily limit bounds this service's model spend, so it counts and holds only reviews on
       // this service's key: one on an organization's own key, like one on an author's own runner,
-      // takes no part (Lors chose this on 2026-10-08).
+      // takes no part.
       const count = Number(this.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>? AND runner IS NULL AND modelKey IS NULL').get(Date.now() - 86_400_000)!.n);
       if (modelKey === null && count >= limit) return false;
       this.db.prepare('UPDATE jobs SET started=?,modelKey=? WHERE id=?').run(Date.now(), modelKey, job.id);
@@ -239,7 +239,7 @@ export class Store {
     });
   }
   // Findings (by `findingKey`) a maintainer accepted on this PR with `/atmin accept`. They stay
-  // in outcomes but leave the summary, the inline comments and the check (Lors, 2026-10-11).
+  // in outcomes but leave the summary, the inline comments and the check.
   accepted(pr: number): Set<string> {
     return new Set(this.db.prepare('SELECT finding FROM accepted WHERE pr=?').all(pr).map(row => String(row.finding)));
   }

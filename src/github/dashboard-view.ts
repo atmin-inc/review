@@ -80,9 +80,9 @@ export function reviewPrice(repositories: Repositories, installation: number, jo
   return { ...price, credit: { usd: repositories.balance(installation), topUp: Boolean(record?.topUpCents && !record.topUpFailed && record.paymentMethod), url: repositories.billingUrl(installation) } };
 }
 // Reviews that started this UTC month count against the plan, failed ones included and ones
-// cancelled before they finished left out. Each beyond
-// the free allowance is estimated at max(recorded cost x multiplier, minimum); recorded cost runs
-// below the provider's bill, and a review whose cost is not settled is counted, not guessed.
+// cancelled before they finished left out. Each beyond the free allowance is estimated at
+// max(recorded cost x multiplier, minimum); recorded cost runs below the provider's bill, and a
+// review whose cost is not settled is counted, not guessed.
 export function monthlyUsage(repositories: Repositories, installation: number, now = Date.now()) {
   const { plan } = repositories.plan(installation), period = month(now), started = priced(repositories, installation, now), perRepository = new Map<number, number>();
   let knownUsd = 0, estimatedUsd = 0, unknownCostReviews = 0;
@@ -111,7 +111,7 @@ interface Pull {
 }
 const sha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 export async function livePulls(config: PilotConfig, api: (path: string) => Promise<any>): Promise<Pull[]> {
-  // ponytail: pilot lists the 100 most recently updated PRs. Add pagination when a workspace exceeds this window.
+  // Only the 100 most recently updated PRs; an older PR still appears through its latest review.
   const values = await api(`/repos/${config.repository}/pulls?state=all&sort=updated&direction=desc&per_page=100`);
   if (!Array.isArray(values) || values.length > 100) throw new Error('Invalid PR list');
   const pulls = values.map(p => {
