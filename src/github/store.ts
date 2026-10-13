@@ -54,29 +54,23 @@ export class Store {
       CREATE TABLE IF NOT EXISTS accepted (pr INTEGER NOT NULL, finding TEXT NOT NULL, user INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(pr, finding));
       CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state, created);`);
     // Databases created before incremental review lack the column; old jobs read as events.
-    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'trigger')) {
-      this.db.exec("ALTER TABLE jobs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'event'");
-    }
+    this.addColumn('jobs', 'trigger', "TEXT NOT NULL DEFAULT 'event'");
     // The PR author's GitHub user ID, recorded once the worker reads the PR; jobs from before
     // per-author limits have none and count toward no author.
-    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'author')) {
-      this.db.exec('ALTER TABLE jobs ADD COLUMN author INTEGER');
-    }
+    this.addColumn('jobs', 'author', 'INTEGER');
     // Who ran the review when it was not this service: the PR author's own runner, as shown on the
     // comment and dashboard. Such reviews cost this service no inference, so plans never count them.
-    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'runner')) {
-      this.db.exec('ALTER TABLE jobs ADD COLUMN runner TEXT');
-    }
+    this.addColumn('jobs', 'runner', 'TEXT');
     // Reviews run on the organization's own model key cost this service no inference, so plans
     // and credit never count them. Jobs from before such keys ran on this service's.
-    if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(column => column.name === 'modelKey')) {
-      this.db.exec('ALTER TABLE jobs ADD COLUMN modelKey TEXT');
-    }
+    this.addColumn('jobs', 'modelKey', 'TEXT');
     // Whether a maintainer accepted the finding with `/atmin accept`; outcomes recorded before
     // acceptance existed have none.
-    if (!this.db.prepare('PRAGMA table_info(outcomes)').all().some(column => column.name === 'accepted')) {
-      this.db.exec('ALTER TABLE outcomes ADD COLUMN accepted INTEGER');
-    }
+    this.addColumn('outcomes', 'accepted', 'INTEGER');
+  }
+  // Adds a column an older database lacks. Names and types are fixed strings from this file.
+  private addColumn(table: string, column: string, type: string): void {
+    if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
   close(): void { this.db.close(); }
   transaction<T>(fn: () => T): T {
