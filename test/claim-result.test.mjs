@@ -141,7 +141,7 @@ test('a withheld minor finding is listed, not published, and a run that stops cl
 
 test('OpenRouter spend is what OpenRouter billed for each call, and an unconfirmed charge is never shown as a cost', async t => {
   // Customers are billed from this figure. OpenRouter charges uncached input at its
-  // cache-write price, 25% over the listed rate, so the rate card undercounted by 15-20%.
+  // cache-write price, 25% over the listed rate, so pricing from the rate card undercounts by 15-20%.
   withoutJev(t);
   const luna = { ...profile, provider: 'openrouter', model: 'openai/gpt-6-luna' };
   const billed = (cost) => {
@@ -168,7 +168,7 @@ test('OpenRouter spend is what OpenRouter billed for each call, and an unconfirm
 test('Luna direct from OpenAI is priced with its cache writes and long-prompt rate, and usage without cache writes is never shown as a cost', async t => {
   // Customers are billed from this figure. OpenAI bills prompt tokens written to its cache at
   // 1.25x input, and a prompt over 272K tokens at 2x input and cache rates and 1.5x output.
-  // Pricing either at the plain input rate undercounts, as the OpenRouter rate card did.
+  // Pricing either at the plain input rate undercounts, as the OpenRouter rate card does.
   withoutJev(t);
   const direct = { ...profile, model: 'gpt-6-luna' };
   const replying = (usage) => {
@@ -190,9 +190,10 @@ test('Luna direct from OpenAI is priced with its cache writes and long-prompt ra
   assert.equal(meteredCost(direct, { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 800, cacheWriteTokens: 300 }), null);
 });
 
-// 128 KB refused 29% of the pilot repository's merged PRs. A diff up to 512 KB is reviewed; one over it is
-// read in part (see the next tests), and one with no file that fits is refused before any
-// model is asked, so nothing is spent on a review that cannot fit.
+// A 128 KB limit refuses over a quarter of the merged PRs in a large production monorepo. A diff
+// up to 512 KB is reviewed; one over it is read in part (see the next tests), and one with no
+// file that fits is refused before any model is asked, so nothing is spent on a review that
+// cannot fit.
 test('a 300 KB diff is reviewed and a diff whose only file is over 512 KB is refused before spending', async t => {
   withoutJev(t);
   const sized = (bytes, alone = false) => {
@@ -216,7 +217,7 @@ test('a 300 KB diff is reviewed and a diff whose only file is over 512 KB is ref
     { ...model([]), async respond() { asked = true; } }), /Diff exceeds 512 KB/);
   assert.equal(asked, false);
   // The review child on a runner leaves the cause in the run's failure.json, so the PR and the
-  // logs can say why, not only that the review failed (pilot PR #4832, 2026-10-07).
+  // logs can say why, not only that the review failed.
   const home = mkdtempSync(join(huge, 'home-')), profilePath = join(home, 'profile.json');
   writeFileSync(profilePath, JSON.stringify({ ...profile, maxInputTokens: 1000000 }));
   await assert.rejects(child(['investigate', huge, profilePath], childEnvironment(home, { OPENAI_API_KEY: 'unused' }), AbortSignal.timeout(60_000), 60_000));
@@ -227,9 +228,9 @@ test('a 300 KB diff is reviewed and a diff whose only file is over 512 KB is ref
   assert.deepEqual(JSON.parse(readFileSync(join(huge, 'failure.json'), 'utf8')), { phase: 'investigate', reason: 'Error' });
 });
 
-// Pilot PR #4832's 6.5 MB diff was mostly the old content of 498 deleted files. Lors chose on
-// 2026-10-08 that the claim pass reads a deletion as its header only and leaves lock files out,
-// so such a PR fits, and a lock file is listed as not reviewed without holding the rating open.
+// A large diff can be mostly the old content of deleted files. The claim pass reads a deletion
+// as its header only and leaves lock files out, so such a PR fits, and a lock file is listed as
+// not reviewed without holding the rating open.
 test('a deleted file is read as its deletion and a lock file is left out, so neither counts toward the limit', async t => {
   withoutJev(t);
   const fixture = repository(t);
@@ -258,14 +259,12 @@ test('a deleted file is read as its deletion and a lock file is left out, so nei
   assert.match(renderMarkdown(packet, result, assessment), /\*\*2\/2 files reviewed\*\* · 1 lock file not reviewed/);
 });
 
-// Pilot PR #4832 is still 1.3 MB without its deletions. Lors asked on 2026-10-08 why a PR that is
-// a bit big cannot be fully reviewed; it can: the diff is split into parts of up to 256 KB (a file
-// up to 512 KB gets a part to itself; on #4832 three 512 KB parts left two unfinished and six 256 KB
-// parts all finished), in path order so a folder's files share a part, each part gets its own
-// investigation, and every
+// A PR over the limit is still reviewed in full: the diff is split into parts of up to 256 KB (a
+// file up to 512 KB gets a part to itself; larger parts tend to run out of turns unfinished), in
+// path order so a folder's files share a part, each part gets its own investigation, and every
 // file counts as reviewed. Each investigation is told what it holds and to judge completeness by
-// its own diff: told only that files were left out, the model ended every such review unfinished,
-// and an unfinished review claims no file (pilot PR #4832: 0/780 reviewed in 28 turns).
+// its own diff: told only that files were left out, a model ends every such review unfinished,
+// and an unfinished review claims no file.
 const rows = bytes => `export const rows = [\n${'  "0123456789abcdef0123456789abcdef",\n'.repeat(Math.ceil(bytes / 40))}];\n`;
 const filesOf = diff => [...diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map(match => match[1]);
 function partsWatcher() {
@@ -310,9 +309,9 @@ test('a diff over the limit is reviewed in parts, in path order, and every file 
   assert.equal(JSON.parse(readFileSync(join(directory, 'telemetry.json'), 'utf8')).parts, 4);
 });
 
-// On pilot PR #4832 two of three parts said they had not checked every changed file, and one
-// unfinished investigation zeroed the coverage of all three. Each part now claims its own files:
-// a part that finished complete counts as reviewed, one that did not is listed as not reviewed.
+// One unfinished part must not zero the coverage of the others, so each part claims its own
+// files: a part that finished complete counts as reviewed, one that did not is listed as not
+// reviewed.
 test('in a review split into parts, only the files of an unfinished part are not reviewed', async t => {
   withoutJev(t);
   const fixture = repository(t);
@@ -336,7 +335,7 @@ test('in a review split into parts, only the files of an unfinished part are not
 
 // A review splits into as many parts as its budget covers at PART_USD each, the parts sharing the
 // one budget, so a big PR never costs more than any review may. Past those parts, or for a file
-// whose own diff is over 512 KB, files are left out in the order Lors chose for reading in part:
+// whose own diff is over 512 KB, files are left out in the order used for reading in part:
 // deletions first, then source before tests and docs, smallest first. Here a budget of four parts
 // meets five 240 KB source files that cannot share parts, so the fifth is left out, as are the doc
 // (no room left) and a 600 KB file (over what one investigation reads).
@@ -448,8 +447,8 @@ test('a push review builds on an earlier run whose repository copy was deleted',
   assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
 });
 
-// Measured 2026-09-24 on a real push: the fix added a guard that none of the claim's recorded
-// propositions mention, so re-verifying them confirmed the fixed defect again. Here the fix
+// A push can fix a defect with a guard that none of the claim's recorded propositions mention,
+// so re-verifying them would confirm the fixed defect again. Here the fix
 // calls a helper instead of writing `owner !== account`, so the recorded check (that text is
 // absent) still holds at the new head. A claim in a file the push changed is shown to the
 // model and survives only if the model records it again.
@@ -520,9 +519,9 @@ test('nothing new to read asks no model; a moved merge base or a rewritten head 
   }
 });
 
-// atmin-inc/review PR 3 has no changes. A model asked to review an empty diff ended with
-// complete=false, and the PR read "Review incomplete" with a failing check: a verdict about
-// work that did not exist. An empty change is reviewed completely, by asking no one.
+// A model asked to review an empty diff ends with complete=false, and the PR would read
+// "Review incomplete" with a failing check: a verdict about work that did not exist. An
+// empty change is reviewed completely, by asking no one.
 test('a pull request with no changes asks no model and is a complete review', async t => {
   withoutJev(t);
   const fixture = repository(t);
