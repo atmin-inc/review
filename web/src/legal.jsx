@@ -1,6 +1,6 @@
 import { Brand } from './components.jsx';
 
-// Who operates the service and how to reach them (confirmed by Lors 2026-10-06).
+// Who operates the service and how to reach them.
 const operator = 'Atmin Technologies Inc.';
 const contact = 'legal@atmin.ai';
 const governingLaw = 'the laws of the Province of Ontario and the federal laws of Canada that apply there';
