@@ -43,9 +43,9 @@ export function main(argv = process.argv.slice(2)) {
   }
   // The terminal sends Ctrl-C to both processes; the tool decides what it means (the review
   // runner finishes its review first), so this command waits for it rather than exiting.
-  // Handlers go in before the tool starts: a stop signal in between killed this command and
-  // left the tool running, holding its output open (a CI run hung on it, 2026-10-08). Node
-  // runs them only once main returns, when `child` is set.
+  // Handlers go in before the tool starts: a stop signal in between would kill this command
+  // and leave the tool running, holding its output open. Node runs them only once main
+  // returns, when `child` is set.
   let child;
   const forward = signal => () => { if (signal !== 'SIGINT') child.kill(signal); };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, forward(signal));

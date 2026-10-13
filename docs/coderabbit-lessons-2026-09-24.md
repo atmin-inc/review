@@ -16,7 +16,7 @@ quotes are close but not guaranteed verbatim. [inferred] marks what the docs do 
    regex, labels, title keywords and bot usernames (`ignore_usernames`), or paused with a
    pause/resume command. (same page; https://docs.coderabbit.ai/reference/review-commands.md)
    *Us:* we skip drafts only. About a fifth of the pilot repository's last 100 PRs come from bots or agents
-   (the customer's own agent accounts, claude[bot], devin).
+   (the repository's own agent accounts, claude[bot], devin).
 3. **Per-repository config file** (`.coderabbit.yaml`, read from the PR branch).
    - `path_filters` are globs; exclusions win.
    - `path_instructions` add review guidance per glob.
@@ -36,7 +36,7 @@ quotes are close but not guaranteed verbatim. [inferred] marks what the docs do 
 6. **Reads the repository's own agent instructions**: AGENTS.md, CLAUDE.md, .cursorrules and
    similar, up to 50 files. (https://docs.coderabbit.ai/knowledge-base/code-guidelines.md)
    *Us:* cheap context for real repos. It must be off for benchmark repos, because our own
-   AGENTS.md holds the benchmark answers.
+   research log (docs/research-log.md) holds the benchmark answers.
 7. **Limits are soft on merge.** A rate-limited review posts a passing "Review rate limited"
    check, so it never blocks a merge. The size cap is 150 or 300 files by plan. Above it the
    automatic review is skipped, with a paid on-demand option.

@@ -53,7 +53,8 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or later; fail here rather than at publish.
       - if: steps.version.outputs.published == 'yes'
         run: node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
-      # Every release so far is an alpha and `latest` points at it, so publish there explicitly.
+      # package.json's publishConfig.tag is `alpha`; until there is a stable release `latest`
+      # follows the newest alpha, so name the tag here.
       - if: steps.version.outputs.published == 'yes'
         run: npm publish --provenance --access public --tag latest
       - if: steps.version.outputs.published == 'yes'
@@ -86,7 +87,7 @@ jobs:
           if grep -q "review-$VERSION.tgz\"" "$tap/Formula/atmin-review.rb"; then
             echo "CURRENT=yes" >> "$GITHUB_ENV"; echo "The tap already installs $VERSION."
           fi
-      # A new version can 404 for a few minutes after npm accepts it (seen 2026-10-02).
+      # A new version can 404 for a few minutes after npm accepts it.
       - name: Download the published archive and check it against npm's integrity
         if: env.CURRENT != 'yes'
         run: |

@@ -162,7 +162,7 @@ const admin = {
       usage: { month, resetsAt, reviews: 12, remaining: 8, knownUsd: 0.41, estimatedUsd: 0, unknownCostReviews: 0 },
       repositories: [{ id: 42, name: 'acme/api', enabled: true, reviews: 9 }, { id: 43, name: 'acme/web', enabled: true, reviews: 3 }, { id: 44, name: 'acme/billing-service', enabled: false, reviews: 0 }] },
     { id: 310, account: 'globex', accountType: 'Organization', createdAt: '2026-08-19T09:05:00.000Z', suspended: false, removed: false,
-      plan: { freeReviews: 20, monthlyReviews: 500, multiplier: 1.1, minimumUsd: 0, custom: true, updatedAt: '2026-09-12T10:31:00.000Z', updatedBy: 'lorsk' },
+      plan: { freeReviews: 20, monthlyReviews: 500, multiplier: 1.1, minimumUsd: 0, custom: true, updatedAt: '2026-09-12T10:31:00.000Z', updatedBy: 'octo' },
       usage: { month, resetsAt, reviews: 146, remaining: 354, knownUsd: 23.18, estimatedUsd: 21.64, unknownCostReviews: 2 },
       repositories: [
         { id: 601, name: 'globex/platform', enabled: true, reviews: 71 }, { id: 602, name: 'globex/checkout', enabled: true, reviews: 44 },

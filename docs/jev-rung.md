@@ -24,11 +24,11 @@ silently unanswered looks like a review where the model had nothing to add.
 
 ## The wire format, verified
 
-`SMOKE_TEST_JEV.md` records the endpoint (`POST https://api.typesafe.ai/v1/systemone`),
+The [Jev smoke test](jev-smoke-test.md) records the endpoint (`POST https://api.typesafe.ai/v1/systemone`),
 the `Authorization: Bearer` header, that `state` is a JSON object, that `questions` is a
 map evaluated in parallel against that one state, and that a Noul returns the
 probability of yes and carries no separate confidence. It does not record the field
-names of the request body or of the response, and `.smoke/jev-schema.json` is not in
+names of the request body or of the response, and the schema file it used is not in
 this repository.
 
 The API publishes those names itself, at `https://api.typesafe.ai/openapi.json`. The
@@ -70,7 +70,7 @@ sides, and the diff. It deliberately omits the claim's `description` and
 
 Those are what the investigator concluded, and rung 3 exists to settle the steps of the
 argument independently of the conclusion. Sending them invites the model to agree with
-the claim rather than judge the code, which is the failure `SMOKE_TEST_JEV.md` already
+the claim rather than judge the code, which is the failure the [smoke test](jev-smoke-test.md) already
 found in the composite questions: the factual checks were sharp and the summary
 judgments sat at a coin flip. The claim's location stays because a proposition like
 "no ownership comparison remains in the function body" is unanswerable without knowing

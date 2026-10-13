@@ -1,7 +1,7 @@
 // Deterministic golden-comment matcher for the fifteen Martian development cases. Rules for
-// the ten cases first run on 2026-09-24 were written from the comment text and changed
-// file names before any run output was read.
-// Replaces hand matching, which was wrong twice on 2026-09-21. A claim matches a golden
+// the ten cases added last were written from the comment text and changed file names
+// before any run output was read.
+// Replaces hand matching, which miscounted in both directions. A claim matches a golden
 // comment when it is located in the comment's file and its description satisfies every
 // token group (each group is any-of). Rules are written from the comment text and checked
 // against the 13 hand labels in rep3-golden.json; disagreements are printed, not hidden.

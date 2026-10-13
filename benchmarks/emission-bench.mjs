@@ -71,7 +71,7 @@ for (let n = 1; n <= samples; n++) {
   if (existsSync(join(dir, 'verification.json'))) continue; // resumable
   mkdirSync(dir, { recursive: true });
   // The model records about one claim per turn (case-005's recorded run: five claims over
-  // five turns; up to twelve claims in the ten runs recorded 2026-09-23), so a tight turn
+  // five turns; up to twelve claims in a recorded run), so a tight turn
   // limit caps the claim count rather than measuring it. Sixteen leaves room for that.
   // A stream the provider cut before anything was recorded measured nothing about the
   // emitter, so it is asked again, at most twice; its cost is still counted.

@@ -36,9 +36,10 @@ config="$(sed -n 's/^ATMIN_REVIEW_CONFIG=//p' /etc/atmin-review/service.env)"
 state="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).stateDirectory)' "$config")"
 port="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).port)' "$config")"
 
-# The worker refuses reviews below 2048 MB free; do not deploy into that.
+# The worker refuses reviews below 2048 MB free (minFreeDiskMb); do not deploy within 1 GB of that.
+min_free_mb=3072
 free_mb="$(df -Pm "$state" | awk 'NR==2 {print $4}')"
-if (( free_mb < 3072 )); then log "only ${free_mb} MB free on $state; not deploying"; exit 1; fi
+if (( free_mb < min_free_mb )); then log "only ${free_mb} MB free on $state; not deploying"; exit 1; fi
 
 [[ -d "$repo" ]] || git clone --bare --quiet https://github.com/atmin-inc/review "$repo"
 git -C "$repo" fetch --quiet origin '+refs/heads/main:refs/heads/main'

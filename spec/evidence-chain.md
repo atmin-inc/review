@@ -39,7 +39,7 @@ These are policy, evaluated in code, not by a model.
    agreement.
 
    The LLM rung is asked about one proposition at a time, never about the claim.
-   SMOKE_TEST_JEV.md is the reason: factual checks came back sharp and composite
+   The [Jev smoke test](../docs/jev-smoke-test.md) is the reason: factual checks came back sharp and composite
    judgments clustered around a coin flip, so "is this an auth bypass?" is the
    question to avoid and "does any caller compare owner to account before
    update()?" is the question to ask. That is also how a proposition no symbolic
