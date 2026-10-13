@@ -20,6 +20,12 @@ import { Billing, Stripe } from './billing.js';
 import { ReviewSettings, readDashboardConfig } from './settings.js';
 import { readProfile } from '../run.js';
 
+function webhookSecret(): string {
+  const secret = requiredEnv('GITHUB_WEBHOOK_SECRET');
+  if (Buffer.byteLength(secret) < 32) throw new Error('Use a webhook secret of at least 32 bytes');
+  return secret;
+}
+
 async function main(): Promise<void> {
   const [operation, input, prInput] = process.argv.slice(2);
   if (!operation || operation === '--help') {
@@ -31,7 +37,7 @@ async function main(): Promise<void> {
   process.umask(0o077);
   if (operation === 'check') {
     requiredEnv(readProfile(config.profile).provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY');
-    if (Buffer.byteLength(requiredEnv('GITHUB_WEBHOOK_SECRET')) < 32) throw new Error('Use a webhook secret of at least 32 bytes');
+    webhookSecret();
     const github = new AppGitHub(config, requiredEnv('GITHUB_APP_ID'), readFileSync(requiredEnv('GITHUB_APP_PRIVATE_KEY_PATH'), 'utf8'));
     process.stdout.write(`${JSON.stringify(await github.verifyInstallation())}\n`);
     return;
@@ -52,8 +58,7 @@ async function main(): Promise<void> {
     } finally { store.close(); }
     return;
   }
-  const secret = requiredEnv('GITHUB_WEBHOOK_SECRET');
-  if (Buffer.byteLength(secret) < 32) throw new Error('Use a webhook secret of at least 32 bytes');
+  const secret = webhookSecret();
   const appId = requiredEnv('GITHUB_APP_ID'), key = readFileSync(requiredEnv('GITHUB_APP_PRIVATE_KEY_PATH'), 'utf8');
   const dashboardConfig = process.env.REVIEW_DASHBOARD_CONFIG
     ? readDashboardConfig(process.env.REVIEW_DASHBOARD_CONFIG, requiredEnv('GITHUB_OAUTH_CLIENT_SECRET')) : undefined;
