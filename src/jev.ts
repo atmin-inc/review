@@ -215,7 +215,8 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
     calls++;
     let status: number | null = null;
     try {
-      const response = await transport(ENDPOINT, { method: 'POST', body, redirect: 'error', signal: signal ?? AbortSignal.timeout(limits.timeoutMs),
+      const timeout = AbortSignal.timeout(limits.timeoutMs);
+      const response = await transport(ENDPOINT, { method: 'POST', body, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
       status = response.status;
       // SMOKE_TEST_JEV.md, gotcha 1: an unauthenticated POST returns 403, not the

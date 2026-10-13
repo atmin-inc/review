@@ -177,6 +177,23 @@ test('a rejected key stops the run rather than silently emptying rung 3', async 
   }
 });
 
+// The review always passes its own deadline signal, which can be half an hour away. A
+// Jev call that never answers must still give up after timeoutMs, or one hung request
+// holds the whole review until that deadline.
+test('a call that never answers times out even when the caller passes a signal', { timeout: 5000 }, async t => {
+  const { claims, revisions } = setUp(t, [SURVIVES]);
+  // A real fetch holds a socket open; this stand-in holds a timer, because the timeout
+  // signal's own timer does not keep the process alive.
+  const transport = (_url, options) => new Promise((_resolve, reject) => {
+    const pending = setTimeout(() => {}, 4000);
+    options.signal.addEventListener('abort', () => { clearTimeout(pending); reject(options.signal.reason); }, { once: true });
+  });
+  const { log, skippedClaims } = await askJev(claims, revisions, 'diff text',
+    { apiKey: 'test-key', transport, signal: new AbortController().signal, limits: { maxCalls: 40, timeoutMs: 50 } });
+  assert.deepEqual(log, []);
+  assert.deepEqual(skippedClaims, [claims[0].claimId]);
+});
+
 // The cap is on calls, not on claims, so a wide pass cannot turn into unbounded spend.
 test('the call cap skips claims rather than exceeding it', async t => {
   const { claims, revisions } = setUp(t, [SURVIVES, { ...SURVIVES, location: 'update.ts:3', severity: 'P3' }]);
