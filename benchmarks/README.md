@@ -6,8 +6,7 @@
 > section 9, pre-registered in [bench/PLAN.md](../bench/PLAN.md). Martian F2 is a
 > regression gate, not the headline number, and the precision floor is 70%. The
 > frozen results, corpus curation and hosted-comparison protocol below still
-> stand. Some links in this file point at documents the public export does not
-> carry.
+> stand. Documents named below without a link are not part of this repository.
 
 **Status:** Updated September 14, 2026. The paired controller experiment finished
 60 reviews: 15 frozen Martian development PRs × two versions × two repeats.
@@ -19,10 +18,10 @@ Two separately tested fixes address recovered CLI errors and rejected reads
 incorrectly counting as coverage; they are excluded from these frozen results.
 Thirty-five PRs remain reserved. Reviewed clean controls, broader repeat evidence
 and a fresh hosted-competitor evaluation remain outstanding. The six-case smoke
-harness and [live GitHub acceptance evidence](../deploy/live-acceptance-2026-09-11.md)
+harness and live GitHub acceptance evidence
 also exist.
 
-The [testing plan](../docs/testing-plan.md) stages this protocol: six smoke
+The testing plan stages this protocol: six smoke
 cases, a 30-case development corpus for the public CLI alpha, then the full
 held-out evaluation for general availability. Alpha/beta publication does not
 imply the broader numeric quality gates below have passed.
@@ -181,24 +180,24 @@ fixes and repository-specific rating behavior as additional owned evaluations.
 Defer the upstream online pipeline: observed developer reactions answer a
 different question from a controlled comparison on identical PRs.
 
-**Execution status:** one [local Discourse pilot](./martian-pilot-2026-09-11.md)
+**Execution status:** one local Discourse pilot
 ran with r02-18 and DeepSeek for $0.066592355. It remained incomplete and missed
-the expected issue. A [structured-reporting replay](./martian-reporting-2026-09-11.md)
+the expected issue. A structured-reporting replay
 with r02-19 also remained incomplete after the model returned disallowed source
 calls during reporting and its correction request reached the deadline. Known
 cost was $0.057771643, plus a retained $0.029674846 unsettled reservation.
 The full suite and upstream grading pipeline have not run;
 this pilot establishes a workflow gap, not a comparative quality result.
 
-A [six-case reporting diagnostic](./reporting-probe-2026-09-11.md) then confirmed
+A six-case reporting diagnostic then confirmed
 that the default route can return the structured report on short inputs, with
 or without one prior source call. Disabling parallel calls caused HTTP 404s;
 the route also advertises no named-function support. Request controls remain
-unchanged. r02-20 adds [private local traces](../docs/telemetry.md) for timing,
+unchanged. r02-20 adds private local traces for timing,
 tool behavior and spending, viewable in Perfetto. The long-run failure still
 needs a representative reporting-only reproduction before another full replay.
 
-The [longer-history comparison](./reporting-history-2026-09-11.md) preserved 11
+The longer-history comparison preserved 11
 Discourse source reads in conversational and fresh-handoff forms. All six
 45-second probes timed out. In one additional two-minute pair, conversation
 history returned one valid report while the handoff returned three finish

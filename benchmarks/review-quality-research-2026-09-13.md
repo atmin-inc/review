@@ -13,7 +13,7 @@ controlled experiment shows that it helps.
 
 ## What the evidence actually establishes
 
-Our [15-PR comparison](martian-comparison-2026-09-11.md) used the same
+Our 15-PR comparison used the same
 `gpt-5.6-sol` model at medium reasoning on identical snapshots:
 
 | Metric | atmin r02-24, local | Plain agent |
@@ -39,7 +39,7 @@ for hosted API reviews. See [local adapter](codex-model.mjs),
 [plain runner](plain-codex.mjs), [OpenAI adapter](../src/openai-model.ts) and
 [OpenRouter adapter](../src/openrouter-model.ts).
 
-The separate [r02-25 contract-ledger experiment](contract-investigation-2026-09-11.md)
+The separate r02-25 contract-ledger experiment
 is also informative: both engines caught all six seeded bug occurrences and both
 produced two unsupported findings on clean controls. The candidate's median was
 73.4 seconds versus 51.7 seconds, with 23.5% more reported input tokens. These were
@@ -105,7 +105,7 @@ In the contract experiment, both versions invented external consumers of an
 internal export. The candidate attached real source citations to that unsupported
 assumption. In the Cal.com review, atmin read the non-atomic update but did not
 report the lost-update risk. These are reasoning and selection failures even when
-the relevant source was available. See the [source audit](martian-audit-2026-09-11.md).
+the relevant source was available.
 
 The useful unit of investigation is a falsifiable behavioral claim:
 

@@ -36,7 +36,7 @@ The first repeat's one-match candidate advantage reversed in the second. Across 
 - Baseline matched **11/36 annotations in both repeats**, five in only one, and 20 in neither.
 - Candidate matched **10/36 in both repeats**, seven in only one, and 19 in neither.
 
-The union of repeat detections is a consistency diagnostic, not a best-of-two score. These are repeated observations on 15 public development cases, not independent new cases or evidence of superiority over hosted bots. The [older plain-agent comparison](martian-comparison-2026-09-11.md) used a different adapter setup and is historical context, not a fresh paired competitor result.
+The union of repeat detections is a consistency diagnostic, not a best-of-two score. These are repeated observations on 15 public development cases, not independent new cases or evidence of superiority over hosted bots. The older plain-agent comparison used a different adapter setup and is historical context, not a fresh paired competitor result.
 
 ## What “unmatched” means here
 
