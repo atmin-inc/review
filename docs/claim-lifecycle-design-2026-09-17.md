@@ -157,9 +157,8 @@ only rung 3 returned 0.94, the finding would cap at moderate and say so.
 ## 6. The verdict is policy, not a model
 
 Code composes typed signals into `{block, security_review, nits, merge}`. A model
-supplies the signals. It does not supply the decision. Paolo Rosson's framing is
-the right one: the model answers typed checks, and **code turns that into a
-verdict**.
+supplies the signals. It does not supply the decision. The model answers typed checks, and
+**code turns that into a verdict**.
 
 This keeps three things that a model verdict destroys. Policy stays owned by the
 team and differs per repository. A threshold change replays over stored evidence
@@ -255,7 +254,7 @@ over time, and re-pick the 10 when it decays.
 
 ## 11. What we verified empirically
 
-[`SMOKE_TEST_JEV.md`](../SMOKE_TEST_JEV.md) on this branch records a non-scoring
+The [Jev smoke test](jev-smoke-test.md) records a non-scoring
 plumbing test of Jev against three Martian development-split PRs. It did not
 score, did not read golden comments and did not touch the reserved 35.
 
@@ -275,7 +274,7 @@ Jev-as-verdict in section 10. The model is good at the narrow factual question
 and turns to mush on the composite judgment. So we use it on rung 3 for narrow
 checks and compose verdicts in code.
 
-- **Cost is about 1.84x Paolo's claim**, at $0.000129 per PR against $0.00007,
+- **Cost is about 1.84x the provider's estimate**, at $0.000129 per PR against $0.00007,
   and still negligible. The gap is schema size rather than model price: the
   question block alone costs 1,501 input tokens.
 

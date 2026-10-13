@@ -16,7 +16,7 @@ spent no statistical power, because no result was compared to ground truth.
 ## PRs selected, and why
 
 All three come from the `development` split in
-[`benchmarks/martian-development-split.json`](benchmarks/martian-development-split.json).
+[`benchmarks/martian-development-split.json`](../benchmarks/martian-development-split.json).
 That file holds 50 cases: exactly 35 `reserved` and 15 `development`. Each PR was
 picked as a calibration probe, not at random.
 
@@ -40,8 +40,8 @@ One request per PR. The `state` is a JSON object with a `pull_request` field
 unified diff. The `questions` map holds 15 entries, evaluated in parallel against
 that one state.
 
-The schema is [`.smoke/jev-schema.json`](.smoke/jev-schema.json): 14 checks plus a
-top-level verdict.
+The schema (kept with the run's local artifacts, not in this repository) has 14 checks
+plus a top-level verdict.
 
 - **13 Noul checks.** `hardcoded_secret`, `sql_injection`, `touches_auth`,
   `weakens_tests`, `adds_tests`, `breaks_api`, `data_migration`,
@@ -51,7 +51,7 @@ top-level verdict.
   to "high risk".
 - **1 Choice.** `verdict`, over `block`, `security_review`, `nits` and `merge`.
 
-One deviation from the brief. The brief asked for Choice and Score types. The
+One deviation from the plan. The plan asked for Choice and Score types. The
 docs make **Noul** the correct primitive for a yes/no check, so 13 of the 14
 checks are Nouls. A Noul returns the probability of yes and carries no separate
 confidence. Choice is for picking one option from a set, which fits `verdict`
@@ -108,11 +108,11 @@ One call answers all 15 questions, so cost per call and cost per PR are the same
 number. Output tokens were about 300 per call and are billed at zero. Only input
 tokens are charged, at $42 per billion.
 
-## Cost against Paolo's claim
+## Cost against the provider's estimate
 
-**The claim does not hold on our data. Measured cost is 1.84x the claim.**
+**The estimate does not hold on our data. Measured cost is 1.84x the estimate.**
 
-Paolo claims $0.00007 per PR. We measured $0.000129.
+The estimate was $0.00007 per PR. We measured $0.000129.
 
 The gap is structural, not a rounding difference. At $42 per Btok, $0.00007 buys
 1,667 input tokens for the whole PR. A direct measurement, sending the full
@@ -164,17 +164,14 @@ tuned on them. The concrete factual checks are sharp; the summary judgments are 
 1. **Auth returns 403, not the documented 401.** An unauthenticated POST returns
    `403`. The docs error table lists `401 Unauthorized` for a missing or invalid
    key. Any error handling written against the documented table will miss this.
-2. **The skill names no environment variable.** `SKILL.md` is a pointer to the live
-   docs rather than a self-contained spec. The variable name `TYPESAFE_API_KEY`
-   comes from the Python SDK constants page, not from the skill.
-3. **The brief's primitive choice was wrong.** Corrected to Noul, as described above.
-4. **The plugin marketplace path was not exercised.** This run read the raw
-   `SKILL.md` and the live docs directly. `claude plugin marketplace add` remains
-   untested.
-5. **No rate limiting and no retries.** All three calls succeeded on the first
+2. **The integration guide names no environment variable.** It points to the live
+   docs rather than being a self-contained spec. The variable name `TYPESAFE_API_KEY`
+   comes from the Python SDK constants page.
+3. **The planned primitive choice was wrong.** Corrected to Noul, as described above.
+4. **No rate limiting and no retries.** All three calls succeeded on the first
    attempt. Published limits are 1,200 requests per minute and 250,000 tokens per
    second, which are far above anything this workload needs.
-6. **Context budget is a risk for the full set.** The cap is 64k tokens per request
+5. **Context budget is a risk for the full set.** The cap is 64k tokens per request
    and 32k for the state plus the longest question. These three diffs are small.
    case-050 is +1,276 lines and case-015 is +653 over 28 files. Both need a token
    estimate before they are sent, and the harness needs a truncation or chunking
@@ -198,17 +195,16 @@ Two changes before the benchmark runs:
    case-015 are sent, so a context overflow fails loudly rather than silently
    truncating a diff.
 
-One optional change. If cost parity with Paolo's number matters to the comparison,
+One optional change. If cost parity with the provider's estimate matters to the comparison,
 tighten the criteria prose first. The schema, not the model, is 40% to 68% of the
 bill. If it does not matter, note that the absolute cost is negligible: the full
 15-case development split costs roughly $0.002 per pass at this schema size.
 
-Finally, treat the cost claim as **not reproduced** in any writeup. Report the
+Finally, treat the cost estimate as **not reproduced** in any writeup. Report the
 measured $0.000129 with the schema size that produced it.
 
 ## Artifacts
 
-Raw request, raw response and a per-run record with latency, usage and computed
-cost are saved under `.smoke/jev/<case>/`. Aggregates are in
-`.smoke/jev/summary.json`. The runner is `.smoke/run-jev-smoke.py`. `.smoke/`
-ignores itself, so none of it is tracked.
+Raw requests, raw responses, a per-run record with latency, usage and computed cost,
+the aggregates and the runner script were kept locally with the run. They are not part
+of this repository.

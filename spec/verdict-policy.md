@@ -4,7 +4,7 @@
 **Source:** [claim-lifecycle-design-2026-09-17.md](../docs/claim-lifecycle-design-2026-09-17.md), section 6.
 
 Code composes typed signals into a verdict. A model supplies the signals. It does
-not supply the decision. The smoke test in `SMOKE_TEST_JEV.md` is the evidence:
+not supply the decision. The [Jev smoke test](../docs/jev-smoke-test.md) is the evidence:
 factual checks were sharp, composite judgments were not.
 
 Verdict set, unchanged from the design doc: `block`, `security_review`, `nits`,
