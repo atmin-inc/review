@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:web": "npm --prefix web ci && npm --prefix web run build",
+    "build:web": "npm --prefix web ci --ignore-scripts && npm --prefix web run build",
     "test": "npm run build && node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
