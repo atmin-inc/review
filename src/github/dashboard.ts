@@ -200,10 +200,14 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         json(response, 200, { version, user: null, ...(options.appSlug ? { installUrl: `https://github.com/apps/${options.appSlug}/installations/new` } : {}) }); return true;
       }
       if (!session) { json(response, 401, { error: 'Sign in with GitHub to continue.' }); return true; }
-      if (request.method === 'POST') {
-        if (request.headers.origin !== options.origin || request.headers['content-type'] !== 'application/json') {
+      // Every state-changing request must come from the dashboard's own page; a POST also carries
+      // JSON, which a cross-site form cannot send. A DELETE has no body.
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        if (request.headers.origin !== options.origin || (request.method === 'POST' && request.headers['content-type'] !== 'application/json')) {
           json(response, 403, { error: 'Reload this page before trying again.' }); return true;
         }
+      }
+      if (request.method === 'POST') {
         if (url.pathname === '/api/review/v1/logout') {
           sessions.delete(sessionId); response.setHeader('Set-Cookie', cookie(sessionCookie, '', 0)); json(response, 200, { ok: true }); return true;
         }
