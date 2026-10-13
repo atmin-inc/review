@@ -4,6 +4,8 @@ import { setTimeout as pause } from 'node:timers/promises';
 import { startSpan, traceEvent, traceHash, traceId } from './trace.js';
 
 const root = 'https://openrouter.ai/api/v1';
+// A larger body is refused before it is parsed.
+const MAX_RESPONSE_BYTES = 2_000_000;
 let nextRequestAt = 0; // Shared across serial reviews in this CLI process.
 // Explicit free and paid routes; no auto-router, model fallback or arbitrary URL.
 export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTER_API_KEY, transport = globalThis.fetch): Model {
@@ -45,7 +47,7 @@ export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTE
       if (!response.ok) throw new ProviderRequestError(stage, response.status, response.status === 402 ? 'insufficient_quota' : null);
       const text = await response.text();
       traceEvent('provider.body', { bytes: Buffer.byteLength(text), hash: traceHash(text) }, 3);
-      if (Buffer.byteLength(text) > 2000000) throw new ProviderRequestError(stage);
+      if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) throw new ProviderRequestError(stage);
       const data = JSON.parse(text);
       if (data.error) throw new ProviderRequestError(stage, typeof data.error.code === 'number' ? data.error.code : undefined);
       end({ outcome: 'returned', status }); return data;

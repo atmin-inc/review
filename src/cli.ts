@@ -82,7 +82,7 @@ async function main(): Promise<void> {
     return;
   }
   if (operation === 'claim-review') {
-    if (!values.profile || values.format || values['check-current']) throw new Error('claim-review requires --profile and accepts only --out and --cross-family');
+    if (!values.profile || values.format || values['check-current']) throw new Error('claim-review requires --profile and does not accept --format or --check-current');
     const crossFamily = values['cross-family'] ?? 'none';
     if (crossFamily !== 'none' && crossFamily !== 'jev') throw new Error('--cross-family must be none or jev');
     const profile = readProfile(resolve(values.profile));

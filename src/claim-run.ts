@@ -1,6 +1,6 @@
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git, loadReview, sourceText } from './snapshot.js';
+import { git, loadReview, persistJson, sourceText } from './snapshot.js';
 import { revisionFrom } from './symbolic.js';
 import { investigateClaims, type ClaimInvestigation, type ClaimTelemetry } from './investigator.js';
 import { verifyClaims, type CrossFamilyRung, type Verification, type VerifyOptions } from './lifecycle.js';
@@ -275,7 +275,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const full = readFileSync(join(directory, 'change.diff'));
   const { parts, unread } = incremental ? splitDiff(repository, incremental.since, packet.headSha, incremental.changed, partsWithin(profile.maxUsd))
     : splitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path), partsWithin(profile.maxUsd));
-  if (unread.length && !parts.length) throw new Error('Diff exceeds 512 KB investigation limit');
+  if (unread.length && !parts.length) throw new Error(`Diff exceeds ${MAX_DIFF_BYTES / 1024} KB investigation limit`);
   // Each investigation is told what it holds and that only its own diff decides whether it is
   // complete: told only that files were left out, the model ended every such review unfinished,
   // and an unfinished review claims no file (pilot PR #4832, 2026-10-08: 0/780 in 28 turns).
@@ -340,11 +340,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   if (recheck.length) investigation.limitations.push(`${recheck.length} earlier finding(s) were in files this push changed, so they were re-asked rather than carried; ${recheck.filter(claim => emitted.has(claim.claimId)).length} were recorded again.`);
   const claims = [...carried, ...investigation.claims];
 
-  const persist = (name: string, value: unknown) => {
-    const temporary = join(directory, `${name}.pending`);
-    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
-    renameSync(temporary, join(directory, name));
-  };
+  const persist = (name: string, value: unknown) => persistJson(directory, name, value);
   persist('claims.json', investigation.claims);
   if (incremental) persist('carried-claims.json', carried);
   // Opt-in, for the emission bench only: this is provider and repository text.

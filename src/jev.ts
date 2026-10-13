@@ -49,6 +49,8 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
+// A larger body is refused before it is parsed.
+const MAX_RESPONSE_BYTES = 2_000_000;
 
 export interface JevQuestion { key: string; proposition: string; revision: Side }
 
@@ -223,7 +225,7 @@ export async function askJev(claims: Claim[], revisions: Revisions, diff: string
       // documented 401. ProviderRequestError reads both as authentication.
       if (!response.ok) throw new ProviderRequestError('inference', response.status);
       const text = await response.text();
-      if (Buffer.byteLength(text) > 2000000) throw new ProviderRequestError('inference');
+      if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) throw new ProviderRequestError('inference');
       const probabilities = jevAnswers(JSON.parse(text), questions);
       for (const question of questions) {
         log.push({ claimId, proposition: question.proposition, revision: question.revision,

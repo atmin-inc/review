@@ -22,8 +22,6 @@ export interface CheckOutcome { evidence: Evidence[]; limitations: string[] }
 // Both sides of the change, because a claim about a regression is a claim about the
 // difference between them. A check names the side it is asking about.
 export interface Revisions { head: Revision; base: Revision }
-export const sideOf = (revisions: Revisions, check: SymbolicCheck): Revision =>
-  check.revision === 'base' ? revisions.base : revisions.head;
 
 export type { Expectation, Side, SymbolicCheck };
 

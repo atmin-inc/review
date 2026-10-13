@@ -7,6 +7,8 @@ type Attributes = Record<string, string | number | boolean | null | string[]>;
 interface Event { name: string; ph: 'X' | 'i'; ts: number; pid: number; tid: number; s?: 't'; dur?: number; args: Attributes }
 interface Context { emit: (event: Event) => void; attributes: Attributes }
 const context = new AsyncLocalStorage<Context | undefined>();
+// Bounds the trace on disk even if a provider floods a response with tool calls.
+const MAX_TRACE_BYTES = 4 * 1024 * 1024;
 const timestamp = () => performance.timeOrigin * 1000 + performance.now() * 1000;
 export const traceHash = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
 export const traceId = (value: unknown): string | null => typeof value === 'string' && /^[a-zA-Z0-9_/-]{1,160}$/.test(value) ? value : null;
@@ -42,8 +44,7 @@ export async function withTrace<T>(directory: string, operation: () => Promise<T
     if (failed) return;
     try {
       const line = JSON.stringify(event) + '\n';
-      // Bound storage even if a provider floods the response with tool calls.
-      if (bytes + Buffer.byteLength(line) > 4 * 1024 * 1024) { dropped++; return; }
+      if (bytes + Buffer.byteLength(line) > MAX_TRACE_BYTES) { dropped++; return; }
       appendFileSync(fd, line); bytes += Buffer.byteLength(line); events.push(event);
     } catch { failed = true; }
   };

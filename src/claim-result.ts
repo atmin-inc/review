@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { charges, MAX_DIFF_BYTES, modelFor, PART_BYTES, runClaimReview, type ClaimReview, type IncrementalScope } from './claim-run.js';
 import { titleClaims, type Titling } from './titles.js';
 import { parseLocation, type Claim, type ClaimType } from './claim.js';
 import { lockFile, parseResult, type Anchor, type Evidence, type Finding, type Packet, type Result } from './contracts.js';
-import { git, loadReview, validateAnchor } from './snapshot.js';
+import { git, loadReview, persistJson, validateAnchor } from './snapshot.js';
 import type { Chain } from './evidence.js';
 import type { Model, Profile } from './investigation.js';
 
@@ -197,11 +197,7 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   const titling = await titleClaims(review.claims.filter(claim => confirmed.has(claim.claimId) && !earlierTitles[claim.claimId]), modelFor(profile, injectedModel),
     charges(profile).costOf, charges(profile).charged,
     profile.maxUsd - review.investigation.spentUsd, signal ? AbortSignal.any([signal, deadline]) : deadline);
-  const persist = (name: string, value: unknown) => {
-    const temporary = join(directory, `${name}.pending`);
-    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
-    renameSync(temporary, join(directory, name));
-  };
+  const persist = (name: string, value: unknown) => persistJson(directory, name, value);
   titling.titles = { ...Object.fromEntries(Object.entries(earlierTitles).filter(([id]) => confirmed.has(id))), ...titling.titles };
   persist('titles.json', titling);
   persist('receipt.json', claimReceipt(profile, review, startedAt, new Date().toISOString(), titling));

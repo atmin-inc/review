@@ -9,6 +9,8 @@ import { ReviewInputError, defaultPolicy, initialResult, parsePacket, parsePolic
 import { validateEvidence, validateFix, type Freshness } from './assessment.js';
 
 const MAX_BYTES = 16 * 1024 * 1024;
+// The most matches one search returns; more are reported as truncated.
+const MAX_SEARCH_MATCHES = 50;
 const commandDeadline = new AsyncLocalStorage<number>();
 export const withGitDeadline = <T>(deadlineMs: number, operation: () => T): T => commandDeadline.run(Date.now() + deadlineMs, operation);
 const shaPattern = /^[a-f0-9]{40}$/;
@@ -172,6 +174,12 @@ export function capture(repository: string, identity: PullState): { packet: Pack
 function saveJson(path: string, data: unknown): void {
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
 }
+/** Writes `directory/name` through a fresh temporary file and a rename, so a reader never sees a partial record. */
+export function persistJson(directory: string, name: string, value: unknown): void {
+  const temporary = join(directory, `${name}.pending`);
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx', flush: true });
+  renameSync(temporary, join(directory, name));
+}
 function bareRepository(path: string, repository: string): void {
   mkdirSync(path, { mode: 0o700 });
   git(path, ['init', '--bare', '--template=']);
@@ -307,7 +315,7 @@ export function searchSource(repository: string, revision: string, query: string
     const line = decode(raw.subarray(first + 1, second));
     start = newline < 0 ? raw.length : newline + 1;
     requireValue(/^\d+$/.test(line), 'Search returned an unexpected record');
-    if (matches.length === 50) return { matches, truncated: true };
+    if (matches.length === MAX_SEARCH_MATCHES) return { matches, truncated: true };
     requireValue(path.startsWith(`${revision}:`), 'Search returned an unexpected revision');
     matches.push({ path: path.slice(revision.length + 1), line: Number(line) });
   }
