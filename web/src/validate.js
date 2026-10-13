@@ -1,6 +1,10 @@
 // Form validation mirrors the server's limits so people see the reason next to the field.
 // The server stays authoritative; its error sentence is shown when it still refuses.
-import { usd } from './format.js';
+import { count, usd } from './format.js';
+
+// The server's ceilings: a review count, and a plan's multiplier or minimum charge.
+const MAX_COUNT = 100_000;
+const MAX_PLAN_FACTOR = 10;
 
 const whole = text => (/^\s*\d+\s*$/.test(text) ? Number(text) : NaN);
 const decimal = text => (/^\s*\d+(\.\d+)?\s*$/.test(text) ? Number(text) : NaN);
@@ -18,8 +22,8 @@ export function validateSettings(form, models, limits) {
   }
   // Blank means no limit per author.
   const maxReviewsPerAuthor = form.maxReviewsPerAuthor.trim() === '' ? null : whole(form.maxReviewsPerAuthor);
-  if (maxReviewsPerAuthor !== null && !(maxReviewsPerAuthor >= 1 && maxReviewsPerAuthor <= 100000)) {
-    errors.maxReviewsPerAuthor = 'Enter a whole number from 1 to 100,000, or leave it blank for no limit.';
+  if (maxReviewsPerAuthor !== null && !(maxReviewsPerAuthor >= 1 && maxReviewsPerAuthor <= MAX_COUNT)) {
+    errors.maxReviewsPerAuthor = `Enter a whole number from 1 to ${count(MAX_COUNT)}, or leave it blank for no limit.`;
   }
   return { errors, value: { model: form.model, maxUsd, maxReviewsPerDay, maxReviewsPerAuthor, selfRun: form.selfRun === true, automatic: form.automatic === true } };
 }
@@ -36,10 +40,10 @@ export function validatePlan(form) {
   for (const field of planFields) {
     if (field.kind === 'count') {
       value[field.key] = whole(form[field.key]);
-      if (!(value[field.key] <= 100000)) errors[field.key] = 'Enter a whole number from 0 to 100,000.';
+      if (!(value[field.key] <= MAX_COUNT)) errors[field.key] = `Enter a whole number from 0 to ${count(MAX_COUNT)}.`;
     } else {
       value[field.key] = decimal(form[field.key]);
-      if (!(value[field.key] <= 10)) errors[field.key] = 'Enter a number from 0 to 10.';
+      if (!(value[field.key] <= MAX_PLAN_FACTOR)) errors[field.key] = `Enter a number from 0 to ${MAX_PLAN_FACTOR}.`;
     }
   }
   return { errors, value };
