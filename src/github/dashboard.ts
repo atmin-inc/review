@@ -41,8 +41,8 @@ const manageUrl = (i: Installation) => `https://github.com/${i.accountType === '
 // `billing` is set when a Stripe key is configured; without it no credit can be bought, so
 // reviews past the free ones run only on credit an operator adds.
 export function dashboard(config: PilotConfig, options: DashboardConfig, store: Store, settings: ReviewSettings, fetcher: typeof fetch = fetch, repositories?: Repositories, app?: { id: string; key: string }, billing?: Billing) {
-  // ponytail: one process, bounded in-memory sessions (five per GitHub user); restart signs everyone
-  // out. Tokens never touch disk. Add shared encrypted sessions only with multiple web workers.
+  // Sessions live in this one process, at most five per GitHub user, so a restart signs everyone
+  // out and tokens never touch disk. Several web workers would need shared encrypted sessions.
   const sessions = new Map<string, Session>();
   const flows = new Map<string, Flow>();
   const callback = `${options.origin}/auth/github/callback`;
@@ -200,10 +200,14 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         json(response, 200, { version, user: null, ...(options.appSlug ? { installUrl: `https://github.com/apps/${options.appSlug}/installations/new` } : {}) }); return true;
       }
       if (!session) { json(response, 401, { error: 'Sign in with GitHub to continue.' }); return true; }
-      if (request.method === 'POST') {
-        if (request.headers.origin !== options.origin || request.headers['content-type'] !== 'application/json') {
+      // Every state-changing request must come from the dashboard's own page; a POST also carries
+      // JSON, which a cross-site form cannot send. A DELETE has no body.
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        if (request.headers.origin !== options.origin || (request.method === 'POST' && request.headers['content-type'] !== 'application/json')) {
           json(response, 403, { error: 'Reload this page before trying again.' }); return true;
         }
+      }
+      if (request.method === 'POST') {
         if (url.pathname === '/api/review/v1/logout') {
           sessions.delete(sessionId); response.setHeader('Set-Cookie', cookie(sessionCookie, '', 0)); json(response, 200, { ok: true }); return true;
         }
@@ -215,6 +219,11 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
         if ((await api('/user', session.token)).id !== session.user.id) throw new Denied();
         const listed = await appInstallations();
         const known = new Set([...listed.map(i => i.id), ...repositories.installations(), ...repositories.planned()]);
+        // The installation an admin change names: exactly one `installation` parameter, a known one.
+        const targetInstallation = () => {
+          const values = url.searchParams.getAll('installation');
+          return values.length === 1 && /^[1-9][0-9]{0,15}$/.test(values[0]!) && known.has(Number(values[0])) ? Number(values[0]) : null;
+        };
         if (request.method === 'GET' && url.pathname === '/api/review/v1/admin') {
           json(response, 200, { version, limits: { maxReviewsPerDay: initial.config.maxReviewsPerDay, reviewsToday: repositories.reviewsToday() }, defaults: defaultPlan,
             installations: [...known].map(id => {
@@ -224,41 +233,35 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
             }), checkedAt: new Date().toISOString() }); return true;
         }
         if (request.method === 'POST' && url.pathname === '/api/review/v1/admin/plan') {
-          const target = url.searchParams.get('installation');
-          if (url.searchParams.getAll('installation').length !== 1 || !/^[1-9][0-9]{0,15}$/.test(target ?? '') || !known.has(Number(target))) {
-            json(response, 404, { error: 'Installation not found.' }); return true;
-          }
+          const target = targetInstallation();
+          if (target === null) { json(response, 404, { error: 'Installation not found.' }); return true; }
           const read = await body(request);
           if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
-          try { repositories.setPlan(Number(target), 'value' in read ? read.value : undefined, session.user.id); }
+          try { repositories.setPlan(target, 'value' in read ? read.value : undefined, session.user.id); }
           catch { json(response, 400, { error: 'Use whole review counts up to 100000 and a multiplier and minimum between 0 and 10.' }); return true; }
-          const { plan, usage } = adminView(Number(target));
+          const { plan, usage } = adminView(target);
           json(response, 200, { plan, usage }); return true;
         }
         if (request.method === 'POST' && url.pathname === '/api/review/v1/admin/credit') {
-          const target = url.searchParams.get('installation');
-          if (url.searchParams.getAll('installation').length !== 1 || !/^[1-9][0-9]{0,15}$/.test(target ?? '') || !known.has(Number(target))) {
-            json(response, 404, { error: 'Installation not found.' }); return true;
-          }
+          const target = targetInstallation();
+          if (target === null) { json(response, 404, { error: 'Installation not found.' }); return true; }
           const read = await body(request);
           if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
           const value = 'value' in read ? read.value as { usd?: unknown; note?: unknown } : null;
           try {
             if (!value || typeof value !== 'object' || Object.keys(value).some(key => !['usd', 'note'].includes(key))) throw new Error('Invalid grant');
-            repositories.grant(Number(target), value.usd, value.note, session.user.id);
+            repositories.grant(target, value.usd, value.note, session.user.id);
           } catch { json(response, 400, { error: 'Add or take between $0.01 and $1,000, with a note of up to 200 characters.' }); return true; }
-          json(response, 200, { creditUsd: adminView(Number(target)).creditUsd }); return true;
+          json(response, 200, { creditUsd: adminView(target).creditUsd }); return true;
         }
         // An organization's own model key: checked with one call before it is saved, never returned.
         if (url.pathname === '/api/review/v1/admin/model-key' && ['POST', 'DELETE'].includes(request.method ?? '')) {
-          const target = url.searchParams.get('installation');
-          if (url.searchParams.getAll('installation').length !== 1 || !/^[1-9][0-9]{0,15}$/.test(target ?? '') || !known.has(Number(target))) {
-            json(response, 404, { error: 'Installation not found.' }); return true;
-          }
+          const target = targetInstallation();
+          if (target === null) { json(response, 404, { error: 'Installation not found.' }); return true; }
           const keys = repositories.keys;
           if (!keys) { json(response, 404, { error: 'Not found.' }); return true; }
           if (!keys.ready) { json(response, 503, { error: 'The service has no ATMIN_REVIEW_KEY_SECRET, so it cannot store or use keys.' }); return true; }
-          if (request.method === 'DELETE') { keys.remove(Number(target), session.user.id); json(response, 200, { modelKey: null }); return true; }
+          if (request.method === 'DELETE') { keys.remove(target, session.user.id); json(response, 200, { modelKey: null }); return true; }
           const read = await body(request);
           if ('tooLarge' in read) { json(response, 413, { error: 'Request too large.' }); return true; }
           const value = 'value' in read ? read.value as { provider?: unknown; key?: unknown } : null;
@@ -269,8 +272,8 @@ export function dashboard(config: PilotConfig, options: DashboardConfig, store: 
           const provider = value.provider as ModelKeyProvider, key = value.key.trim();
           const refused = await checkModelKey(provider, key, fetcher);
           if (refused) { json(response, 400, { error: refused }); return true; }
-          keys.set(Number(target), provider, key, session.user.id);
-          json(response, 200, { modelKey: keys.view(Number(target)) }); return true;
+          keys.set(target, provider, key, session.user.id);
+          json(response, 200, { modelKey: keys.view(target) }); return true;
         }
         json(response, 404, { error: 'Not found.' }); return true;
       }

@@ -7,11 +7,11 @@ import type { ModelKeyProvider } from './store.js';
 
 // An organization's own model key (bring your own key): with one set, every review this service
 // runs for the organization's repositories uses it instead of this service's key, and its plan
-// and credit do not count those reviews. Only Luna on Amazon Bedrock so far, set by an operator
-// on /admin (decision: Lors, 2026-10-07, for the pilot customer). The key is stored sealed with
-// ATMIN_REVIEW_KEY_SECRET, so a copy of the database or a query printed to a terminal never
-// shows it. A hosted runner receives it with that organization's job and the job forgets it
-// once claimed. A review never falls back to this service's key.
+// and credit do not count those reviews. Only Luna on Amazon Bedrock is supported, set by an
+// operator on /admin. The key is stored sealed with ATMIN_REVIEW_KEY_SECRET, so a copy of the
+// database or a query printed to a terminal never shows it. A hosted runner receives it with that
+// organization's job and the job forgets it once claimed. A review never falls back to this
+// service's key.
 export interface ModelKeyView { provider: ModelKeyProvider; last4: string; updatedAt: string; updatedBy: number }
 export const modelKeyProviders: readonly ModelKeyProvider[] = ['bedrock'];
 export const keyPattern = /^[\x21-\x7e]{20,3000}$/;

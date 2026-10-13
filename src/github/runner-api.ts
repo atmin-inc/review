@@ -97,7 +97,7 @@ async function poll(response: ServerResponse, runners: Runners, runner: RunnerRo
   sleep: (ms: number) => Promise<unknown>, seen = () => {}): Promise<boolean> {
   const until = Date.now() + pollMs;
   // A runner that went away closes the response. Not `request.destroyed`: Node destroys a request
-  // once its body is read, which ended every poll at once (2026-10-08: ~380 polls a second per idle runner).
+  // once its body is read, which would end every poll at once and turn the long poll into a busy loop.
   let gone = false;
   response.once('close', () => { gone = true; });
   for (;;) {

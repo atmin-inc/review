@@ -5,7 +5,7 @@ import type { GitHub } from './api.js';
 import type { Store } from './store.js';
 import type { Repository } from './repositories.js';
 import type { ReviewSettings } from './settings.js';
-import { findingKey, latestFindings } from './outcomes.js';
+import { findingKey, latestFindings, markedFinding } from './outcomes.js';
 
 export function validSignature(body: Buffer, header: string | undefined, secret: string): boolean {
   if (!header || !/^sha256=[a-f0-9]{64}$/.test(header)) return false;
@@ -49,7 +49,7 @@ export function webhookServer(secret: string, dispatch: (event: string | string[
 const commands = ['/atmin review', '@atmin review'];
 // A maintainer accepting findings: as a reply to one of atmin's inline findings, that finding;
 // as a PR comment, every finding of the latest completed review. Accepted findings leave the
-// summary, the inline comments and the check, and outcomes record them (Lors, 2026-10-11).
+// summary, the inline comments and the check, and outcomes record them.
 const acceptCommands = ['/atmin accept', '@atmin accept'];
 
 // Only the commenting maintainer's own comment counts, and only one who may review the PR.
@@ -83,7 +83,8 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     return [202, 'validation refresh recorded'];
   }
   // A push to a target branch starts nothing: it does not change what a PR changes, and
-  // re-reviewing every open PR on each one billed the pilot repository for unchanged code several times a day.
+  // re-reviewing every open PR on each one would bill a busy repository for unchanged code
+  // several times a day.
   if (event === 'push') return [202, 'target branch push ignored'];
   let pr: number | undefined;
   const starts = event === 'pull_request' && (['opened', 'reopened', 'synchronize', 'ready_for_review'].includes(payload.action)
@@ -106,7 +107,7 @@ export async function repositoryEvent(config: PilotConfig, store: Store, github:
     else {
       // The finding is named by the marker in atmin's own comment being replied to, never a person's.
       const parent = (await github.reviewComments(number)).find(comment => comment.id === payload.comment.in_reply_to_id && !comment.human);
-      const key = parent && /<!-- atmin-finding:([a-f0-9]{16}) -->/.exec(parent.body)?.[1];
+      const key = parent && markedFinding(parent.body);
       if (!key) return [202, 'not a reply to an atmin finding'];
       keys = [key];
     }

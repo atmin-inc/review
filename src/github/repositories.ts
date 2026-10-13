@@ -25,8 +25,7 @@ export type CreditKind = 'purchase' | 'top-up' | 'grant' | 'review';
 export interface CreditRecord { reference: string; kind: CreditKind; usd: number; created: number; by: number | null; note: string | null; receipt: string | null; }
 // A payment to Stripe for credit, written before Stripe is asked to take it. 'open' until Stripe
 // says it was paid, failed, or (a Checkout page left unpaid) expired; also expired when the Stripe
-// key changes mode (`stripeMode`). `intent` is a top-up's
-// PaymentIntent once Stripe has made it.
+// key changes mode (`stripeMode`). `intent` is a top-up's PaymentIntent once Stripe has made it.
 export type PaymentState = 'open' | 'paid' | 'failed' | 'expired';
 export interface PaymentRecord { reference: string; installation: number; kind: 'checkout' | 'top-up'; cents: number; state: PaymentState; intent: string | null; created: number; by: number | null; }
 // `customer` is the installation's Stripe customer; `card` describes the card its last purchase
@@ -71,18 +70,19 @@ export function creditUsedUp(plan: Plan, now: number, url?: string): string {
   const buy = url ? `A repository admin can buy credit on the atmin dashboard (${url}) to keep reviewing` : 'atmin can add credit to keep reviewing';
   return `This organization ${used}has no review credit left. ${buy}${plan.freeReviews ? `; otherwise free reviews start again on ${new Date(end).toISOString().slice(0, 10)}` : ''}. No inference was started.`;
 }
-// Reviews this service ran: one on the author's own runner costs no inference and counts toward no plan.
-// Reviews started on this service's key; see Store.reserve for why the daily limits count no others.
+// Reviews started on this service's own model key since `since`. A review on the author's own
+// runner or on the organization's own key costs this service no inference; see Store.reserve.
 const startedSince = (store: Store, since: number) => Number(store.db.prepare('SELECT count(*) AS n FROM jobs WHERE started>=? AND runner IS NULL AND modelKey IS NULL').get(since)!.n);
 
-// ponytail: any installation connects up to ten repositories itself; one scheduler serves them all.
-// Separate stores reuse the worker's existing isolation boundary without tenant SQL.
+// Every connected repository, across installations, served by one scheduler. Each installation
+// connects up to `perInstallation` repositories itself. Each repository has its own Store, so
+// tenants are kept apart by database file rather than by a tenant column in shared SQL.
 export class Repositories {
   readonly entries = new Map<number, Repository>();
   // `origin` is the dashboard's, set only when credit can be bought (a Stripe key is configured),
   // for the link in a refusal that asks for it.
   constructor(readonly config: PilotConfig, readonly root: Store, private models: ModelChoice[], private owner: string, private origin?: string, readonly keys?: ModelKeys) {
-    // The `invoices` table of the monthly-invoice release is left as it is on servers that have it.
+    // An `invoices` table from an earlier monthly-invoice scheme may exist; nothing reads it.
     root.db.exec(`CREATE TABLE IF NOT EXISTS repositories (id INTEGER PRIMARY KEY, name TEXT NOT NULL, installation INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS plans (installation INTEGER PRIMARY KEY, value TEXT NOT NULL, updated INTEGER NOT NULL, updatedBy INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS billing (installation INTEGER PRIMARY KEY, customer TEXT NOT NULL, paymentMethod TEXT, card TEXT, updated INTEGER NOT NULL, updatedBy INTEGER NOT NULL);
@@ -90,7 +90,7 @@ export class Repositories {
       CREATE INDEX IF NOT EXISTS credit_installation ON credit(installation, created);
       CREATE TABLE IF NOT EXISTS payments (reference TEXT PRIMARY KEY, installation INTEGER NOT NULL, kind TEXT NOT NULL, cents INTEGER NOT NULL, state TEXT NOT NULL, intent TEXT, created INTEGER NOT NULL, by INTEGER);
       CREATE TABLE IF NOT EXISTS stripe (id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL);`);
-    // Columns added after the first billing release; its table exists on the server.
+    // Columns added after the `billing` table was first created; older databases gain them here.
     for (const [column, type] of [['email', 'TEXT'], ['expires', 'TEXT'], ['topUpCents', 'INTEGER'], ['topUpFailed', 'TEXT']]) {
       if (!root.db.prepare('PRAGMA table_info(billing)').all().some(row => row.name === column)) root.db.exec(`ALTER TABLE billing ADD COLUMN ${column} ${type}`);
     }

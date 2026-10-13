@@ -18,9 +18,9 @@ import { runnerLabel, type Outcome, type RunnerRow } from './runners.js';
 import { Outcomes, findingKey } from './outcomes.js';
 import { MAX_DIFF_BYTES } from '../claim-run.js';
 
-// Why a job failed, kept on the job and in the log. On 2026-09-28 a finished 5/5 review's
-// check turned "Review failed" after its comment was posted, and nothing said which step
-// broke. A GitHub failure names its request; anything else is thrown by this code.
+// Why a job failed, kept on the job and in the log, so a failure after publication started
+// still says which step broke. A GitHub failure names its request and never its response;
+// anything else is thrown by this code.
 export function failureCause(error: unknown): string {
   if (error instanceof GitHubError) return `GitHub ${error.status || error.detail} on ${error.request}`;
   return error instanceof Error ? `${error.name}: ${error.message.slice(0, 200)}` : 'non-error thrown';
@@ -43,8 +43,8 @@ export interface Dispatcher {
 const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n`
   : job.modelKey === 'bedrock' ? `\nRan on this organization's own Amazon Bedrock key. atmin charged nothing for this review.\n` : '';
 // The target branch moving on is not a change to the PR: a review is of the head against its
-// merge base, which a new target commit does not alter. On a busy target (the pilot repository: main moves
-// every few minutes) comparing the target tip cancelled reviews mid-run.
+// merge base, which a new target commit does not alter. On a busy target branch, comparing its
+// tip would cancel reviews mid-run.
 const same = (a: LivePull, b: LivePull) => a.headSha === b.headSha && a.baseRef === b.baseRef && a.state === b.state && a.draft === b.draft;
 // Why a run failed, from the failure.json its review child wrote (see task.ts), or null.
 function runFailure(artifact: string): { phase: string; reason: string } | null {
@@ -121,7 +121,6 @@ export class Worker {
   }
   private async work(job: Job, signal: AbortSignal): Promise<void> {
     const initial = await this.github.pull(job.pr);
-    const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
     if (!this.store.current(job, this.owner) || signal.aborted) return;
     if (job.author !== initial.author.id) this.store.update(job.id, { author: initial.author.id });
     const marker = markerFor(this.config.repositoryId, job.pr);
@@ -156,8 +155,7 @@ export class Worker {
         await this.github.update(existing.id, `${marker}\n# atmin review — review pending\n\nA review was requested for head \`${initial.headSha}\` against target \`${initial.baseSha}\`. No completed report is available for this request. Previous findings are historical. This review is advisory.`);
       }
       if (!this.store.current(job, this.owner) || signal.aborted) return;
-      let report: string;
-      let check: CheckOutput = { status: 'completed', conclusion: 'failure', output: { title: 'Review incomplete', summary: 'No completed review is available. See the PR summary.' } };
+      const check: CheckOutput = { status: 'completed', conclusion: 'failure', output: { title: 'Review incomplete', summary: 'No completed review is available. See the PR summary.' } };
       // Save interruption context before starting the remote check.
       this.store.update(job.id, { report: JSON.stringify({ initial, body: `${INTERRUPTED}\n\nReview did not finish.`, check }) });
       await this.checks.publish(job, initial.headSha, { status: 'in_progress', output: { title: 'Review in progress', summary: `Reviewing head ${initial.headSha} against target ${initial.baseSha}.` } });
@@ -195,6 +193,10 @@ export class Worker {
   }
   // Header line that ties a report to the exact commits it describes.
   private identity(initial: LivePull, job: Job): string { return `\n\nHead: \`${initial.headSha}\` · Target: \`${initial.baseSha}\` · Run: \`${job.id}\`\n`; }
+  // The review's page on the dashboard, when there is one.
+  private detailsUrl(job: Job): string | undefined {
+    return this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
+  }
   // A hosted review counts toward the plan, credit and the repository's limits.
   private reserveHosted(job: Job, initial: LivePull, preferences: ReturnType<ReviewSettings['current']> | undefined, now: number): true | string {
     const perAuthor = preferences?.maxReviewsPerAuthor ?? null;
@@ -212,8 +214,8 @@ export class Worker {
     const { initial } = saved;
     let check = saved.check, report: string, refused = false, idle = false;
     if (outcome !== 'done' && job.runner) {
-      // Decision (Lors, 2026-10-01): a PR whose own runner does not deliver is reviewed by this
-      // service's runners, as any other review.
+      // A PR whose author's runner does not deliver is reviewed by this service's runners, as
+      // any other review.
       process.stderr.write(`atmin review: review ${job.id} of repository ${this.config.repositoryId} on ${job.runner}: ${outcome}; offering it to the hosted runners\n`);
       rmSync(job.artifact!, { recursive: true, force: true }); mkdirSync(job.artifact!, { recursive: true, mode: 0o700 });
       this.store.releaseRunner(job);
@@ -245,8 +247,7 @@ export class Worker {
           this.cancel(job); return false;
         }
         const assessment = assess(packet, result, compareCurrent(packet, live));
-        const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
-        report = renderMarkdown(packet, result, assessment, detailsUrl);
+        report = renderMarkdown(packet, result, assessment, this.detailsUrl(job));
         check = assessmentCheck(assessment);
         idle = askedNoModel(job.artifact!);
       } catch {
@@ -262,7 +263,6 @@ export class Worker {
   }
   private async publish(job: Job, signal: AbortSignal): Promise<void> {
     const marker = markerFor(this.config.repositoryId, job.pr);
-    const detailsUrl = this.dashboardOrigin ? `${this.dashboardOrigin}/?repository=${this.config.repositoryId}#review/${job.id}` : undefined;
     const saved = JSON.parse(job.report!) as { initial: LivePull; body: string; check?: CheckOutput };
     let inline: { packet: Packet; findings: Finding[]; verification: Verification } | undefined;
     if (!same(saved.initial, await this.github.pull(job.pr))) { this.cancel(job); return; }
@@ -284,7 +284,7 @@ export class Worker {
       if (!this.store.current(job, this.owner) || signal.aborted) return;
       writeFileSync(join(job.artifact, 'validation.json'), JSON.stringify({ headSha: packet.headSha, baseSha: packet.baseSha,
         checkedAt: new Date().toISOString(), checks: [...ci, ...verification.checks] }, null, 2), { mode: 0o600 });
-      saved.body = `${renderMarkdown(packet, result, assessment, detailsUrl, verification, this.price?.(job) ?? undefined)}${ranOn(job)}`
+      saved.body = `${renderMarkdown(packet, result, assessment, this.detailsUrl(job), verification, this.price?.(job) ?? undefined)}${ranOn(job)}`
         + `${acceptedCount ? `\n${acceptedCount} finding(s) accepted by a maintainer with \`/atmin accept\` and not counted.\n` : ''}\nRun: \`${job.id}\`\n`;
       saved.check = assessmentCheck(assessment);
       this.store.update(job.id, { report: JSON.stringify(saved) });

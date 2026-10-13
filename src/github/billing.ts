@@ -54,11 +54,11 @@ const topUpFailure = (code: string) => code === 'authentication_required' || cod
 // Prepaid review credit through Stripe, in US dollars. An admin buys credit on a Checkout page,
 // which also saves the card for auto top-up; the purchase is credited when the browser returns
 // (`confirm`), or by the hourly check (`reconcile`) when it never does. With auto top-up on, the
-// saved card is charged off-session whenever credit falls below $5 (`topUp`); a charge the card
-// does not pay stops auto top-up until an admin buys credit or turns it on again. Each payment is
-// a row written before Stripe is asked to take it, and a top-up is created unconfirmed, recorded,
-// then confirmed, so a retried or interrupted payment never charges twice. Stripe emails the
-// receipt to the address entered in Checkout.
+// saved card is charged off-session whenever credit falls below `topUpBelowUsd` (`topUp`); a
+// charge the card does not pay stops auto top-up until an admin buys credit or turns it on again.
+// Each payment is a row written before Stripe is asked to take it, and a top-up is created
+// unconfirmed, recorded, then confirmed, so a retried or interrupted payment never charges twice.
+// Stripe emails the receipt to the address entered in Checkout.
 export class Billing {
   constructor(private stripe: Stripe, private repositories: Repositories, private origin: string) { repositories.stripeMode(stripe.mode); }
   private async customer(installation: number, account: string, by: number): Promise<string> {
@@ -74,7 +74,7 @@ export class Billing {
   async checkout(installation: number, account: string, cents: number, by: number): Promise<string> {
     if (!creditAmounts.includes(cents)) throw new StripeError(400, 'checkout', 'invalid amount');
     const customer = await this.customer(installation, account, by), page = `${this.origin}/billing?installation=${installation}`;
-    // The account's default currency (CAD for atmin) must not decide the price's.
+    // Credit is priced in US dollars whatever the Stripe account's default currency is.
     const session = await this.stripe.call('POST', '/checkout/sessions', { mode: 'payment', customer, 'payment_method_types[0]': 'card',
       'line_items[0][quantity]': '1', 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': String(cents),
       'line_items[0][price_data][product_data][name]': 'atmin review credit', 'payment_intent_data[setup_future_usage]': 'off_session',
@@ -122,9 +122,9 @@ export class Billing {
       catch (error) { log(`checking ${row.kind} ${row.reference} for installation ${row.installation} failed: ${failure(error)}`); }
     }
   }
-  // Buys the chosen amount for each installation with auto top-up on whose credit is below $5,
-  // or moves on a top-up still open. Called after each review, hourly, and when an admin turns
-  // auto top-up on (`only`).
+  // Buys the chosen amount for each installation with auto top-up on whose credit is below
+  // `topUpBelowUsd`, or moves on a top-up still open. Called after each review, hourly, and when
+  // an admin turns auto top-up on (`only`).
   async topUp(only?: number, now = Date.now()): Promise<void> {
     for (const installation of this.repositories.toppedUp().filter(i => only === undefined || i === only)) {
       try {

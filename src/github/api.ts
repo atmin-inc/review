@@ -28,6 +28,10 @@ export interface GitHub {
   createCheck(head: string, externalId: string, output: CheckOutput): Promise<number>;
   updateCheck(id: number, output: CheckOutput): Promise<void>;
 }
+// Each GitHub call gets this long to answer, and a cached installation token is renewed when it
+// has less than TOKEN_RENEW_MS left, so it never expires during a call that started with it.
+const REQUEST_TIMEOUT_MS = 8000;
+const TOKEN_RENEW_MS = 120_000;
 export class GitHubError extends Error {
   // `request` is the method and path and `detail` says why no status came back; neither holds
   // any of the response, which can carry tokens or PR text.
@@ -45,37 +49,38 @@ export class AppGitHub implements GitHub {
   private async request(path: string, token: string, method = 'GET', body?: unknown): Promise<any> {
     const call = `${method} ${path.split('?')[0]}`;
     const response = await this.transport(`https://api.github.com${path}`, {
-      method, redirect: 'error', signal: AbortSignal.timeout(8000),
+      method, redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'atmin-review-pilot', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }).catch(error => { throw new GitHubError(0, call, error?.name === 'TimeoutError' ? 'no response in 8 s' : 'no response'); });
+    }).catch(error => { throw new GitHubError(0, call, error?.name === 'TimeoutError' ? `no response in ${REQUEST_TIMEOUT_MS / 1000} s` : 'no response'); });
     if (!response.ok) throw new GitHubError(response.status, call);
     // API response bodies/errors never enter logs, especially access-token responses.
     try { return await response.json(); } catch { throw new GitHubError(0, call, 'unreadable response'); }
   }
-  private async token(write: boolean | 'checks'): Promise<string> {
-    const scope = write === 'checks' ? 'checks' : write ? 'write' : 'read';
+  // An installation token for the one configured repository, narrowed to what the call needs:
+  // reading source and PRs, writing PR comments and reviews, or writing check runs.
+  private async token(scope: 'read' | 'write' | 'checks'): Promise<string> {
     const cached = this.tokens.get(scope);
-    if (cached && cached.expires > Date.now() + 120_000) return cached.token;
+    if (cached && cached.expires > Date.now() + TOKEN_RENEW_MS) return cached.token;
     const result = await this.request(`/app/installations/${this.config.installationId}/access_tokens`, appJwt(this.appId, this.key), 'POST', {
       repository_ids: [this.config.repositoryId],
-      permissions: write === 'checks' ? { checks: 'write' } : write ? { pull_requests: 'write' } : { contents: 'read', pull_requests: 'read' },
+      permissions: scope === 'checks' ? { checks: 'write' } : scope === 'write' ? { pull_requests: 'write' } : { contents: 'read', pull_requests: 'read' },
     });
     if (typeof result.token !== 'string' || !result.token || !Number.isFinite(Date.parse(result.expires_at))) throw new Error('Invalid installation token response');
     this.tokens.set(scope, { token: result.token, expires: Date.parse(result.expires_at) });
     return result.token;
   }
-  readToken(): Promise<string> { return this.token(false); }
+  readToken(): Promise<string> { return this.token('read'); }
   async verifyInstallation(): Promise<{ repository: string; bot: string }> {
-    const data = await this.request(`/repos/${this.config.repository}`, await this.token(false));
+    const data = await this.request(`/repos/${this.config.repository}`, await this.token('read'));
     if (data.id !== this.config.repositoryId || data.full_name !== this.config.repository) throw new Error('Installation repository identity mismatch');
     // Minting the narrower publisher token checks granted permission without posting anything.
-    await this.token(true);
+    await this.token('write');
     await this.token('checks');
     return { repository: data.full_name, bot: await this.botLogin() };
   }
   async pull(pr: number): Promise<LivePull> {
-    const token = await this.token(false);
+    const token = await this.token('read');
     const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}`, token);
     if (data.base?.repo?.id !== this.config.repositoryId || data.base?.repo?.full_name !== this.config.repository || data.number !== pr) throw new Error('PR repository identity mismatch');
     const ref = await this.request(`/repos/${this.config.repository}/git/ref/heads/${encodeURIComponent(data.base.ref)}`, token);
@@ -87,7 +92,7 @@ export class AppGitHub implements GitHub {
   async canReview(login: string): Promise<boolean> {
     if (!/^[a-z\d](?:[a-z\d-]{0,38})$/i.test(login)) return false;
     try {
-      const data = await this.request(`/repos/${this.config.repository}/collaborators/${encodeURIComponent(login)}/permission`, await this.token(false));
+      const data = await this.request(`/repos/${this.config.repository}/collaborators/${encodeURIComponent(login)}/permission`, await this.token('read'));
       return ['write', 'maintain', 'admin'].includes(data.permission);
     } catch (error) { if (error instanceof GitHubError && error.status === 404) return false; throw error; }
   }
@@ -101,7 +106,7 @@ export class AppGitHub implements GitHub {
   }
   async summary(pr: number, marker: string): Promise<Comment | null> {
     const login = await this.botLogin();
-    const token = await this.token(false);
+    const token = await this.token('read');
     let found: Comment | null = null;
     for (let page = 1; page <= 20; page++) {
       const comments = await this.request(`/repos/${this.config.repository}/issues/${pr}/comments?per_page=100&page=${page}`, token);
@@ -117,17 +122,17 @@ export class AppGitHub implements GitHub {
     throw new Error('Comment scan limit reached; no new comment created');
   }
   async create(pr: number, body: string): Promise<number> {
-    const result = await this.request(`/repos/${this.config.repository}/issues/${pr}/comments`, await this.token(true), 'POST', { body });
+    const result = await this.request(`/repos/${this.config.repository}/issues/${pr}/comments`, await this.token('write'), 'POST', { body });
     if (!Number.isSafeInteger(result.id)) throw new Error('Uncertain comment creation');
     return result.id;
   }
   async update(id: number, body: string): Promise<void> {
-    await this.request(`/repos/${this.config.repository}/issues/comments/${id}`, await this.token(true), 'PATCH', { body });
+    await this.request(`/repos/${this.config.repository}/issues/comments/${id}`, await this.token('write'), 'PATCH', { body });
   }
   async files(pr: number): Promise<PullFile[]> {
     const files: PullFile[] = [];
     for (let page = 1; page <= 11; page++) {
-      const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}/files?per_page=100&page=${page}`, await this.token(false));
+      const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}/files?per_page=100&page=${page}`, await this.token('read'));
       if (!Array.isArray(data) || data.some(f => typeof f.filename !== 'string'
         || (f.patch !== undefined && typeof f.patch !== 'string')
         || (f.previous_filename !== undefined && typeof f.previous_filename !== 'string'))) throw new Error('Invalid PR file listing');
@@ -141,7 +146,7 @@ export class AppGitHub implements GitHub {
     const login = await this.botLogin();
     let found: number | null = null;
     for (let page = 1; page <= 20; page++) {
-      const reviews = await this.request(`/repos/${this.config.repository}/pulls/${pr}/reviews?per_page=100&page=${page}`, await this.token(false));
+      const reviews = await this.request(`/repos/${this.config.repository}/pulls/${pr}/reviews?per_page=100&page=${page}`, await this.token('read'));
       if (!Array.isArray(reviews)) throw new Error('Invalid review listing');
       for (const review of reviews) {
         if (review.user?.login === login && review.user?.type === 'Bot' && review.commit_id === head
@@ -155,7 +160,7 @@ export class AppGitHub implements GitHub {
     throw new Error('Review scan limit reached');
   }
   async createReview(pr: number, head: string, body: string, comments: InlineComment[]): Promise<number> {
-    const review = await this.request(`/repos/${this.config.repository}/pulls/${pr}/reviews`, await this.token(true), 'POST',
+    const review = await this.request(`/repos/${this.config.repository}/pulls/${pr}/reviews`, await this.token('write'), 'POST',
       { commit_id: head, event: 'COMMENT', body, comments });
     if (!Number.isSafeInteger(review.id) || review.id < 1) throw new Error('Uncertain inline review creation');
     return review.id;
@@ -164,7 +169,7 @@ export class AppGitHub implements GitHub {
     const found: ReviewComment[] = [];
     const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : 0;
     for (let page = 1; page <= 20; page++) {
-      const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}/comments?per_page=100&page=${page}`, await this.token(false));
+      const data = await this.request(`/repos/${this.config.repository}/pulls/${pr}/comments?per_page=100&page=${page}`, await this.token('read'));
       if (!Array.isArray(data)) throw new Error('Invalid review comment listing');
       for (const comment of data) {
         if (!Number.isSafeInteger(comment.id) || typeof comment.body !== 'string' || typeof comment.user?.type !== 'string') throw new Error('Invalid review comment');
@@ -180,7 +185,7 @@ export class AppGitHub implements GitHub {
   async file(path: string, ref: string): Promise<string | null> {
     if (!/^[a-f0-9]{40}$/.test(ref) || path.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('Invalid file request');
     try {
-      const data = await this.request(`/repos/${this.config.repository}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${ref}`, await this.token(false));
+      const data = await this.request(`/repos/${this.config.repository}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${ref}`, await this.token('read'));
       if (Array.isArray(data) || data.type !== 'file') return null;
       // The contents API leaves out files over 1 MB.
       if (data.encoding !== 'base64' || typeof data.content !== 'string') throw new Error(`File not readable through the contents API (${Number(data.size)} bytes)`);
@@ -199,8 +204,8 @@ export class AppGitHub implements GitHub {
         const query = new URLSearchParams({ check_name: trusted.name, app_id: String(trusted.appId), filter: 'latest', per_page: '100' });
         const data = await this.request(`/repos/${this.config.repository}/commits/${head}/check-runs?${query}`, await this.token('checks'));
         // One head can carry several runs of the same check from the same App: a workflow on
-        // both push and pull_request runs once per event (atmin-inc/review PR 9, 2026-09-25).
-        // Every run must be completed; any failure fails, and only all successes pass.
+        // both push and pull_request runs once per event. Every run must be completed; any
+        // failure fails, and only all successes pass.
         const runs = data.check_runs;
         if (!Array.isArray(runs) || !runs.length || data.total_count !== runs.length
           || runs.some(run => run.name !== trusted.name || run.app?.id !== trusted.appId || run.head_sha !== head

@@ -98,7 +98,7 @@ async function setup(t, hosted = false, operators = [], stripe) {
   const login = async () => { const { response, cookie } = await finish(await begin()); assert.equal(response.headers.get('location'), '/'); return cookie; };
   const post = (path, body, cookie, extra = {}) => fetch(base + '/api/review/v1/' + path, { method: 'POST', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', ...extra }, body: typeof body === 'string' ? body : JSON.stringify(body) });
   const remove = (path, cookie) => fetch(base + '/api/review/v1/' + path, { method: 'DELETE', headers: { Cookie: cookie, Origin: origin } });
-  return { root, config, store, settings, state, get, post, remove, begin, finish, login, repositories, keys };
+  return { root, base, config, store, settings, state, get, post, remove, begin, finish, login, repositories, keys };
 }
 
 test('OAuth binds browser/state/PKCE/repository; tokens stay server-side; codes cannot replay', async t => {
@@ -498,6 +498,11 @@ test('only an operator sets an organization\'s model key, which is checked first
   const admin = await (await f.get('/api/review/v1/admin', cookie)).text();
   assert.ok(!admin.includes(key));
   assert.equal(JSON.parse(admin).installations[0].modelKey.last4, 'ODkw');
+  // A DELETE from another site, or with no Origin, is refused like a POST: the key stays.
+  for (const headers of [{ Cookie: cookie }, { Cookie: cookie, Origin: 'https://attacker.test' }]) {
+    assert.equal((await fetch(f.base + '/api/review/v1/admin/model-key?installation=99', { method: 'DELETE', headers })).status, 403);
+  }
+  assert.equal(f.keys.provider(99), 'bedrock');
   assert.equal((await f.remove('admin/model-key?installation=99', cookie)).status, 200);
   assert.equal(f.keys.provider(99), null);
 });

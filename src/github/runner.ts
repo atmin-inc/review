@@ -21,11 +21,11 @@ import type { Job, Store } from './store.js';
 export const DEFAULT_MIN_FREE_DISK_MB = 2048;
 export const RUN_RETENTION_DAYS = 90;
 // A shared copy only grows (garbage collection is off; see sourceCache in src/snapshot.ts).
-// Past this size the next review wipes it and fetches afresh; Lors, 2026-09-26: a wipe only
-// slows the next review. Connected repositories are at most 2 GB on GitHub.
+// Past this size the next review wipes it and fetches afresh, which only slows that review.
+// Connected repositories are at most 2 GB on GitHub.
 export const MAX_SOURCE_CACHE_BYTES = 3 * 1024 ** 3;
-// What one organization's run records and shared copies may hold together. The pilot repository's copy is
-// about 175 MB and a finished run record a few hundred KB, since its snapshot is deleted.
+// What one organization's run records and shared copies may hold together. A large monorepo's
+// copy is a few hundred MB, and a finished run record a few hundred KB, since its snapshot is deleted.
 export const DEFAULT_MAX_INSTALLATION_DISK_MB = 5120;
 
 export function freeDiskMb(directory: string): number {
@@ -46,9 +46,8 @@ export function trimSourceCache(cache: string, limit = MAX_SOURCE_CACHE_BYTES): 
   process.stderr.write(`atmin review: shared copy ${cache} held ${Math.round(size / 1024 ** 2)} MB, over the ${Math.round(limit / 1024 ** 2)} MB limit; wiped\n`);
   return true;
 }
-// A repository's copy on a runner is deleted once no review has used it for this long
-// (Lors, 2026-10-03), so code sits on disk only while its repository is being worked on. The
-// next review fetches it again in full.
+// A repository's copy on a runner is deleted once no review has used it for this long, so code
+// sits on disk only while its repository is being worked on. The next review fetches it again in full.
 export const REPOSITORY_IDLE_MS = 24 * 3_600_000;
 // Every entry under a runner's cache directory is one repository's directory; its modified time
 // is set when a review starts using it (see poolReview in src/code-review-runner.ts).
@@ -81,8 +80,8 @@ export function childEnvironment(home: string, credentials: Record<string, strin
 // repository it reviews. Every runner and review runs as the same user, so without this a
 // child broken by a hostile repository could read every other organization's code.
 // No /proc: systemd's ProtectKernelTunables masks parts of the host's /proc, and the kernel
-// then refuses a fresh one (EPERM, seen on review.atmin.ai 2026-10-03); binding the host's
-// instead would show the runners' environments, which hold the model key.
+// then refuses to mount a fresh one (EPERM); binding the host's instead would show the
+// runners' environments, which hold the model key.
 export interface Isolation { writable: string[]; readable: string[] }
 const networkFiles = ['/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf', '/etc/passwd', '/etc/group', '/etc/ssl', '/etc/ca-certificates', '/etc/pki', '/etc/gitconfig', '/run/systemd/resolve'];
 export function childSandbox(home: string, isolation: Isolation, app = realpathSync(fileURLToPath(new URL('../..', import.meta.url))), runtime = process.execPath): string[] {
