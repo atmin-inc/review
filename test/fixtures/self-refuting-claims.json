@@ -1,5 +1,5 @@
 {
-  "_source": "Captured verbatim from a live claim-review of atmin-inc/review PR #2 by deepseek/deepseek-v3.2 over OpenRouter, head f8cce6c against base 91f4f45. Both claims are correct about the code. Rung 1 used to refute both, because each carries a proposition about the account object's shape checked with body_contains inside renameAccount, where the deleted guard was the only mention of ownerId. Do not hand-edit to make a test pass: the point of the fixture is that a real emitter produced exactly this.",
+  "_source": "Captured verbatim from a live claim-review of atmin-inc/review PR #2 by deepseek/deepseek-v3.2 over OpenRouter, head f8cce6c against base 91f4f45. Both claims are correct about the code. A rung 1 that ignores what the change deletes refutes both, because each carries a proposition about the account object's shape checked with body_contains inside renameAccount, where the deleted guard was the only mention of ownerId. Do not hand-edit to make a test pass: the point of the fixture is that a real emitter produced exactly this.",
   "claims": [
     {
       "type": "auth_bypass",

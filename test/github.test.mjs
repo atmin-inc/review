@@ -117,8 +117,8 @@ test('invalid signatures, other repositories/installations and unauthorized reru
   assert.equal(h.store.status().jobs.length, 1);
 });
 
-// Marking a PR ready and then commenting `/atmin review` used to start two reviews of the
-// same head: the second cancelled the first, which had already started inference.
+// Marking a PR ready and then commenting `/atmin review` must not start two reviews of the
+// same head: the second would cancel the first after it had already started inference.
 test('/atmin review while a full review of the PR is queued or running does not restart it, but upgrades a push review to a full one', async t => {
   const h = await harness(t); const post = await http(t, h);
   const comment = { action: 'created', issue: { number: 1, pull_request: {} }, sender: { id: 9 }, comment: { body: '/atmin review', user: { id: 9, login: 'maintainer', type: 'User' } } };
@@ -167,7 +167,7 @@ test('draft / closed PRs skip inference using canonical state, not event orderin
   assert.equal(h.counts.runs, 1);
 });
 
-// Lors's pricing (2026-09-24) bills each review beyond the free allowance, so the PR comment
+// Each review beyond the free allowance is billed, so the PR comment
 // that delivers the review says what it cost; the price is read when the comment is written.
 test('the published review says what it costs the organization', async t => {
   const h = await harness(t);
@@ -206,8 +206,8 @@ test('new push aborts active investigation and only replacement work can publish
   assert.equal(h.store.authorReviews(1, 0), 1, 'only the delivered replacement is counted');
 });
 
-// A push that changes nothing a review reads, such as marking a draft ready unchanged, used to
-// cost the organization a free review or the minimum price although no model was asked.
+// A push that changes nothing a review reads, such as marking a draft ready unchanged, must not
+// cost the organization a free review or the minimum price when no model was asked.
 test('a delivered review that asked no model is published but not counted toward the plan; one that asked is', async t => {
   const h = await harness(t);
   const receipt = tokens => async (job, signal) => {
@@ -251,7 +251,7 @@ test('pausing an active rerun replaces the pending summary and cancels its check
 });
 
 test('the target branch moving on during a review does not cancel it', async t => {
-  // The pilot repository's main moves every few minutes; a review that takes several would never finish.
+  // In a busy repository main moves every few minutes; a review that takes several would never finish.
   const h = await harness(t);
   const runner = async (job, signal) => { const path = await h.runner(job, signal); h.setLive({ baseSha: 'b'.repeat(40) }); return path; };
   const worker = new Worker(h.config, h.store, h.github, inline(runner), 'owner');
@@ -323,7 +323,7 @@ test('daily starts are durably capped, including cancelled and failed investigat
 });
 
 test('a push to the target branch does not re-review open PRs', async t => {
-  // Each re-review billed an unchanged PR again; the pilot repository's main moves many times a day.
+  // Each re-review would bill an unchanged PR again, and a busy main moves many times a day.
   const h = await harness(t); const post = await http(t, h);
   h.store.enqueue('first', 1); await h.worker.tick();
   h.setLive({ baseSha: 'd'.repeat(40) });
@@ -375,7 +375,7 @@ test('engine failures publish an honest failure summary; no successful review is
   assert.match(h.comment.body, /review failed/); assert.doesNotMatch(h.comment.body, /secret-provider-body/);
 });
 
-// Pilot PR #4832 (6.5 MB of diff) failed as "review failed", with the cause lost.
+// A diff of several megabytes must fail with its real cause, not a generic "review failed".
 test('a diff over the limit is refused on the PR as too large, not counted, and its cause logged; other failures say theirs', async t => {
   const h = await harness(t);
   const failing = failure => async job => { writeFileSync(join(job.artifact, 'failure.json'), JSON.stringify(failure)); throw new Error('child failed'); };
@@ -409,9 +409,9 @@ test('child environments omit controller secrets and separate source/model crede
   assert.equal(inference.GH_CONFIG_DIR, '/private/job/gh');
 });
 
-// Each review fetches the repository's history into its run directory (164-175 MB for
-// the pilot repository, measured 2026-09-26) and nothing else ever deleted it, so a busy repository
-// filled the worker's disk. The JSON records beside it are what everything later reads.
+// Each review fetches the repository's history into its run directory (over 150 MB for a
+// large repository), so keeping it would fill the worker's disk in a busy repository.
+// The JSON records beside it are what everything later reads.
 test('a run keeps its review records but not its copy of the repository, whether or not it finished', async t => {
   const root = mkdtempSync(join(tmpdir(), 'atmin-runner-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -457,7 +457,7 @@ test('a sandboxed child cannot read another repository\'s copy', { skip: process
   assert.notEqual(other.status, 0); assert.equal(other.stdout, '');
 });
 
-// Lors, 2026-10-03: a repository's code stays on a runner only while it is being reviewed, and
+// A repository's code stays on a runner only while it is being reviewed, and
 // is deleted after a day with no review; the next review fetches it again.
 test('a repository copy is deleted after a day without a review, and a recently used one is kept', t => {
   const root = mkdtempSync(join(tmpdir(), 'atmin-copies-')); t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -505,8 +505,8 @@ test('App JWT verifies, installation tokens are repository scoped, forged summar
   assert.equal(requests.every(r => r.redirect === 'error' && r.url.startsWith('https://api.github.com/')), true);
 });
 
-test('compiled pilot CLI starts paused, serves a signed ping and shuts down cleanly without GitHub access', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'atmin-pilot-cli-'));
+test('compiled service CLI starts paused, serves a signed ping and shuts down cleanly without GitHub access', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'atmin-service-cli-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
   const port = socket.address().port; await new Promise(done => socket.close(done));
@@ -566,9 +566,8 @@ test('a repository without a policy file requires no CI, so a clean review passe
   assert.equal(assessmentCheck(assess(packet, result, current())).conclusion, 'failure');
 });
 
-// On 2026-09-28 a finished 5/5 review's check turned "Review failed" after its comment was
-// posted, and the job said only "service-or-github-failure": nothing recorded which step or
-// request broke, so the cause could not be found. The job and the log now name it.
+// A review can fail after its comment is posted. A bare "service-or-github-failure" leaves the
+// cause unfindable, so the job and the log name the step and request that broke.
 test('a review that fails after publishing records which GitHub request failed', async t => {
   const h = await harness(t), update = h.github.updateCheck;
   h.github.updateCheck = async (id, output) => {
@@ -662,8 +661,7 @@ test('trusted CI requires exact App, check name and head; skipped, conflicting a
     assert.equal((await api.validation(head, [good.name]))[0].status, expected);
   }
   runs = []; assert.equal((await api.validation(head, [good.name]))[0].status, 'not-run');
-  // CI on both push and pull_request leaves two runs of one check on one head (atmin-inc/review
-  // PR 9): two successes pass, and a second run can never turn a failure or a pending run into a pass.
+  // CI on both push and pull_request leaves two runs of one check on one head: two successes pass, and a second run can never turn a failure or a pending run into a pass.
   for (const [second, expected] of [[{}, 'pass'], [{ conclusion: 'failure' }, 'fail'], [{ status: 'in_progress' }, 'not-run'],
     [{ conclusion: 'skipped' }, 'not-run'], [{ app: { id: 999 } }, 'not-run'], [{ head_sha: 'b'.repeat(40) }, 'not-run']]) {
     runs = [good, { ...good, id: 10, ...second }];
@@ -789,8 +787,8 @@ test('inline publication is commit-bound, hides optional findings and survives C
   h.store.refreshValidation('ci-finished', h.live.headSha); await h.worker.tick();
   assert.equal(h.reviews.length, 1); assert.equal(h.counts.runs, 1);
 });
-// Pilot PR #4787 (2026-10-07): each re-review of the PR posted the same finding again, five
-// inline comments on one line. The author reads one; the rest are noise that buries new ones.
+// Re-reviews of a PR must not post the same finding again as more inline comments on one line.
+// The author reads one; the rest are noise that buries new ones.
 test('a finding already posted inline on the PR is not posted again by a later review, on any head', async t => {
   const findings = [finding()];
   const h = await harness(t, findings);
@@ -843,7 +841,7 @@ test('native fixes use exact head ranges, preserve code and suppress unsafe or c
   assert.ok(deletion.body.includes('```suggestion\n\n```'));
 });
 
-// Precision on real PRs (2026-09-30): what people did with each finding is read when its PR
+// Precision on real PRs: what people did with each finding is read when its PR
 // closes, so an edited flagged line, a thumbs-down or a reply lands in the operator's numbers.
 test('a closed PR records whether the lines of each published finding changed, and the thumbs and replies on its inline comments', async t => {
   const h = await harness(t, [finding()]);
@@ -1003,7 +1001,7 @@ test('worker enforces the dashboard daily ceiling before another model run', asy
 });
 
 
-// Lors (2026-09-24): customers can cap spend per person. Past the repository's per-author
+// Customers can cap spend per person. Past the repository's per-author
 // limit for the month, that author's PRs get the reason instead of a model run; other
 // authors are unaffected, and the refusal names the author without an @-mention.
 test('a PR author past the per-author monthly limit gets the reason on the PR and no model run', async t => {
@@ -1169,7 +1167,7 @@ test('a database from before incremental review gains the trigger column; old jo
   assert.equal(store.get('old').trigger, 'event');
 });
 
-// Self-run (Lors, 2026-10-01): a PR whose author has a runner online is reviewed there and
+// Self-run: a PR whose author has a runner online is reviewed there and
 // published by this service, marked as such, and counted toward no plan, credit or author limit,
 // because atmin paid for no inference. A runner that does not deliver means a hosted review.
 const alice = { id: 'r1', user: 1, login: 'alice', cli: 'claude', model: 'claude-sonnet-5' };
@@ -1230,8 +1228,8 @@ test('a runner that does not deliver leaves an ordinary hosted review', async t 
   assert.equal(h.store.get(second).started, null, 'a refused review never counts as started');
 });
 
-// Lors, 2026-10-11 (pilot PR #4954): a maintainer who decides a finding needs no change had no way
-// to say so, and the check stayed red. Replying `/atmin accept` under one inline finding accepts
+// A maintainer who decides a finding needs no change needs a way to say so, or the check
+// stays red. Replying `/atmin accept` under one inline finding accepts
 // that one; commenting it on the PR accepts every finding of the latest review. Accepted findings
 // leave the summary and the check without another model call, stay accepted across pushes, and
 // outcomes record them; only a maintainer's own comment counts.
