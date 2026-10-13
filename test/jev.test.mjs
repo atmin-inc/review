@@ -75,10 +75,10 @@ test('the state carries the location and the code, never the investigator conclu
 });
 
 // The state holds ONE revision, so a question asked against it has one reading. Naming
-// the revision in the question instead was tried on 2026-09-20 and measurably backfired:
-// with both sides present, "the tests expect a Forbidden error" reads as "does a
-// Forbidden error still happen after this change", and Jev answered 0.1 to a fact grep
-// had confirmed. Three wordings suppressed it equally, so the fix is structural.
+// the revision in the question instead backfires: with both sides present, "the tests
+// expect a Forbidden error" reads as "does a Forbidden error still happen after this
+// change", and Jev denies a fact grep has confirmed. Rewording does not help, so the fix
+// is structural.
 test('the state holds one revision, and it is the one asked about', t => {
   const { claims, revisions } = setUp(t, [SURVIVES]);
   for (const [revision, present, absent] of [['base', /owner !== account/, null], ['head', null, /owner !== account/]]) {
@@ -106,9 +106,9 @@ test('each proposition becomes one noul question', t => {
   assert.equal(typeof body.questions.p1.criteria.false, 'string');
 });
 
-// The question itself names no revision. The state does. Measured 2026-09-20: naming it
-// here narrowed the model to the changed file and suppressed true statements about files
-// the change did not touch, whatever the wording, costing a run its finding.
+// The question itself names no revision. The state does. Naming it here narrows the
+// model to the changed file and suppresses true statements about files the change did
+// not touch, whatever the wording, which costs findings.
 test('a question is the proposition, with no revision talk attached', () => {
   const question = JSON.parse(jevRequest({}, [{ key: 'p0', proposition: 'A holds.', revision: 'base' }])).questions.p0;
   assert.equal(question.instructions, 'A holds.');
@@ -207,9 +207,9 @@ test('the call cap skips claims rather than exceeding it', async t => {
 // The state has to carry every file the claim's checks name, not only the one the
 // claim is located in. A `file_contains` proposition is about another file, and a
 // state without it asks Jev about text it was never shown — it answers no, correctly,
-// and the verifier reads that as rung 3 contradicting a true symbolic fact. Observed
-// live on 2026-09-20: grep confirmed a test asserts /Forbidden/ and Jev returned 0.12
-// on the same proposition, which held back a correct auth_bypass.
+// and the verifier reads that as rung 3 contradicting a true symbolic fact: grep confirms
+// a test asserts /Forbidden/, Jev denies the same proposition, and a correct auth_bypass
+// is held back.
 test('the state carries the files the checks name, not just the located file', () => {
   const files = {
     'update.ts': 'export function update(record, account) {\n  record.value = 1;\n}\n',
@@ -239,9 +239,9 @@ test('the state carries the files the checks name, not just the located file', (
 });
 
 // A symbol check reads a declaration wherever it is, and the state shows a window around
-// the claim's line. Seen 2026-09-25 on pilot PR #4590: grep established that the mapper's
-// fallback sets `retryAfterMs: 5000` 700 lines below the claim, Jev was shown only the
-// claim's window and answered 0.22, and a real Major was held back as a contradicted check.
+// the claim's line. When grep establishes that a mapper's fallback sets `retryAfterMs: 5000`
+// hundreds of lines below the claim and Jev is shown only the claim's window, Jev denies it,
+// and a real finding is held back as a contradicted check.
 test('the state carries the declaration a symbol check reads when the claim window lacks it', () => {
   const lines = ['export function create(input) {', '  try { return run(input); } catch (error) { throw mapError(error); }', '}'];
   while (lines.length < 699) lines.push('// filler');

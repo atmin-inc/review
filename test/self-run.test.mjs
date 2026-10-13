@@ -161,10 +161,10 @@ test('the runner API signs in with GitHub and accepts only valid review records'
 });
 
 // An idle runner's poll is held open until work arrives or the poll time runs out, so idle runners
-// cost nothing. Node marks a request destroyed once its body is read, and the handler took that
-// for a runner gone away: every poll returned at once, and on review.atmin.ai (2026-10-08) each
-// idle runner polled about 380 times a second, a third of the server's CPU. Real sleep and real
-// HTTP here, because a fake sleep cannot tell a held poll from one answered at once.
+// cost nothing. Node marks a request destroyed once its body is read; a handler that takes that
+// for a runner gone away answers every poll at once, and each idle runner then polls hundreds of
+// times a second, enough to load the server's CPU. Real sleep and real HTTP here, because a fake
+// sleep cannot tell a held poll from one answered at once.
 test('an idle poll is held for the poll time and ends when the runner goes away', async t => {
   const { runners } = setup(t);
   const pool = 'p'.repeat(32);

@@ -82,7 +82,7 @@ test('signed webhooks dispatch by installation and repository, and removal only 
   assert.equal(f.first.store.enabled(), false);
 });
 
-// Lors (2026-10-08): the pilot customer wants reviews only when someone asks, so pushes stop spending its
+// An organization can want reviews only when someone asks, so that pushes do not spend its
 // reviews. With the switch off, no PR event starts a review, a maintainer's comment still does,
 // and closing still reaches the worker so finding outcomes are recorded. Other repositories keep
 // reviewing on every push, and settings saved before the switch existed read as on.
@@ -181,7 +181,7 @@ test('without Stripe, the refusal asks atmin for credit and links nowhere', t =>
   assert.doesNotMatch(refused, /dashboard|card|https?:/);
 });
 
-// Strangers' repositories share one disk (2026-09-30): one organization's records must not
+// Strangers' repositories share one disk: one organization's records must not
 // fill it for everyone. Shared copies are refetched by the next review, so they go first.
 test('an organization over its storage limit loses its shared copies first, and is refused only while its run records alone are over it', t => {
   const f = setup(t, 100);

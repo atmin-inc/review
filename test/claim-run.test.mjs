@@ -1,4 +1,3 @@
-import { failureExcerpt } from '../dist/failure-excerpt.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -7,6 +6,7 @@ import { repository, persist } from './helpers.mjs';
 import { ablate, runClaimReview, MAX_GUIDANCE_BYTES } from '../dist/claim-run.js';
 import { claimInstructions, failurePathInstruction, contractInstruction } from '../dist/investigator.js';
 import { capture } from '../dist/snapshot.js';
+import { failureExcerpt } from '../dist/failure-excerpt.js';
 import { PRIORITY_RUBRIC } from '../dist/contracts.js';
 import { renderClaimReview } from '../dist/render-claim.js';
 
@@ -117,8 +117,8 @@ test('the report drops the missing-rung note once the cross-family rung has answ
 });
 
 // The claims and the spend are what a failed run costs, so a verification that throws must
-// not take them with it. Seen 2026-09-23: a grep overflow threw out of verification on a
-// live run and left no record of the claims it had paid for.
+// not take them with it; otherwise a failure such as a grep overflow leaves no record of the
+// claims the run paid for.
 test('a verification that throws still leaves the claims and the telemetry behind', async t => {
   const fixture = repository(t);
   const directory = persist(fixture);
@@ -199,7 +199,7 @@ test('a finished run can be measured for what the cross-family rung contributed'
 });
 
 // A withheld finding is listed by location so the withholding is visible, and its text
-// is not, because the text is what three in four of those findings got wrong.
+// is not, because the text is what such minor findings most often get wrong.
 test('the report lists a withheld P3 finding by location and keeps its text out', async t => {
   const fixture = repository(t);
   const directory = persist(fixture);
@@ -240,7 +240,7 @@ test('a change with no error handling gets no failure-path pass', async t => {
 });
 
 // The repository's own rules are what a reviewer that knows the codebase holds a change
-// to: on pilot PR #4590, 5 of CodeRabbit's 12 items came from its AGENTS.md. They are read
+// to, and they account for much of what other reviewers flag. They are read
 // from the target branch, because a PR that edits AGENTS.md must not get to rewrite the
 // rules it is judged by, and a file that does not fit is named rather than lost quietly.
 test('the claim pass is shown the target branch AGENTS.md files, not the change\'s own', async t => {
@@ -264,9 +264,9 @@ test('the claim pass is shown the target branch AGENTS.md files, not the change\
   assert.ok(investigation.limitations.some(line => /over 32 KB was left out.*lib\/AGENTS\.md/.test(line)));
 });
 
-// Every earlier number was measured on the bare instructions, so a change with no
-// AGENTS.md and no call into unchanged code must be asked exactly that, or old and new
-// runs stop being comparable.
+// Benchmark numbers are measured on the bare instructions, so a change with no AGENTS.md
+// and no call into unchanged code must be asked exactly that, or old and new runs stop
+// being comparable.
 test('without AGENTS.md files or called code the claim pass is asked exactly the measured instructions', async t => {
   const fixture = repository(t);
   const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
@@ -280,9 +280,9 @@ test('without AGENTS.md files or called code the claim pass is asked exactly the
 });
 
 // The claim writer picks each claim's priority, and the comment, the check and the rating
-// all follow it. With only the labels P0-P4 to go on, two models rated one removed
-// ownership check P1 and P2 (atmin-inc/review PR 2, 2026-10-02). Every model must be
-// given the same meaning for each label, the one the reviewer rubric already uses.
+// all follow it. With only the labels P0-P4 to go on, two models rate the same removed
+// ownership check P1 and P2. Every model must be given the same meaning for each label,
+// the one the reviewer rubric already uses.
 test('the claim pass is told what each priority means', async t => {
   const fake = recording([action('end_investigation', { complete: true, limitations: [] })]);
   await runClaimReview(persist(repository(t)), profile, fake);
@@ -292,10 +292,9 @@ test('the claim pass is told what each priority means', async t => {
   for (const line of PRIORITY_RUBRIC.split('\n')) assert.ok(severity.includes(line), line);
 });
 
-// On pilot PR #4590 the defect was in an unchanged mapper the new code threw into, and
-// the model never opened it; why it missed took a paid rerun, because telemetry held
-// counts and not what was read. The mapper now arrives with the change, and the reads
-// are on disk.
+// A defect can sit in an unchanged mapper the new code throws into, which the model may
+// never open, and telemetry that holds only counts cannot show what was read without a
+// paid rerun. The mapper arrives with the change, and the reads are on disk.
 test('unchanged code the change calls is in the context, and what the model read is in telemetry', async t => {
   const fixture = repository(t);
   fixture.run('checkout', '-q', '--detach', fixture.state.baseSha);
@@ -317,8 +316,8 @@ test('unchanged code the change calls is in the context, and what the model read
     [{ side: 'head', path: 'lib/errors.ts', startLine: 1, count: 3 }]);
 });
 
-// On pilot PR #4590 the main pass never claimed a failure-path defect in ten runs, so
-// failure paths get a pass of their own. What it records is verified with everything
+// The main pass reliably misses defects on failure paths, so failure paths get a pass
+// of their own. What it records is verified with everything
 // else, and a claim both passes record counts once.
 test('the failure-path pass runs after the main pass and its claims are verified with the rest', async t => {
   const fixture = repository(t);
@@ -343,9 +342,8 @@ test('the failure-path pass runs after the main pass and its claims are verified
   assert.equal(telemetry.failurePathSites, 1);
 });
 
-// On the pilot repository the largest group of reachable misses was a value one side writes and an
-// unchanged file reads differently (#4910, #4890), so values crossing into unchanged code
-// get a pass of their own. It is off unless asked for, so every default review is asked
+// A common class of missed defect is a value one side writes and an unchanged file reads
+// differently, so values crossing into unchanged code get a pass of their own. It is off unless asked for, so every default review is asked
 // exactly what was measured before it.
 test('the contract pass runs third, on the whole diff, only when asked for', async t => {
   const fixture = repository(t);

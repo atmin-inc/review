@@ -55,8 +55,8 @@ test('an organization\'s model key is stored sealed, shown only by its last four
 });
 
 // The organization pays its model provider for these reviews, so atmin's free allowance and
-// credit must not be spent or required. Nor do the daily limits hold them: they bound this
-// service's model spend, and the pilot customer neared the service's 100 a day on its own key (2026-10-08).
+// credit must not be spent or required. Nor do the daily limits hold them: those bound this
+// service's model spend, and one organization on its own key can reach them by itself.
 test('reviews on an organization\'s own key need no free reviews or credit, and neither its plan nor the daily limits count or hold them; the off switch applies', t => {
   const f = setup(t);
   f.entry.store.enable(true);
@@ -153,7 +153,9 @@ test('a model key is checked with one tool call before it is saved, and a refusa
   assert.deepEqual([seen[0].model, seen[0].tool_choice, seen[0].tools.map(tool => tool.name)], ['us.openai.gpt-6-luna', 'required', ['ok']]);
   const denied = await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'You don\'t have access to the model', code: 'access_denied' } }, { status: 403 }));
   assert.match(denied, /refused the key\. Use a Bedrock API key whose IAM policy allows bedrock:InvokeModel on the us\.openai\.gpt-6-luna inference profile and on the account's default project/);
-  assert.match(await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'bad' } }, { status: 400 })), /did not run the check call \(request, HTTP 400\)\. The key was not saved/);
-  assert.match(await checkModelKey('bedrock', key, async () => { throw new TypeError('fetch failed'); }), /could not be reached|did not run the check call/);
-  for (const message of [denied]) assert.ok(!message.includes(key));
+  const rejected = await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'bad' } }, { status: 400 }));
+  assert.match(rejected, /did not run the check call \(request, HTTP 400\)\. The key was not saved/);
+  const unreachable = await checkModelKey('bedrock', key, async () => { throw new TypeError('fetch failed'); });
+  assert.match(unreachable, /could not be reached|did not run the check call/);
+  for (const message of [denied, rejected, unreachable]) assert.ok(!message.includes(key));
 });

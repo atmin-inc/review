@@ -191,7 +191,7 @@ test('operator config rejects unsafe origins and unavailable credentials', async
   process.env.OPENROUTER_API_KEY = 'test-key'; assert.equal(readDashboardConfig(path, 'secret').models.length, 1);
   assert.deepEqual(readDashboardConfig(path, 'secret').operators, []);
   // Operators are GitHub user IDs: a login can be renamed and re-registered by someone else.
-  for (const operators of [['lorsk'], [0], [8, 8]]) {
+  for (const operators of [['octocat'], [0], [8, 8]]) {
     writeFileSync(path, JSON.stringify({ origin, clientId: 'client-id', models: [{ id: 'free', label: 'Free', profile }], operators })); assert.throws(() => readDashboardConfig(path, 'secret'));
   }
   writeFileSync(path, JSON.stringify({ origin, clientId: 'client-id', models: [{ id: 'free', label: 'Free', profile }], operators: [8], appSlug: 'atmin-review' }));
@@ -304,7 +304,7 @@ test('any installation connects its own repositories, up to ten, without an oper
   assert.equal(session.connections.installations[1].usage.remaining, 1000);
   assert.deepEqual(session.connections.repositories.map(r => [r.id, r.installationId, r.connected]), [[42, 99, true], [55, 77, false]]);
   // Every review fetches the full history onto a disk all customers share, so a repository
-  // over 2 GB on GitHub does not connect (the pilot repository is 760 MB there; its copy is about 175 MB).
+  // over 2 GB on GitHub does not connect; a large production monorepo is well under that.
   f.state.size = 2 * 1024 * 1024 + 1;
   const large = await f.post('connect?repository=55', {}, cookie);
   assert.equal(large.status, 409); assert.match((await large.json()).error, /up to 2 GB, and other\/app is larger/);
@@ -456,10 +456,10 @@ test('the admin panel is operator-only, lists every installation, and plan chang
   for (const bad of [{ usd: 0, note: 'x' }, { usd: 5 }, { usd: 5, note: 'x', installation: 77 }, { usd: 1001, note: 'x' }]) {
     assert.equal((await f.post('admin/credit?installation=99', bad, cookie)).status, 400);
   }
-  assert.equal((await f.post('admin/credit?installation=12345', { usd: 5, note: 'pilot' }, cookie)).status, 404);
-  assert.deepEqual(await (await f.post('admin/credit?installation=99', { usd: 5, note: 'pilot' }, cookie)).json(), { creditUsd: 4.75 });
+  assert.equal((await f.post('admin/credit?installation=12345', { usd: 5, note: 'trial' }, cookie)).status, 404);
+  assert.deepEqual(await (await f.post('admin/credit?installation=99', { usd: 5, note: 'trial' }, cookie)).json(), { creditUsd: 4.75 });
   f.state.userId = 7; const stranger = await f.login(); f.state.userId = 8;
-  assert.equal((await f.post('admin/credit?installation=99', { usd: 5, note: 'pilot' }, stranger)).status, 403);
+  assert.equal((await f.post('admin/credit?installation=99', { usd: 5, note: 'trial' }, stranger)).status, 403);
   assert.equal(f.repositories.balance(99), 4.75);
   // A revoked operator token ends the session even though the operator list still names the user.
   f.state.revoked = true;

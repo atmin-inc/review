@@ -53,9 +53,9 @@ test('prepared snapshots can read unchanged guidance and callers with the remote
   assert.equal(loadReview(directory).packet.headSha, headSha);
 });
 
-// Each review used to download the repository's whole history into its own snapshot:
-// 164-175 MB per review on the pilot repository (measured 2026-09-26), kept or refetched on every push.
-// With a cache, the history is stored once per repository and a push downloads only its commits.
+// Without a cache each review downloads the repository's whole history into its own snapshot,
+// well over 100 MB per review for a large monorepo, kept or refetched on every push. With a
+// cache, the history is stored once per repository and a push downloads only its commits.
 test('reviews of a repository share one copy of its history, and a push downloads only its own commits', t => {
   const f = repository(t);
   const baseSha = f.state.baseSha;
@@ -115,9 +115,10 @@ test('repository search is literal, immutable, bounded and handles unusual paths
   assert.throws(() => searchSource(f.source, '--all', 'update'), /immutable revision/);
 });
 
-// A common word in a large repository prints more than the 16 MiB output cap. That threw,
-// and one check naming `self` in Sentry ended verification and lost every claim in its run.
-// Overflow must read as truncated, and never as "no match", which would settle an absent check.
+// A common word in a large repository, such as `self` in a large Python codebase, prints more
+// than the 16 MiB output cap. Throwing there would end verification and lose every claim in
+// the run. Overflow must read as truncated, and never as "no match", which would settle an
+// absent check.
 test('a search whose output overflows the cap is truncated, not failed and not empty', t => {
   const f = repository(t);
   f.write('long.ts', ('needle ' + 'x'.repeat(1000) + '\n').repeat(20000));
@@ -129,7 +130,7 @@ test('a search whose output overflows the cap is truncated, not failed and not e
 });
 
 // `-I` skips binary files, not Latin-1 ones, and a match's own text is never used. Decoding
-// it threw on the pilot repository (2026-09-24) and ended the search over one accented byte.
+// it would throw on a single accented byte and end the search.
 test('a match in a file that is not UTF-8 is found rather than ending the search', t => {
   const f = repository(t);
   f.write('legacy.txt', Buffer.concat([Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20]), Buffer.from('needle\n')]));
@@ -210,13 +211,13 @@ test('current target ref is fetched separately from stale PR base metadata', t =
       : { object: { type: 'commit', sha: f.state.baseSha } };
   });
   assert.equal(state.baseSha, f.state.baseSha);
-  // The slash separates path segments; encoding it to %2F made GitHub reject the
-  // request, so every PR targeting a branch with a slash in its name failed to prepare.
+  // The slash separates path segments; GitHub rejects it encoded as %2F, so encoding it
+  // would fail to prepare every PR targeting a branch with a slash in its name.
   assert.equal(requests[1], 'repos/test/review-fixture/git/ref/heads/release/next');
 });
 
-// The encoding still has to stop a ref from walking out of the endpoint it is
-// interpolated into, which is what encoding the whole ref bought.
+// Leaving slashes unencoded must not let a ref walk out of the endpoint it is
+// interpolated into.
 test('a target branch cannot walk out of the ref endpoint', () => {
   for (const ref of ['../../../../secrets', 'release/../../x', 'release//next', './next']) {
     assert.throws(() => refPath(ref), /not a valid ref path/);

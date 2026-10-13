@@ -337,7 +337,7 @@ test('observed latency reserves discovery closure and reporting before another s
   assert.deepEqual(fake.requests[4].tools.map(t => t.name), ['finish']);
   assert.equal(receipt.stopReason, 'finished');
 });
-test('completion profile keeps investigation available beyond the old cutoff and finishes after coverage', async t => {
+test('completion profile keeps source tools available through a long investigation and finishes after coverage', async t => {
   const completion = JSON.parse(readFileSync(new URL('../profiles/completion-deepseek.json', import.meta.url)));
   const { fake, result, receipt } = await setup(t, [
     ...Array.from({ length: 24 }, () => read('head')), read('base'), cover(), finish(),

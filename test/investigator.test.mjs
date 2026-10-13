@@ -55,9 +55,9 @@ const GUARD_CLAIM = {
   ],
 };
 
-// The join this milestone exists for. A model emits a claim, the controller gives it
-// an id, and verification settles it against the same revision with none of the
-// model's reasoning in scope. Emission and verdict are now one path.
+// Where emission meets verification. A model emits a claim, the controller gives it an
+// id, and verification settles it against the same revision with none of the model's
+// reasoning in scope. Emission and verdict are one path.
 test('an emitted claim is verified against the revision, not against the model', async t => {
   const { revisions, sourceOf } = corpus(t);
   const emitted = await investigateClaims(revisions, sourceOf, {},
@@ -103,10 +103,9 @@ test('re-recording the same claim is refused rather than counted twice', async t
 });
 
 // A claim is the assertion it makes, so the same defect recorded again with different
-// checks is the same claim. Fingerprinting the whole draft missed that: measured
-// 2026-09-21 on Martian case-005, the same `error_handling_gap` was recorded seven
-// times, differing only in its checks and twice carrying none at all, which spent the
-// turn budget the investigation then ran out of.
+// checks is the same claim. Fingerprinting the whole draft would miss that, and a model
+// that re-records one defect with varied checks, or none, spends the turn budget the
+// investigation then runs out of.
 test('the same claim with different checks is still the same claim', async t => {
   const { revisions, sourceOf } = corpus(t);
   const variant = { ...GUARD_CLAIM, evidenceToCheck: [{ proposition: GUARD_CLAIM.evidenceToCheck[0].proposition }] };
@@ -178,8 +177,7 @@ test('claims emitted before a failure survive it, and the truncated turn does no
 
 // The two cut-reply cases have different fixes -- an interrupted stream is worth
 // retrying, an output-cap truncation needs a larger budget or a shorter answer -- so
-// reporting them as one message leaves the operator guessing. On 2026-09-22 three runs
-// in six stopped here and nothing on disk said which it had been.
+// reporting them as one message leaves the operator guessing which it was.
 test('a cut reply says whether it was interrupted or truncated', async t => {
   const { revisions, sourceOf } = corpus(t);
   const cut = status => ({
@@ -232,8 +230,8 @@ test('an unexpected failure is reported without its message', async t => {
 
 // The one exception to the rule above, and the reason ProviderRequestError exists: its
 // message is written in this repository and its `failure` is an allowlisted shape, so
-// nothing provider-authored crosses out. Collapsing it into the generic message cost two
-// measurement rounds on 2026-09-21, where "Investigation failed" was an empty account.
+// nothing provider-authored crosses out. Collapsed into the generic message, an empty
+// account reads as "Investigation failed" and takes a rerun to diagnose.
 test('a provider failure keeps its kind instead of becoming the generic message', async t => {
   const { revisions, sourceOf } = corpus(t);
   let sent = 0;
@@ -249,10 +247,9 @@ test('a provider failure keeps its kind instead of becoming the generic message'
   assert.deepEqual(emitted.telemetry.retries, []);
 });
 
-// One dropped stream or one refused request used to end the whole review: on 2026-09-25
-// single refused calls ended 6 of 8 test reviews, and every claim the run would have
-// recorded after that point was lost. The request is sent again after a wait instead,
-// and the run record says which requests needed it and why.
+// A single dropped stream or refused request is common over a long review, and ending the
+// review there would lose every claim the run would have recorded after it. The request is
+// sent again after a wait instead, and the run record says which requests needed it and why.
 test('a dropped reply or an outage is sent again, and the review carries on', async t => {
   const { revisions, sourceOf } = corpus(t);
   const script = model([action('record_claim', GUARD_CLAIM), end()]);
@@ -344,11 +341,9 @@ test('spending is settled against what the provider actually reported', async t 
   assert.ok(emitted.spentUsd < LIMITS.costOf(1000, LIMITS.maxOutputTokens), 'the reservation is released, not kept');
 });
 
-// A long investigation on a real PR outgrows the context window, and the controller used
-// to treat that as fatal: measured 2026-09-21 over 45 runs on the Martian cases, between
-// a third and a half of runs on the larger cases stopped here, throwing away whatever the
-// remaining turns would have found. Recorded claims live outside the transcript, so the
-// oldest turns can go instead.
+// A long investigation on a real PR often outgrows the context window, and treating that
+// as fatal would throw away whatever the remaining turns would have found. Recorded claims
+// live outside the transcript, so the oldest turns can go instead.
 test('a transcript that outgrows the window is trimmed, not fatal', async t => {
   const { revisions, sourceOf } = corpus(t);
   // Each turn adds a short budget message, one continuation entry and one tool result. The
@@ -404,9 +399,9 @@ test('a recorded transcript survives trimming, and a prior one is sent first', a
 
 // A provider reuses a prompt from its cache only when the earlier call's prompt is an exact
 // prefix of the new one. With the turn budget inside the context, nothing after the system
-// prompt was ever reused, and each review paid full price for its whole history on every
-// call (pilot PR #4420, 2026-09-26). A budget message on every turn fixed the cache but made
-// the model read 2-3x longer, so a message is added only on the last turn.
+// prompt would be reused, and each call would pay full price for the whole history. A budget
+// message on every turn keeps the prefix but makes the model read two to three times longer,
+// so a message is added only on the last turn.
 test('each call repeats the previous call unchanged and adds to it, so the provider can reuse it from cache', async t => {
   const { revisions, sourceOf } = corpus(t);
   const search = () => action('search_repository', { side: 'head', query: 'update' });

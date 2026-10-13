@@ -24,9 +24,9 @@ const revisionOf = (files, cap = 50) => ({
   },
 });
 
-// The audited gap from case-042: all four reviews missed a reachable optional-member
-// dereference because the declaration sat at model.py:346, below a prefix read that
-// ended at line 200. Rung 1 does not read prefixes, so the prefix cannot hide it.
+// A reviewer that reads only the start of a file misses a declaration further down, such
+// as an optional member declared at line 346 when the read stopped at line 200. Rung 1
+// does not read prefixes, so the prefix cannot hide it.
 test('a declaration below the read prefix is still found', () => {
   const model = [...Array(345).fill('# padding'), '    member: Optional[RpcOrganizationMember] = None', ''].join('\n');
   const outcome = runCheck(revisionOf({ 'model.py': model }), { assertion: 'declaration_contains', symbol: 'member', pattern: 'Optional' });
@@ -35,9 +35,9 @@ test('a declaration below the read prefix is still found', () => {
   assert.deepEqual(outcome.limitations, []);
 });
 
-// The audited gap from case-015: a review claimed an enum starts at zero and proposed
-// changing a correct migration. The repository starts it at one, and that is a
-// deterministic fact, so the claim should die on rung 1 rather than reach a user.
+// A review can claim an enum starts at zero and propose changing a correct migration.
+// When the repository starts it at one, that is a deterministic fact, so the claim
+// should die on rung 1 rather than reach a user.
 test('a wrong framework assumption is refuted, not argued with', () => {
   const revision = revisionOf({ 'enums.rb': 'class Status\n  FIRST = 1\n  SECOND = 2\nend\n' });
   const outcome = runCheck(revision, { assertion: 'declaration_contains', symbol: 'FIRST', pattern: '= 0' });
@@ -110,8 +110,8 @@ test('an unreferenced expectation reads the other way too', () => {
   assert.equal(runCheck(revisionOf({ 'api.ts': files['api.ts'] }), dead).evidence[0].result, 'hit');
 });
 
-// The first false-positive mechanism from the 2026-09-14 audit, in the one place this
-// rung could still commit it. A symbol can be declared more than once, and inspecting
+// Concluding absence from a partial read is a classic false positive, and this is the
+// one place rung 1 could commit it. A symbol can be declared more than once, and inspecting
 // whichever declaration turned up first would let one body stand in for all of them —
 // the same error as reading a module to line 180 and concluding that an initialization
 // at 218 does not exist.
@@ -140,11 +140,11 @@ test('a declaration body cut off at the cap cannot establish absence for the set
   assert.match(outcome.limitations[0], /could not be inspected in full/);
 });
 
-// The gap the first live runs found (2026-09-20): every other check is scoped to a
-// symbol, so a proposition about a test had nowhere to go. The model wrote
-// body_contains with symbol "test", no declaration was found, the proposition went
-// unsettled, and one unsettled proposition made the whole claim inconclusive — a merge
-// verdict on a real auth bypass. A file is a legitimate thing to make a claim about.
+// Every other check is scoped to a symbol, so without this one a proposition about a test
+// has nowhere to go. A model writes body_contains with symbol "test", no declaration is
+// found, the proposition goes unsettled, and one unsettled proposition makes the whole
+// claim inconclusive — a merge verdict on a real auth bypass. A file is a legitimate thing
+// to make a claim about.
 test('a proposition about a test file settles, where the same one scoped to a symbol does not', () => {
   const files = {
     'accounts.mjs': 'export function renameAccount(accounts, actorId, accountId) {\n  return accounts.get(accountId);\n}\n',
@@ -182,10 +182,9 @@ test('file_contains reports absence only when it established it', () => {
   assert.match(missing.limitations[0], /does not exist in this revision/);
 
   // A file-scoped check narrows the search to its own path, so matches elsewhere cannot
-  // spend the cap before it reaches the file. Without the pathspec this returned
-  // inconclusive with the answer one grep away: measured 2026-09-21 on Martian case-046,
-  // where `isoformat` appears throughout Sentry and the check could not settle that
-  // assignment_source.py lacks it. That cost a correct finding.
+  // spend the cap before it reaches the file. Without the pathspec this would be
+  // inconclusive with the answer one grep away: when `isoformat` appears throughout a large
+  // codebase, the check could not settle that one file lacks it, costing a correct finding.
   const common = Object.fromEntries([...Array(60)].map((_, i) => [`other${i}.py`, 'isoformat\n']));
   const scoped = runCheck(revisionOf({ ...common, 'a.py': 'queued: datetime\n' }, 50),
     { assertion: 'file_contains', path: 'a.py', pattern: 'isoformat', expect: 'absent' });
@@ -193,7 +192,7 @@ test('file_contains reports absence only when it established it', () => {
   assert.deepEqual(scoped.limitations, []);
 
   // A capped search still proves nothing about what it did not reach. `within` is
-  // optional on the interface, so a revision that ignores it must keep the old
+  // optional on the interface, so a revision that ignores it must keep the
   // reservation rather than read "nothing found" as absence established.
   const noisy = Object.fromEntries([...Array(60)].map((_, i) => [`noise${i}.mjs`, 'Forbidden\n']));
   const unscoped = revisionOf({ ...noisy, 'test/a.test.mjs': 'nothing here\n' }, 50);
@@ -205,8 +204,8 @@ test('file_contains reports absence only when it established it', () => {
 
 // "This was introduced by the change" about a file the change adds is a base-side check
 // on a file the base does not have. When no file at the base has the pattern, that is
-// settled: on pilot PR #4590 a real label bug went unsettled on exactly this in 4 of 4
-// emissions. When some other file has it, the code may have moved there, so nothing is.
+// settled; otherwise a real bug in a newly added file could never be. When some other
+// file has the pattern, the code may have moved there, so nothing is.
 test('a missing file settles absence only when no file in the revision has the pattern', () => {
   const nowhere = runCheck(revisionOf({ 'old.ts': 'export const a = 1;\n' }),
     { assertion: 'file_contains', path: 'new.ts', pattern: 'function summaryLabel', expect: 'absent', revision: 'base' });
@@ -240,11 +239,10 @@ test('file_contains can ask the base side, and says which side it asked', () => 
 });
 
 // The invariant, not an example: `declaration_contains` reads the declaration line and
-// `body_contains` reads everything under it, and the two do not overlap. They used to
-// share that line, which made the negative form of `body_contains` unusable — the way a
-// reviewer says "this parameter is accepted and never used" was refuted by the parameter
-// list itself. Measured 2026-09-20 across 31 live runs: four correct `auth_bypass` claims
-// died on exactly that, and no rung downstream could see why.
+// `body_contains` reads everything under it, and the two do not overlap. Sharing that line
+// would make the negative form of `body_contains` unusable — the way a reviewer says "this
+// parameter is accepted and never used" would be refuted by the parameter list itself,
+// killing correct `auth_bypass` claims in a way no rung downstream could see.
 test('declaration_contains and body_contains do not overlap', () => {
   const revision = revisionOf({
     'accounts.mjs': [
@@ -279,10 +277,9 @@ test('a definition with no indented body is its own body', () => {
 
 // A search that hit its cap did not reach every declaration, so finding nothing among
 // the ones it reached establishes nothing. Without this a common symbol name refutes
-// whatever is asked about it. Measured 2026-09-21 on Martian case-005 (cal.com): the
-// monorepo has more `handler` declarations than the search returns, the pattern the
-// claim named sits at scheduleSMSReminders.ts:184 in one it never reached, and a true
-// High-severity concurrency finding was refuted at high confidence with no limitation.
+// whatever is asked about it: a monorepo can have more `handler` declarations than the
+// search returns, the pattern can sit in one it never reached, and a true finding would be
+// refuted at high confidence with no limitation.
 test('a truncated declaration search settles nothing either way', () => {
   // Sixty files declaring the same name, and only the last one carries the pattern.
   const files = Object.fromEntries(Array.from({ length: 60 }, (_, index) =>
@@ -305,8 +302,8 @@ test('a truncated declaration search settles nothing either way', () => {
 
 // Claims are screened at emit time, but one can also arrive from a file or a fixture, and
 // `search` rejects an unrunnable pattern by throwing. A check it cannot run settles
-// nothing; it must never be able to end the review. Measured 2026-09-21 on Martian
-// case-016, where one such pattern lost every other claim in the run with it.
+// nothing; it must never be able to end the review and take every other claim in the run
+// with it.
 test('a check the search cannot run is inconclusive, not an exception', () => {
   const revision = revisionOf({ 'update.ts': 'function update(owner, account) {\n  return account;\n}\n' });
   for (const check of [
@@ -325,10 +322,9 @@ test('a check the search cannot run is inconclusive, not an exception', () => {
 });
 
 // The same invariant where the declaration wraps. A parameter list split across lines is
-// still the declaration, not the body, and the two must not both claim those lines.
-// Measured 2026-09-21 on Martian case-046: `IssueSyncIntegration.sync_status_outbound`
-// declares `assignment_source` six lines below `def`, the check read only the first line,
-// and a correct claim was refuted at the strongest verdict rung 1 can reach.
+// still the declaration, not the body, and the two must not both claim those lines. A
+// Python method can declare a parameter several lines below `def`; reading only the first
+// line would refute a correct claim at the strongest verdict rung 1 can reach.
 test('a declaration that wraps is read to the end of its parameter list', () => {
   const revision = revisionOf({
     'issues.py': [
@@ -352,9 +348,8 @@ test('a declaration that wraps is read to the end of its parameter list', () => 
 });
 
 // `Owner.member` is how a reviewer names a method when a repository has several of them,
-// and it is not text that appears in the source, so the literal search finds nothing. On
-// Martian case-046 every limitation in one run was this, and the claims were correct. A
-// second global search does not rescue it either: the bare member name returns more
+// and it is not text that appears in the source, so the literal search finds nothing and
+// leaves correct claims unsettled. A second global search does not rescue it either: the bare member name returns more
 // matches than the search caps at, so the owner's file is never among them.
 test('a qualified member resolves through its owner declaration', () => {
   const files = {
@@ -366,7 +361,7 @@ test('a qualified member resolves through its owner declaration', () => {
     ].join('\n'),
   };
   // Enough other declarations of the bare name to exhaust the search cap, which is the
-  // situation the monorepo actually presents.
+  // situation a large monorepo presents.
   for (let index = 0; index < 60; index++) files[`other${index}.py`] = 'def should_sync(self):\n    return False\n';
   const revision = revisionOf(files);
   const outcome = runCheck(revision, { assertion: 'declaration_contains',
@@ -391,31 +386,30 @@ test('a member missing from its owner settles nothing', () => {
 });
 
 // The same wrapped declaration read through the real source reader, which serves at most
-// 200 lines a read. Reading signature and body as one range asked for more than that
-// whenever the signature wrapped, the read failed, and the check reported the body as
-// unreadable. Seen 2026-09-24 on every multi-line TypeScript declaration in the pilot repository
-// #4583, which left the model rung to settle facts grep answers for free.
+// 200 lines a read. Reading signature and body as one range would ask for more than that
+// whenever the signature wraps, the read would fail, and the check would report the body
+// as unreadable, leaving the model rung to settle facts grep answers for free.
 test('a wrapped TypeScript signature leaves its body readable through the real source reader', async t => {
   const { repository } = await import('./helpers.mjs');
   const { revisionFrom } = await import('../dist/symbolic.js');
   const f = repository(t);
   f.write('recovery.ts', [
-    'async function replaceIfDead(',
-    '  ctx: SandboxFailureContext,',
+    'async function retryIfStale(',
+    '  ctx: JobContext,',
     '  failures: number',
     '): Promise<string | null> {',
-    '  const deps = ctx.deps ?? defaultRecoveryDeps;',
-    '  await deps.deleteSandbox(name);',
+    '  const deps = ctx.deps ?? defaultDeps;',
+    '  await deps.deleteJob(name);',
     ...Array.from({ length: 250 }, (_, i) => `  const filler${i} = ${i};`),
     '}',
     'export const last = 1;',
   ].join('\n') + '\n');
   const revision = revisionFrom(f.source, f.commit('wrapped signature'));
-  const body = { assertion: 'body_contains', symbol: 'replaceIfDead', pattern: 'await deps.deleteSandbox(name);' };
+  const body = { assertion: 'body_contains', symbol: 'retryIfStale', pattern: 'await deps.deleteJob(name);' };
   assert.equal(runCheck(revision, body).evidence[0]?.result, 'hit');
   // Still disjoint from the declaration, and absence past the read cap stays unproven.
   assert.equal(runCheck(revision, { ...body, pattern: 'failures: number', expect: 'absent' }).evidence.length, 0);
-  assert.equal(runCheck(revision, { assertion: 'declaration_contains', symbol: 'replaceIfDead', pattern: 'failures: number' }).evidence[0].result, 'hit');
+  assert.equal(runCheck(revision, { assertion: 'declaration_contains', symbol: 'retryIfStale', pattern: 'failures: number' }).evidence[0].result, 'hit');
 });
 
 test('a body cut off by the read limit settles nothing when the pattern is not found', async t => {
@@ -423,8 +417,8 @@ test('a body cut off by the read limit settles nothing when the pattern is not f
   const { revisionFrom } = await import('../dist/symbolic.js');
   const f = repository(t);
   // Long lines make the read stop well short of the line cap, and the pattern sits past
-  // where it stops. Before, the shortened read was not marked as cut off: absence was
-  // established and presence refuted, both on text that was never read.
+  // where it stops. A shortened read not marked as cut off would establish absence and
+  // refute presence, both on text that was never read.
   const filler = Array.from({ length: 180 }, (_, i) => `  const filler${i} = '${'x'.repeat(180)}';`);
   f.write('long.ts', ['function long() {', ...filler, '  const lateCall = run();', '}', ''].join('\n'));
   const revision = revisionFrom(f.source, f.commit('long body'));
@@ -439,15 +433,15 @@ test('a return type wrapped back to the declaration indent is not read as the en
   const { revisionFrom } = await import('../dist/symbolic.js');
   const f = repository(t);
   // Prettier's shape for a long union return type. The `> {` line sits at the
-  // declaration's indent; read as the body's end, it left the return type as the body.
+  // declaration's indent; read as the body's end, it would leave the return type as the body.
   f.write('save.ts', [
-    'export async function saveTemplate(params: {',
+    'export async function saveDraft(params: {',
     '  name: string;',
     '}): Promise<',
     '  | { ok: true; slug: string }',
     '  | Refusal',
     '> {',
-    '  if (taken.size >= MAX_TEMPLATES) {',
+    '  if (taken.size >= MAX_DRAFTS) {',
     '    return { ok: false };',
     '  }',
     '}',
@@ -455,8 +449,8 @@ test('a return type wrapped back to the declaration indent is not read as the en
     '',
   ].join('\n'));
   const revision = revisionFrom(f.source, f.commit('wrapped return type'));
-  const check = { assertion: 'body_contains', symbol: 'saveTemplate' };
-  assert.equal(runCheck(revision, { ...check, pattern: 'taken.size >= MAX_TEMPLATES' }).evidence[0]?.result, 'hit');
+  const check = { assertion: 'body_contains', symbol: 'saveDraft' };
+  assert.equal(runCheck(revision, { ...check, pattern: 'taken.size >= MAX_DRAFTS' }).evidence[0]?.result, 'hit');
   // The body still ends at the closing brace, and the return type is not in it.
   assert.equal(runCheck(revision, { ...check, pattern: 'export const after', expect: 'absent' }).evidence[0]?.result, 'hit');
   assert.equal(runCheck(revision, { ...check, pattern: '| Refusal', expect: 'absent' }).evidence[0]?.result, 'hit');

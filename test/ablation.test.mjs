@@ -55,7 +55,8 @@ test('a recorded run replays exactly, so the comparison isolates the rung', t =>
   assert.deepEqual(tally(replayed), tally(live));
 });
 
-// The question Lors asked, answered as a number rather than an opinion. Rung 1 alone
+// Whether the cross-family rung is worth running, answered as a number rather than an
+// opinion. Rung 1 alone
 // ships the greppable claim and leaves the other one unfinished; the model settles the
 // step no grep can express, and a second claim ships capped at moderate.
 test('the rung earns its place on a claim with a step no check can express', t => {

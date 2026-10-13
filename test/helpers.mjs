@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { capture, git } from '../dist/snapshot.js';
 import { initialResult } from '../dist/contracts.js';
 
+/** The arguments of a model's `finish` call for a complete review with no findings. */
 export function finalReport(overrides = {}) {
   return { complete: true, limitations: [],
     quality: { score: 3, rationale: 'Fixture has unresolved verification questions.', conventionRules: [],
@@ -11,6 +12,10 @@ export function finalReport(overrides = {}) {
         [key, { status: 'unknown', reason: 'Not assessed by this deterministic fixture.', evidenceIds: [] }])) }, ...overrides };
 }
 
+/**
+ * A throwaway git repository whose single change deletes the ownership guard in
+ * `update.ts`, captured as a review packet. Removed when the test `t` ends.
+ */
 export function repository(t) {
   const root = mkdtempSync(join(tmpdir(), 'atmin-review-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -38,6 +43,7 @@ export function repository(t) {
   return { root, source, run, write, commit, state, ...captured };
 }
 
+/** A completed review result for `packet` that covers every changed file and finds nothing. */
 export function completed(packet) {
   const result = initialResult(packet);
   result.status = 'completed';
@@ -51,6 +57,7 @@ export function completed(packet) {
   return result;
 }
 
+/** A finding about the removed ownership guard, anchored on the head side of `update.ts`. */
 export function finding(priority = 'P1') {
   return { id: 'missing-owner-guard', priority, kind: priority === 'P4' ? 'improvement' : 'defect', category: 'security',
     title: 'Account owner guard removed', trigger: 'A different account submits a known record ID.',
@@ -60,6 +67,7 @@ export function finding(priority = 'P1') {
     anchor: { path: 'update.ts', side: 'head', line: 2 }, evidenceIds: ['source-0'] };
 }
 
+/** Writes `fixture` as a run directory (bare source, packet, result and diff) and returns its path. */
 export function persist(fixture, result = initialResult(fixture.packet)) {
   const directory = join(fixture.root, 'run');
   mkdirSync(directory, { mode: 0o700 });
@@ -72,10 +80,12 @@ export function persist(fixture, result = initialResult(fixture.packet)) {
 }
 export const current = () => ({ status: 'current', reason: 'Fixture live check matched.', checkedAt: '2026-09-09T12:00:00.000Z' });
 
-// A runner for worker tests: `run(job, signal, previous, to)` reviews where a runner would and
-// returns a directory whose records are copied into the run directory the worker chose, or
-// throws. It delivers before the worker's next step, unless `background`, when the worker finds
-// the job still dispatched and collects on a later tick.
+/**
+ * A runner for worker tests: `run(job, signal, previous, to)` reviews where a runner would and
+ * returns a directory whose records are copied into the run directory the worker chose, or
+ * throws. It delivers before the worker's next step, unless `background`, when the worker finds
+ * the job still dispatched and collects on a later tick.
+ */
 export function inline(run, { background = false, own = () => null } = {}) {
   const outcomes = new Map(), controllers = new Map(), closed = new Set(), offered = [];
   return {

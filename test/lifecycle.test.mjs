@@ -115,7 +115,7 @@ test('an argument with a step no rung reached does not ship', t => {
 });
 
 // The recall path, and the reason rung 3 asks about a proposition rather than a claim.
-// "Is this an auth bypass?" is the composite judgment the smoke test found mushy.
+// "Is this an auth bypass?" is a composite judgment that models answer poorly.
 // "Is the endpoint reachable by an account that does not own the record?" is a factual
 // question, and it is exactly the step no grep can express. Settling it that way ships
 // the claim, capped at moderate: an argument is only as strong as its weakest step.
@@ -158,7 +158,7 @@ test('a step the model denies refutes the claim at moderate confidence', t => {
   assert.equal(decision.verdict, 'merge');
 });
 
-// The contradiction case, now sharp enough to name the check. The model is not voting
+// The contradiction case, sharp enough to name the check. The model is not voting
 // against the code; it is reporting that this particular text proxy does not mean what
 // its proposition says.
 test('a model that contradicts a check accuses that check, and the claim does not ship', t => {
@@ -174,9 +174,9 @@ test('a model that contradicts a check accuses that check, and the claim does no
 
 // Rung 3 is asked at the merge base about a file the change adds, sees no such file, and
 // says no. A check that searched the whole base and found the pattern nowhere is not a
-// proxy for "this is new", so that answer must not hold the claim back. On the pilot repository
-// (2026-10-07 to 08) it alone held back 16 claims with every proposition established.
-// Any other base check the model contradicts still stops the claim.
+// proxy for "this is new", so that answer must not hold the claim back; it would otherwise
+// hold back claims whose every proposition is established. Any other base check the model
+// contradicts still stops the claim.
 test('a model cannot contradict a pattern no file at the merge base contains', t => {
   const atBaseSaysNo = { settle: (proposition, claim, revision) =>
     [{ rung: 'cross_family_llm', check: 'jev noul', result: revision === 'base' ? 0.03 : 0.97 }] };
@@ -206,11 +206,10 @@ test('an unusable policy fails loudly rather than producing a verdict', t => {
   assert.throws(() => verifyClaims([], revisionsOf(repository(t)), { name: 'no-fallback', rules: [] }), /is unusable/);
 });
 
-// The third false-positive mechanism the 2026-09-14 audit recorded: a claim attributed
-// to a pull request because related lines changed, when its whole trigger already
-// existed at the merge base. `sms-retry-non-idempotent` was reported as a new defect
-// although every step of it predated the change. A base-side proposition settles that
-// deterministically, so the misattribution dies on rung 1 rather than reaching a user.
+// A common false positive: a claim attributed to a pull request because related lines
+// changed, when its whole trigger already existed at the merge base. A base-side
+// proposition settles that deterministically, so the misattribution dies on rung 1
+// rather than reaching a user.
 const ATTRIBUTED = {
   type: 'auth_bypass', location: 'update.ts:2',
   description: 'update() no longer compares owner to account.',
@@ -250,13 +249,12 @@ test('a claim whose trigger already existed at the merge base is refuted, not re
   assert.equal(decision.verdict, 'merge', 'a pre-existing condition is not this change to answer for');
 });
 
-// Measured on PR #2 of this repository, 2026-09-20. The model wrote the proposition
-// "the account object has an ownerId property" and checked it with
-// body_contains(renameAccount, "ownerId") at head — inside the very function whose
-// deleted guard was the only mention of ownerId. The grep missed because the defect
-// removed it, and a miss on rung 1 refutes, so a correct auth_bypass came back as a
-// confident denial. Absence of a string is not absence of a property, and a claim about
-// a change cannot be refuted by that change.
+// A model can write the proposition "the account object has an ownerId property" and
+// check it with body_contains(renameAccount, "ownerId") at head — inside the very
+// function whose deleted guard was the only mention of ownerId. The grep misses because
+// the defect removed it, and a miss on rung 1 refutes, so a correct auth_bypass would come
+// back as a confident denial. Absence of a string is not absence of a property, and a
+// claim about a change cannot be refuted by that change.
 test('a miss that the change itself caused does not refute the claim about it', t => {
   const circular = {
     type: 'auth_bypass', location: 'update.ts:2',
@@ -276,9 +274,8 @@ test('a miss that the change itself caused does not refute the claim about it', 
 });
 
 // A literal miss proves nothing either way, even where the change did not cause it: the
-// text may be spelled differently (`1_000` for `1000` killed a real defect on pilot PR #4887).
-// It goes to rung 3, so the claim ships only if the model affirms it, and dies if the model
-// denies it. Replayed over 141 pilot-repository runs before becoming the rule (see lifecycle.ts).
+// text may be spelled differently, such as `1_000` for `1000`. It goes to rung 3, so the
+// claim ships only if the model affirms it, and dies if the model denies it (see lifecycle.ts).
 test('a literal miss is handed to rung 3 instead of refuting', t => {
   const spelled = { ...TRUE_CLAIM, evidenceToCheck: [TRUE_CLAIM.evidenceToCheck[0],
     { proposition: 'update() returns the result without a guard.',
@@ -299,7 +296,7 @@ test('a literal miss is handed to rung 3 instead of refuting', t => {
 // An `expect: absent` miss rests on having FOUND the pattern, which is positive
 // evidence and contradicts the proposition outright. It must keep refuting whether or
 // not the other side also has it, or the rule above would swallow the legitimate
-// refutations this repository's audit cases were written for.
+// refutations rung 1 exists to make.
 test('a miss that rests on finding the pattern still refutes', t => {
   const found = {
     type: 'contract_break', location: 'update.ts:1',
@@ -315,12 +312,12 @@ test('a miss that rests on finding the pattern still refutes', t => {
   assert.equal(chains[0].verdict, 'refuted');
 });
 
-// A refutation is the strongest verdict available and, until --question-refutations,
-// the least protected: verifyClaim returned before rung 3, so suspectChecks only ever
-// guarded propositions a check ESTABLISHED. Measured 2026-09-20 on PR #2 — "there is no
-// other function or middleware that enforces ownership" checked with
-// referenced_outside(expect: absent), which asks whether the function is called at all.
-// The test file calls it, the check missed, and a correct auth_bypass died.
+// A refutation is the strongest verdict available and, without --question-refutations,
+// the least protected: rung 3 is not asked after one, so suspectChecks guards only
+// propositions a check ESTABLISHED. A check can ask a different question from its
+// proposition — "no other function enforces ownership" checked with
+// referenced_outside(expect: absent) asks whether the function is called at all — and a
+// test file that calls it makes the check miss and kills a correct auth_bypass.
 const MISMATCHED = {
   type: 'auth_bypass', location: 'update.ts:2',
   description: 'update() no longer compares owner to account.',
@@ -381,10 +378,10 @@ test('only a lone refuting check is questioned, not a claim refuted several ways
 });
 
 // The invariant the revision field exists for: whatever side rung 1 ran against, rung 3
-// is asked about that same side. Measured 2026-09-20 on a live run — rung 1 checked at
-// head and missed, correctly; rung 3 got the bare sentence with a state carrying both
-// revisions and answered for base; `suspectChecks` held back a correct auth_bypass.
-// Neither rung was wrong. They were answering different questions.
+// is asked about that same side. Otherwise rung 1 can check at head and miss, correctly,
+// while rung 3, given the bare sentence and a state carrying both revisions, answers for
+// base, and `suspectChecks` holds back a correct auth_bypass. Neither rung is wrong; they
+// answer different questions.
 test('rung 3 is asked at the revision rung 1 ran against', t => {
   const asked = [];
   const recording = { settle: (proposition, claim, revision) => { asked.push({ proposition, revision }); return []; } };
@@ -394,8 +391,8 @@ test('rung 3 is asked at the revision rung 1 ran against', t => {
       // Named on the check, which is what rung 1 runs against.
       { proposition: 'The guard ran before the change.',
         check: { assertion: 'body_contains', symbol: 'update', pattern: 'owner !== account', revision: 'base' } },
-      // Named on the proposition, with the check silent. It used to default to head
-      // here, so rung 1 looked at the wrong revision with nothing recording that it had.
+      // Named on the proposition, with the check silent. Defaulting to head here would
+      // make rung 1 look at the wrong revision with nothing recording that it had.
       { proposition: 'The guard is stated in the declaration before the change.', revision: 'base',
         check: { assertion: 'declaration_contains', symbol: 'update', pattern: 'owner' } },
       // Neither names a side, so both rungs take head.
@@ -411,8 +408,8 @@ test('rung 3 is asked at the revision rung 1 ran against', t => {
   assert.equal(labels.filter(label => label.includes('at the merge base')).length, 2);
 });
 
-// A proposition that names base makes the check inherit it. Before, the check ran at
-// head and quietly answered about the wrong code.
+// A proposition that names base makes the check inherit it. Otherwise the check would
+// run at head and quietly answer about the wrong code.
 test('a check with no side inherits the propositions own', t => {
   const claim = {
     ...TRUE_CLAIM,
@@ -426,10 +423,9 @@ test('a check with no side inherits the propositions own', t => {
 
 // A miss the circularity rule downgraded must not come back as a refutation. composeChain
 // reads any symbolic miss as `refuted` at high confidence, before it looks at the
-// proposition records at all, so leaving the evidence in place overruled the rule one
-// line after it fired. Measured 2026-09-20 over ten live runs: two claims had every
-// proposition established and rung 3 agreeing at 0.97, and still came out `refuted` —
-// one of them cost its run the finding.
+// proposition records at all, so leaving the evidence in place would overrule the rule
+// one line after it fires: a claim with every proposition established and rung 3 agreeing
+// would still come out `refuted`.
 test('a miss that cannot refute does not refute the chain', t => {
   const claim = {
     ...TRUE_CLAIM,
@@ -452,11 +448,10 @@ test('a miss that cannot refute does not refute the chain', t => {
   assert.equal(chains[0].evidence.filter(one => one.result === 'miss').length, 0);
 });
 
-// Every proposition holding is not the same as the claim holding, and until now nothing
-// asked the difference. Measured 2026-09-21 over 45 runs on the Martian cases: the noisy
-// claims and the real ones are confirmed for the same reason, because their propositions
-// restate the diff. "It had margin-top at base" and "it does not at head" are both true;
-// "therefore the layout breaks" was never put to anything.
+// Every proposition holding is not the same as the claim holding. Noisy claims and real
+// ones are confirmed for the same reason when their propositions restate the diff: "it
+// had margin-top at base" and "it does not at head" are both true, and "therefore the
+// layout breaks" is never put to anything.
 test('a claim whose premises hold still has to have its conclusion affirmed', t => {
   // The model is asked the claim's own assertion and will not affirm it. Neutral, not
   // negative — which is exactly what a hedged claim draws, and why the gate is agreement
@@ -473,19 +468,17 @@ test('a claim whose premises hold still has to have its conclusion affirmed', t 
 });
 
 // A rung that could not be reached must not become a requirement for shipping, or an
-// outage turns every claim inconclusive. Seen for real on 2026-09-21, when one run's Jev
-// calls all failed and seven claims died without the report saying why.
+// outage turns every claim inconclusive without the report saying why.
 test('a silent rung does not withhold the conclusion', t => {
   const silent = { settle: () => [] };
   const { chains } = withOptions(t, [TRUE_CLAIM], silent, { questionConclusion: true });
   assert.equal(chains[0].verdict, 'confirmed');
 });
 
-// A finding the emitter itself rated P3 held up, and is still not shown: measured
-// 2026-09-23 over 80 blind-labelled runs, three in four such findings were noise, and
-// withholding them halved harmful findings per run while every golden comment was still
-// found. The chain keeps its evidence, the verdict does not count it, and asking for it
-// (--show-minor) restores it unchanged.
+// A finding the emitter itself rated P3 is not shown even when it holds up: in blind
+// labelling most such findings are noise, and withholding them halves harmful findings per
+// run without losing an expected one. The chain keeps its evidence, the verdict does not
+// count it, and asking for it (--show-minor) restores it unchanged.
 test('a confirmed P3 finding is withheld by default, and shown only when asked', t => {
   const minor = { ...TRUE_CLAIM, type: 'contract_break', severity: 'P3' };
   const { chains, decision } = run(t, [minor]);
