@@ -28,7 +28,7 @@ export function rate(packet: Packet, result: Result, assessment: Pick<Assessment
   const unrated = (reason: string): Rating => ({ score: null, policy, reasons: [...reasons, reason] });
   if (assessment.scope !== 'complete') return unrated('The review must finish across all changed files before it can be rated.');
   if (assessment.freshness.status !== 'current') return unrated('The reviewed commits must match the current PR before it can be rated.');
-  // A review always gets a score (Lors, 2026-09-24). The claim pipeline makes no quality
+  // A completed, current review always gets a score. The claim pipeline makes no quality
   // assessment, so without one a completed, current review is rated by its findings alone:
   // a clean review earns 5/5 and the defect caps below still apply.
   const holistic = policy.preset !== 'correctness-first' && Boolean(result.quality);

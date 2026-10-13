@@ -3,10 +3,10 @@ import { definitionOf, type Revision } from './symbolic.js';
 
 // The definitions, at head, of functions the added lines call and the change does not
 // define. A change can be right on its own lines and wrong in what unchanged code does
-// with its values: on pilot PR #4590 (2026-09-24) new code threw plain errors into a
-// catch-all mapper 780 lines away that labels every one "vendor unavailable, retry", and
-// in seven runs the model never opened that file. Resolved by code, not left to the model
-// to go looking. Calls are taken by name or on `this`/`self` only: `x.map(` names a method
+// with its values, such as new code throwing plain errors into a distant catch-all handler
+// that reports every one as a retryable outage. A model left to find that handler often
+// never opens its file, so the definitions are resolved by code. Calls are taken by name
+// or on `this`/`self` only: `x.map(` names a method
 // of a value nothing here can type, and a guess would put unrelated code in front of it.
 // A definition that does not fit is named, never silently dropped.
 export const MAX_CALLED_CODE_BYTES = 24 * 1024;

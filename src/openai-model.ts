@@ -7,7 +7,7 @@ import { traceEvent, traceId } from './trace.js';
 // Luna on Amazon Bedrock, through bedrock-runtime's OpenAI-compatible endpoint, which takes a Bedrock
 // API key as its bearer token. Its model is the US inference profile (us-east-1, us-east-2, us-west-2):
 // that endpoint has no in-Region Luna, and its key needs only bedrock:InvokeModel on that profile and
-// the account's default project, so it can be limited to Luna (recommended for the pilot customer, 2026-10-07).
+// the account's default project, so it can be limited to Luna.
 // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html
 export const bedrockOrigin = 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1';
 export function openAIModel(profile: Profile, apiKey = process.env[profile.provider === 'bedrock' ? 'AWS_BEARER_TOKEN_BEDROCK' : 'OPENAI_API_KEY'], fetch?: typeof globalThis.fetch): Model {

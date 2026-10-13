@@ -1,14 +1,14 @@
 import { TEST } from './callees.js';
 
-// The part of a diff the failure-path pass is shown: the lines within WINDOW of each
-// error-handling line (a throw, catch, rejection, raise, except or rescue) that has a
-// changed line within WINDOW of it, so a change inside an existing catch counts and a
-// removed guard counts. The pass re-sends its context every turn and the provider caches
-// none of it (0 of 6,420 repeated tokens, 2026-09-25), so the whole diff made it 2-3x the
-// cost of a review on pilot PR #4590: 137 KB, $0.16-0.21 a run against $0.04-0.08. There
-// the excerpt is 22 KB. It is empty when the change touches no error handling, and then
-// the pass does not run. Test files are left out: a test's failure paths are not the
-// product's. Each window gets its own hunk header, so the excerpt is still a diff.
+// The part of a diff the failure-path pass is shown: the lines within FAILURE_WINDOW of
+// each error-handling line (a throw, catch, rejection, raise, except or rescue) that has a
+// changed line within FAILURE_WINDOW of it, so a change inside an existing catch counts and
+// a removed guard counts. The pass re-sends its context every turn and providers cache
+// little of it, so shown the whole diff of a large change it cost two to three times the
+// rest of the review; the excerpt is typically a fraction of the diff. It is empty when the
+// change touches no error handling, and then the pass does not run. Test files are left
+// out: a test's failure paths are not the product's. Each window gets its own hunk header,
+// so the excerpt is still a diff.
 export const FAILURE_WINDOW = 20;
 const ERROR_LINE = /\b(?:throw|catch|reject|raise|rescue|except|finally|panic)\b|Error\(|\.catch\(/;
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/;

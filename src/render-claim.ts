@@ -66,8 +66,8 @@ export function renderClaimReview(claims: Claim[], verification: Verification,
       }), '');
   }
 
-  // Rung 3 now really runs, so this note is conditional. Printing it beside `jev noul:`
-  // evidence told the reader the opposite of what the report showed.
+  // The cross-family note appears only when rung 3 did not run; printed beside its
+  // evidence it would contradict the report.
   const notes = [...investigation.limitations, ...verification.limitations,
     ...(investigation.complete ? [] : ['Emission did not finish, so this is not a complete pass over the change.']),
     ...(verification.crossFamilyLog.length ? []

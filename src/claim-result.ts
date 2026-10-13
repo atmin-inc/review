@@ -9,10 +9,8 @@ import type { Chain } from './evidence.js';
 import type { Model, Profile } from './investigation.js';
 
 // The claim pipeline, written into the Result and receipt shapes the GitHub worker and
-// the `review` command already publish from. This is the bridge that makes what ships
-// the pipeline that was measured (2026-09-24: Luna, rung 3 on, P3 withheld) without
-// rewriting publication, freshness, checks or inline comments, which do not depend on
-// how the findings were produced.
+// the `review` command publish from, so publication, freshness, checks and inline comments
+// need not know how the findings were produced.
 
 const CATEGORY: Record<ClaimType, Finding['category']> = {
   injection_risk: 'security', hardcoded_secret: 'security', auth_bypass: 'security',
@@ -39,7 +37,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   // finished: a run that stopped early claims no coverage at all.
   // Files left out of every part are not reviewed. In a review split into parts, each part
   // claims its own files only if its investigation finished complete; `unfinished` lists the
-  // files of the parts that did not (pilot PR #4832: one unfinished part had zeroed all three).
+  // files of the parts that did not, so one unfinished part does not discount the others.
   const unread = new Set(run.unread ?? []);
   const unfinished = new Set(run.unfinished ?? []);
   const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path) && !unread.has(file.path);
@@ -175,8 +173,8 @@ export function claimReceipt(profile: Profile, review: ClaimReview, startedAt: s
 }
 
 // One claim review over a prepared snapshot, leaving result.json and receipt.json where
-// the older engine left them. Rung 3 is Jev when TYPESAFE_API_KEY is set, which is the
-// configuration measured; without it the run says so rather than failing.
+// the older engine left them. Rung 3 is Jev when TYPESAFE_API_KEY is set; without it the
+// run says so rather than failing.
 export async function runClaimReviewAsResult(directory: string, profile: Profile, signal?: AbortSignal, injectedModel?: Model): Promise<ClaimReview> {
   const { packet, result: initial } = loadReview(directory);
   // One run per snapshot, as with the older engine: a rerun must not reset a spend.

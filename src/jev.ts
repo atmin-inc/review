@@ -27,25 +27,19 @@ import { startSpan, traceEvent, traceHash } from './trace.js';
 // state holding a single revision, and it is small: Jev bills input tokens, and each of
 // the two calls carries half the source the combined one did.
 
-// WIRE FORMAT — verified against the live API on 2026-09-20, and against the schema it
-// publishes at https://api.typesafe.ai/openapi.json, which is the contract that
-// `.smoke/jev-schema.json` was missing from this repository. A question is a
-// `NoulQuestion`: `type: 'noul'`, the statement in `instructions`, and a `NoulCriteria`
-// object under `criteria` with a `true` and a `false` side. An answer is a
+// WIRE FORMAT, per the schema the API publishes at https://api.typesafe.ai/openapi.json.
+// A question is a `NoulQuestion`: `type: 'noul'`, the statement in `instructions`, and a
+// `NoulCriteria` object under `criteria` with a `true` and a `false` side. An answer is a
 // `NoulAnswer`: `type: 'noul'` with the probability of yes in `noul`. Parsing stays
 // strict: a response that does not match fails loudly rather than being coerced into a
 // probability, because a wrong number here silently decides whether claims ship.
 // A question is pinned to its revision by the STATE, not by a sentence telling the model
-// which side to think about. Both were tried on 2026-09-20 and the sentence backfired:
-// with both revisions in the state, naming one made Jev read "the tests expect a
-// Forbidden error" as "does a Forbidden error still happen after this change" — true of
-// the test file as written, false of the changed code — and answer 0.1 to a fact grep had
-// confirmed. Contradicted checks went from 1 in 52 propositions to 8 in 94, and one run
-// lost the finding entirely. Three wordings were measured and all three suppressed it
-// equally, so the phrasing was never the problem: it was asking a question about two
-// revisions at once. Sending the one revision the question is about scored 6 of 7 against
-// 4 for both-sides and 3 for both-sides-plus-a-qualifier, on statements all true of the
-// code. Structure, not instruction.
+// which side to think about. With both revisions in the state, naming one in the question
+// narrows the model to the changed file: "the tests expect a Forbidden error" reads as
+// "does a Forbidden error still happen after this change", true of the test file and false
+// of the changed code, and facts grep established are answered false. Rewording does not
+// help, because the problem is asking about two revisions at once; a state that holds only
+// the revision the question is about cannot be misread. Structure, not instruction.
 
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const MODEL = 'jev-latest';
@@ -127,18 +121,15 @@ const MAX_DIFF_BYTES = 24000;
 // settled by `file_contains` is about a different file — the test that covers the
 // change, the caller that relies on it — and a state carrying only the located file
 // asks Jev about text it was never shown. It answers no, correctly, and the verifier
-// reads that as rung 3 contradicting a symbolic fact that is true. Seen on 2026-09-20:
-// grep confirmed a test asserts /Forbidden/ at test/suggestion-demo.test.mjs:12 while
-// Jev returned 0.12 on the same proposition, which was enough to hold back a correct
-// auth_bypass. Capped, because one claim must not send the whole repository.
+// reads that as rung 3 contradicting a symbolic fact that is true, which holds back a
+// correct claim. Capped, because one claim must not send the whole repository.
 const MAX_STATE_FILES = 4;
 function statePaths(claim: Claim): string[] {
   const named = claim.evidenceToCheck.flatMap(({ check }) => check && 'path' in check ? [check.path] : []);
   return [...new Set([parseLocation(claim.location).path, ...named])].slice(0, MAX_STATE_FILES);
 }
 // The declarations this revision's symbol checks read, where the claim's window does not
-// already hold them. A body starts at its declaration, so its
-// window does too.
+// already hold them. A body starts at its declaration, so its window does too.
 function checkedSites(claim: Claim, source: Revisions['head'], revision: Side): { path: string; line: number }[] {
   const { path: located, line } = parseLocation(claim.location);
   const sites = claim.evidenceToCheck.flatMap(item =>

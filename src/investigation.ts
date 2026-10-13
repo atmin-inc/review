@@ -114,8 +114,8 @@ export interface Receipt {
 }
 // Luna at OpenAI's standard rates, direct or on OpenRouter's pinned azure route (same rates). Prompt
 // tokens written to the cache cost 1.25x input; a prompt over 272K tokens costs 2x input and
-// cache rates and 1.5x output for the whole request (developers.openai.com, 2026-09-26). Bedrock's
-// US inference profile adds 10% to every rate (its Luna model card, 2026-10-07).
+// cache rates and 1.5x output for the whole request. Bedrock's US inference profile adds 10% to
+// every rate. Each receipt's rateCard names the source of its prices.
 const luna = (input: number, output: number, cached: number, writes: number) => {
   const long = input > 272_000;
   return (((input - cached - writes) * 0.1 + cached * 0.01 + writes * 0.125) * (long ? 2 : 1) + output * 0.5 * (long ? 1.5 : 1)) / 1_000_000;
@@ -240,10 +240,11 @@ async function investigateWithinDeadline(directory: string, packet: Packet, prof
       // A retry replays its original budget notice and tool set unchanged.
       const remainingResponses = profile.maxTurns - turn + (receipt.calls.at(-1)?.status === 'interrupted' ? 1 : 0);
       const remainingMs = profile.deadlineMs - (Date.now() - started);
-      // Reporting probes needed about a minute. Allow two two-minute attempts
-      // on the ten-minute profile, and avoid admitting another source request
-      // whose observed duration would consume that reserve. This is headroom,
-      // not a guarantee about future provider latency; the overall cap remains.
+      // Keep time for the reporting requests: four minutes or twice the slowest request
+      // so far, whichever is longer, but at most half the deadline. Admit no source
+      // request whose observed duration
+      // would consume that reserve. This is headroom, not a guarantee about provider
+      // latency; the overall deadline still applies.
       const reportingReserveMs = Math.min(profile.deadlineMs / 2, Math.max(240000, slowestRequestMs * 2));
       const reporting = remainingResponses <= Math.min(2, profile.maxTurns)
         || receipt.toolCalls >= profile.maxToolCalls - Math.min(2, Math.floor(profile.maxToolCalls / 3))

@@ -16,21 +16,19 @@ export type ClaimType = typeof CLAIM_TYPES[number];
 // claims about what IS there, and every absence claim would read as refuted.
 //
 // `revision` exists because a review claims a REGRESSION, and a condition that
-// already holds at the merge base is not one. The 2026-09-14 audit recorded this as
-// one of three recurring false-positive mechanisms: a claim was attributed to a pull
-// request because related lines changed, while its whole trigger existed before.
-// Settling that needs the same check run against the base.
+// already holds at the merge base is not one. A recurring false positive attributes a
+// defect to a pull request because related lines changed, while its whole trigger
+// existed before. Settling that needs the same check run against the base.
 export type Expectation = 'present' | 'absent';
 export type Side = 'head' | 'base';
 interface Sided { expect?: Expectation; revision?: Side }
 //
 // `file_contains` exists because the other three are all scoped to a symbol, and the
 // claims a reviewer most wants to make about a change are often about a *file*: the
-// test that covers the changed function, the caller that relies on it. The first live
-// runs (2026-09-20, see AGENTS.md) showed the cost of not having it: the model reached
-// for `body_contains` with `symbol: "test"` or with a file path, no declaration was
-// found, the proposition went unsettled, and one unsettled proposition is enough to
-// make a whole claim inconclusive. That produced a merge verdict on a real auth bypass.
+// test that covers the changed function, the caller that relies on it. Without it a
+// model reaches for `body_contains` with `symbol: "test"` or a file path, no declaration
+// is found, the proposition goes unsettled, and one unsettled proposition is enough to
+// make a whole claim inconclusive.
 export type SymbolicCheck =
   | ({ assertion: 'declaration_contains'; symbol: string; pattern: string } & Sided)
   | ({ assertion: 'body_contains'; symbol: string; pattern: string } & Sided)
@@ -43,11 +41,9 @@ export type SymbolicCheck =
 // account can update any record" without anyone establishing the steps between.
 // `revision` is part of the question, not decoration on the check. The reviewer's whole
 // subject is a difference between two revisions, so "the body lacks `account.ownerId`" is
-// true at head and false at base and means nothing unqualified. Measured 2026-09-20: rung
-// 1 ran that check at head and missed, correctly; rung 3 was handed the bare sentence
-// along with a state carrying both sides and the diff, answered for the other side, and
-// `suspectChecks` held back a correct `auth_bypass`. Neither rung was wrong. They were
-// answering different questions.
+// true at head and false at base and means nothing unqualified. Asked the bare sentence
+// with both sides in view, two rungs can answer for different sides and disagree while
+// each is right, and the disagreement then holds back a correct claim.
 //
 // So the side is resolved once, by `propositionSide`, and every rung is asked at that
 // same value. The check may still name a side — a claim about a regression genuinely
@@ -60,11 +56,11 @@ export const propositionSide = (item: Proposition): Side =>
 
 // What the code at the location should have carried instead: one literal line or
 // fragment, and optionally a path where that text already appears, when the location
-// departs from a convention its siblings or its contract follow. Measured 2026-09-21
-// over 60 runs, this corrective form is the one property that separates the findings
-// matching a human comment from the noise, and it is rare because nothing asked for it.
-// Asked for in the prompt alone (2026-09-22) it appeared 0 times; here it is a field the
-// code checks, so a claim with no departure to name cannot be recorded.
+// departs from a convention its siblings or its contract follow. Findings that match a
+// human reviewer's comment usually take this "X should be Y" form and noise rarely does,
+// but asked for in the prompt alone a model does not produce it. Here it is a field the
+// code checks, so when `requireCorrection` is on, a claim with no departure to name cannot
+// be recorded.
 export interface Correction { text: string; seenAt?: string }
 export interface ClaimDraft {
   type: ClaimType;
@@ -146,8 +142,7 @@ const normalizeProse = (value: string): string => value.toLowerCase().replace(/[
 // prose — a stale commit hash, an unreproducible test count, undefined jargon — typed
 // `error_handling_gap` or `contract_break` because those are the only words on offer.
 // Their propositions are true statements about the text, so verification establishes
-// them and they reach high confidence. Measured on 2026-09-20 against PR #4, a docs-only
-// change: one run in five emitted 9 such claims and confirmed 6 of them.
+// them and they reach high confidence.
 //
 // The answer is not a documentation type. That would invite the model to produce more of
 // exactly this and let the reviewer score itself on prose. It is that this vocabulary
@@ -191,10 +186,8 @@ export function claimRejection(draft: ClaimDraft, source: string | null, options
     }
   }
   // Rung 1 searches for a single literal line of at most 200 characters, so a longer or
-  // multi-line pattern names a check that cannot be run. Measured 2026-09-21 on Martian
-  // case-016: the model wrote a reasonable multi-line pattern, the claim was accepted,
-  // and the search threw during verification and took the whole review with it — three
-  // runs out of three, after the pilot had recorded that case as a clean merge.
+  // multi-line pattern names a check that cannot be run. Rejected here, the model can
+  // rewrite it; accepted, it could only settle nothing at verification.
   for (const { check } of draft.evidenceToCheck) {
     for (const [field, value] of [['pattern', check && 'pattern' in check ? check.pattern : null],
       ['symbol', check && 'symbol' in check ? check.symbol : null]] as const) {

@@ -26,23 +26,22 @@ import { lockFile, type Packet } from './contracts.js';
 // investigation did not finish complete.
 export interface ClaimReview { claims: Claim[]; investigation: ClaimInvestigation; verification: Verification; parts: number; unread: string[]; unfinished: string[] }
 
-// How rung 3 is answered for this run. 'none' leaves it silent, which is what every
-// run before this one did. 'jev' asks the TypeSafe API once per surviving claim,
-// before verification, and the verifier then replays those answers — see jev.ts for
-// why the asking is its own phase.
+// How rung 3 is answered for this run. 'none' leaves it silent. 'jev' asks the TypeSafe
+// API once per claim and revision, before verification, and the verifier then replays
+// those answers — see jev.ts for why the asking is its own phase.
 export type CrossFamilySource = 'none' | 'jev';
 
-// The whole diff goes into every turn of the claim pass. 128 KB refused 29% of the PRs on
-// the first real repository measured (the pilot repository, 2026-09-24); 512 KB refuses 7%. A diff
-// this size needs a profile whose input cap leaves room to read beside it: the OpenRouter
-// adapter counts serialized bytes, not tokens, and the diff is escaped twice on the way,
-// so a diff counts about 1.2 times its size (measured on a 471 KB pilot-repository diff). The
-// production profile allows 1,000,000, under Luna's 1.05M-token window (`profiles/review-luna-openrouter.json`).
+// The whole diff goes into every turn of the claim pass. 512 KB admits about 93% of pull
+// requests in a large production monorepo, against 71% at 128 KB. A diff this size needs a
+// profile whose input cap leaves room to read beside it: the OpenRouter adapter counts
+// serialized bytes, not tokens, and the diff is escaped twice on the way, so it counts about
+// 1.2 times its size. `profiles/review-luna-openrouter.json` allows 1,000,000, under the
+// model's 1.05M-token window.
 export const MAX_DIFF_BYTES = 512 * 1024;
 
 // The diff the claim pass reads: a deleted file as its header only (git's --irreversible-delete;
-// the source tools still read its old content on the base side), and no lock files. Lors chose
-// this on 2026-10-08 after pilot PR #4832, whose 6.5 MB diff was mostly 498 deleted files.
+// the source tools still read its old content on the base side), and no lock files. A change
+// that deletes many files would otherwise spend most of its diff budget on content that is gone.
 // `paths` is every changed path; the rest are named one by one because git runs with literal
 // pathspecs here (GIT_LITERAL_PATHSPECS), which turns off `:(exclude)`.
 export function reviewDiff(repository: string, from: string, to: string, paths: string[]): Buffer {
@@ -50,26 +49,22 @@ export function reviewDiff(repository: string, from: string, to: string, paths: 
   return read.length ? git(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--irreversible-delete', from, to, '--', ...read]) : Buffer.alloc(0);
 }
 
-// A diff over the limit is reviewed in parts (Lors, 2026-10-08: "if i make a PR and it is a bit
-// big, why cant i get it fully reviewed?"): each part holds up to PART_BYTES of whole files, or one
-// file up to MAX_DIFF_BYTES, and gets its own investigation, and the claims of every part are
+// A diff over the limit is reviewed in parts: each part holds up to PART_BYTES of whole files, or
+// one file up to MAX_DIFF_BYTES, and gets its own investigation, and the claims of every part are
 // verified together. Files are packed in git's path order, so a folder's files share a part. Each
 // file's diff starts at git's "diff --git" line, which no line of content can begin with, and is
-// matched to its path through git's own path list. A review splits into at most as many parts as its budget (the profile's
-// maxUsd, $2 by default) covers at PART_USD each, the parts sharing that one budget (Lors: "we
-// already have a cap of $2 per PR no? big prs should be well below that"). Past those parts, or for
-// one file whose diff alone is over the limit, files are left out and listed as not reviewed. Which files are read then is the order Lors chose
-// for reading in part, as Mira does: deleted files first, each only a header (on pilot PR #4832, 503
-// of them took 90 KB), then source files before tests, docs and generated files, and within each
-// the smallest first, so as many files as fit are read whole.
-// One full 512 KB part cost $0.15 on pilot PR #4832 (Bedrock, 67 turns, 2026-10-08), the dearest
-// measured; the same part cost $0.08 to $0.11 on OpenRouter.
+// matched to its path through git's own path list. A review splits into at most as many parts as
+// its budget (the profile's maxUsd) covers at PART_USD each, the parts sharing that one budget.
+// Past those parts, or for one file whose diff alone is over the limit, files are left out and
+// listed as not reviewed. The files that are read are then chosen in this order: deleted files
+// first, each only a header, then source files before tests, docs and generated files, and within
+// each the smallest first, so as many files as fit are read whole.
+// About the most one full 512 KB part has cost, at the dearest supported provider.
 export const PART_USD = 0.15;
-// Parts are 256 KB, though one investigation reads up to 512 KB: on pilot PR #4832 (OpenRouter,
-// 2026-10-08) three 512 KB parts left two unfinished, so none of their files counted as reviewed,
-// while six 256 KB parts all finished, every text file reviewed; both runs took about $0.25 and
-// 11 minutes. Lors chose to test the smaller parts. A diff up to MAX_DIFF_BYTES is still one
-// investigation.
+// Parts are 256 KB, though one investigation reads up to 512 KB: 512 KB parts often run out of
+// turns before finishing, and an unfinished part counts none of its files as reviewed, while
+// 256 KB parts finish at about the same total cost and time. A diff up to MAX_DIFF_BYTES is still
+// one investigation.
 export const PART_BYTES = 256 * 1024;
 export const partsWithin = (maxUsd: number) => Math.max(1, Math.floor(maxUsd / PART_USD + 1e-9));
 const minor = /(^|\/)(tests?|specs?|__tests__|__mocks__|__snapshots__|fixtures?|docs?|examples?|dist|build)\/|\.(md|mdx|txt|rst|snap|map)$|\.min\.(js|css)$|[._]generated\./;
@@ -124,11 +119,11 @@ export function splitDiff(repository: string, from: string, to: string, paths: s
 export interface IncrementalScope { since: string; carried: Claim[]; changed: string[] }
 
 // A carried claim is re-verified on the propositions it was recorded with, and a fix can
-// remove a premise none of them states. Measured 2026-09-24 on a real push (the pilot repository):
-// the fix wrapped a read-then-delete in an advisory lock, every recorded proposition (the
-// read, the comparison, the delete by name) stayed true, and the fixed race was confirmed
-// again. So a claim whose file the push changed, or a file one of its checks names, is not
-// carried on its own: the model is shown it and records it again only if it still holds.
+// remove a premise none of them states: a fix that wraps a read-then-delete in a lock leaves
+// every recorded proposition (the read, the comparison, the delete by name) true, and the
+// fixed race would be confirmed again. So a claim whose file the push changed, or a file one
+// of its checks names, is not carried on its own: the model is shown it and records it again
+// only if it still holds.
 // A fix made in a file the claim never names still escapes this.
 export function touchedBy(claim: Claim, changed: ReadonlySet<string>): boolean {
   const checked = claim.evidenceToCheck.flatMap(item => item.check && 'path' in item.check ? [item.check.path] : []);
@@ -137,10 +132,9 @@ export function touchedBy(claim: Claim, changed: ReadonlySet<string>): boolean {
 
 // The target's own AGENTS.md files: the root one and one in each directory above a changed
 // path, read from the target branch so a change cannot rewrite the rules it is reviewed
-// against. The older engine loaded these (investigation.ts); the claim pipeline had not,
-// and on pilot PR #4590 (2026-09-24) 5 of CodeRabbit's 12 items came from house rules the
-// claim pass was never shown. Shallowest first, so the root rules are the last to be cut;
-// a file that does not fit is named, never silently dropped.
+// against, as the older engine does (investigation.ts). Without them the claim pass cannot
+// see house rules, a large share of what human reviewers ask for. Shallowest first, so the
+// root rules are the last to be cut; a file that does not fit is named, never silently dropped.
 export const MAX_GUIDANCE_BYTES = 32 * 1024;
 export function targetGuidance(repository: string, packet: Packet): { guidance: { path: string; text: string }[]; omitted: string[] } {
   const paths = new Set(['AGENTS.md']);
@@ -260,6 +254,13 @@ export function modelFor(profile: Profile, injectedModel?: Model): Model {
   return injectedModel ?? (profile.provider === 'openrouter' ? openRouterModel(profile) : openAIModel(profile));
 }
 
+/**
+ * Runs the claim lifecycle over a prepared snapshot directory and writes its records there
+ * (claims.json, telemetry.json, verification.json). `crossFamily` injects a rung 3 directly;
+ * otherwise `crossFamilySource` chooses one. `capture.transcript` keeps the provider
+ * transcript for the emission bench, `incremental` restricts emission to the commits since
+ * an earlier review, and `passes.contracts` adds the contract pass.
+ */
 export async function runClaimReview(directory: string, profile: Profile,
   injectedModel?: Model, signal?: AbortSignal, crossFamily?: CrossFamilyRung,
   crossFamilySource: CrossFamilySource = 'none', verify: VerifyOptions = {},
@@ -277,8 +278,8 @@ export async function runClaimReview(directory: string, profile: Profile,
     : splitDiff(repository, packet.mergeBaseSha, packet.headSha, packet.changedFiles.map(file => file.path), partsWithin(profile.maxUsd));
   if (unread.length && !parts.length) throw new Error(`Diff exceeds ${MAX_DIFF_BYTES / 1024} KB investigation limit`);
   // Each investigation is told what it holds and that only its own diff decides whether it is
-  // complete: told only that files were left out, the model ended every such review unfinished,
-  // and an unfinished review claims no file (pilot PR #4832, 2026-10-08: 0/780 in 28 turns).
+  // complete: told only that files were left out, the model ends such a review unfinished, and
+  // an unfinished review claims no file.
   const left = unread.length ? ` ${unread.length} changed ${unread.length === 1 ? 'file is' : 'files are'} left out of ${parts.length > 1 ? 'every part' : 'it'} and reported as not reviewed.` : '';
   const note = (index: number) => parts.length > 1
     ? ` This diff is part ${index + 1} of ${parts.length} of the change: the change is over the ${MAX_DIFF_BYTES / 1024} KB one review reads, so each part is investigated on its own and the files of the other parts are reviewed there. The source tools still read any file.${left} They are not yours to review: judge complete by the changes in this diff alone.`
@@ -349,8 +350,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   // the run and not about any claim, and because a run that emits nothing still needs to
   // leave an explanation behind. Counts and allowlisted enums only -- see ClaimTelemetry.
   // Both are written before verification, because a verification that throws must not
-  // take the claims and the spend down with it: seen 2026-09-23, when a grep overflow did
-  // exactly that on a live run.
+  // take the claims and the spend record down with it.
   persist('telemetry.json', { ...investigation.telemetry, parts: parts.length, unread: unread.length,
     unfinishedParts: results.filter(({ investigation: part }) => !part.complete || part.stopReason !== 'finished').length, stopReason: investigation.stopReason,
     complete: investigation.complete, claims: investigation.claims.length, spentUsd: investigation.spentUsd,
@@ -359,12 +359,10 @@ export async function runClaimReview(directory: string, profile: Profile,
   // The verifier is handed the claims and the revision, and nothing else. Whatever the
   // investigator believed does not travel with them.
   let rung = crossFamily;
-  // A claim whose Jev call fails is skipped, which the lifecycle reads as unsettled, and
-  // that is the honest outcome. What was not honest was saying nothing about it: seen
-  // 2026-09-21, a run asked zero questions where seven claims needed them, every claim
-  // came out inconclusive, and the report gave no hint that the rung had never answered.
-  // The count is reported and the reason is not, because provider text can carry
-  // repository content.
+  // A claim whose Jev call fails is skipped, which the lifecycle reads as unsettled. The
+  // count of such claims is reported, or a run where the rung never answered would read as
+  // one where every claim was merely inconclusive. The reason is not, because provider text
+  // can carry repository content.
   let unreached: string[] = [];
   if (!rung && crossFamilySource === 'jev' && claims.length) {
     const asked = await askJev(claims, revisions, full.toString('utf8'), { signal, verify });

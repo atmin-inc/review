@@ -31,11 +31,10 @@ interface Declaration { path: string; line: number; text: string; span: number }
 
 // A declaration is not always one line. Python and TypeScript both wrap a long parameter
 // list, and `declaration_contains` reading only the first line makes the parameter it was
-// asked about invisible: measured 2026-09-21 on Martian case-046, where
-// `IssueSyncIntegration.sync_status_outbound` declares `assignment_source` six lines below
-// `def`, so the check missed and refuted a correct claim at the strongest verdict there
-// is. Read the signature to the end of its parameter list instead, and hand the line count
-// to `bodyOf` so the two assertions stay disjoint rather than both claiming these lines.
+// asked about invisible, so the check misses and refutes a correct claim at the strongest
+// verdict there is. Read the signature to the end of its parameter list instead, and hand
+// the line count to `bodyOf` so the two assertions stay disjoint rather than both claiming
+// these lines.
 const DECLARATION_LINES = 40;
 function declarationAt(revision: Revision, path: string, line: number, first: string): { text: string; span: number } {
   const depth = (value: string) => [...value].reduce((open, ch) => open + (ch === '(' ? 1 : ch === ')' ? -1 : 0), 0);
@@ -65,9 +64,7 @@ function declaredAs(revision: Revision, symbol: string): Declarations {
 
 // A member written the way a reader would name it - `IssueSyncIntegration.should_sync` -
 // is not text that appears in the source, so the literal search finds nothing and the
-// proposition goes unsettled with a limitation nobody downstream can act on. Measured
-// 2026-09-21 on Martian case-046: all eleven limitations in one run were this, and the
-// claims they belonged to were correct.
+// proposition goes unsettled with a limitation nobody downstream can act on.
 //
 // A second global search does not resolve it either: `sync_status_outbound` alone returns
 // more matches than the search caps at, so the owner's file is never among them. The
@@ -107,10 +104,8 @@ function declarations(revision: Revision, symbol: string) {
 }
 
 // A name no file mentions has no declaration, so nothing declared under it has the
-// pattern. That is how "this function is new" is stated about the merge base, and it went
-// unsettled on every such claim: seen 2026-09-25 on pilot PR #4590, where a real Major (a
-// new catch reports plain errors as a vendor outage) was held on "createDashboardWorkbook
-// is absent at the merge base". Only the name appearing nowhere counts, not `declaresSymbol`
+// pattern. That is how "this function is new" is stated about the merge base, which
+// would otherwise never settle. Only the name appearing nowhere counts, not `declaresSymbol`
 // finding no declaration: a declaration form it does not recognise would otherwise
 // establish that a guard is absent from a body that has it. It supports absence only; a
 // name that exists nowhere more likely means the claim named the wrong symbol than that
@@ -135,9 +130,9 @@ const settle = (established: boolean, expect: Expectation = 'present'): 'hit' | 
 function bodyOf(revision: Revision, path: string, line: number, declared = 1): { text: string; capped: boolean } | null {
   const span = bodyOpens(revision, path, line, declared);
   // The signature and what follows it are read separately. Read as one range, a wrapped
-  // signature pushed the request past the 200-line read limit, the read threw, and every
-  // body check on it came back "could not be read": seen 2026-09-24 on every multi-line
-  // TypeScript declaration in pilot PR #4583, which is what Prettier makes of most of them.
+  // signature would push the request past the 200-line read limit and every body check on
+  // it would come back "could not be read", which is most TypeScript declarations once a
+  // formatter wraps them.
   const signature = revision.slice(path, line, span);
   if (signature === null) return null;
   const rest = followingLines(revision, path, line + span);
@@ -147,11 +142,9 @@ function bodyOf(revision: Revision, path: string, line: number, declared = 1): {
   let end = span;
   while (end < lines.length && (!lines[end]!.trim() || indentOf(lines[end]!) > opening)) end++;
   // The declaration line belongs to `declaration_contains`, which reads exactly that
-  // line. Including it here made the two assertions overlap on it and broke the negative
+  // line. Including it here would make the two assertions overlap and break the negative
   // form of this one: `body_contains(f, "actorId", expect: 'absent')` is how a reviewer
-  // says a parameter is accepted and never used, and the parameter list refuted it every
-  // time. Measured 2026-09-20 over 31 runs: four correct `auth_bypass` claims died on
-  // that alone, with nothing downstream able to see why.
+  // says a parameter is accepted and never used, and the parameter list would refute it.
   // A definition with nothing indented under it has no body separate from its
   // declaration, so there the line stays; dropping it would leave an empty body that
   // refutes every `expect: 'present'` check.
@@ -162,10 +155,10 @@ function bodyOf(revision: Revision, path: string, line: number, declared = 1): {
 }
 // Where the body starts. The declaration ends with its parameter list, but a return type
 // wrapped after it (`}): Promise<` ... `> {`, or `-> Dict[` ... `]:`) comes back to the
-// declaration's own indent before the body opens, and read as the body's end it left the
-// body as the return type alone: seen 2026-09-24 on pilot PR #4572, where five true
-// propositions about a function were refuted by its return type. Only a line ending
-// mid-type is followed, and only to a line at the declaration's indent that opens a body.
+// declaration's own indent before the body opens. Read as the body's end, it would leave
+// the body as the return type alone, and true propositions about the function would be
+// refuted by its return type. Only a line ending mid-type is followed, and only to a line
+// at the declaration's indent that opens a body.
 function bodyOpens(revision: Revision, path: string, line: number, span: number): number {
   const last = revision.lineAt(path, line + span - 1);
   if (last === null || !/[<|&[,]\s*$/.test(last)) return span;
@@ -213,20 +206,16 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     }
     // Every declaration, not the first one that turned up. A symbol can be defined
     // more than once — an interface and its implementation, a platform variant — and
-    // inspecting one of them is the partial inspection the 2026-09-14 audit recorded
-    // as a false-positive mechanism: a module read as far as line 180 was treated as
-    // evidence that an initialization at 218 did not exist.
+    // inspecting one of them is a known false-positive mechanism: a module read only
+    // partway is taken as evidence that something further down does not exist.
     const bodies = found.map(site => ({ site, body: bodyOf(revision, site.path, site.line, site.span) }));
     const readable = bodies.flatMap(item => item.body ? [{ site: item.site, body: item.body }] : []);
     if (!readable.length) return inconclusive(label, `the body of \`${check.symbol}\` could not be read`);
     const containing = readable.filter(item => item.body.text.includes(check.pattern));
     // A search that hit its cap did not reach every declaration, so finding nothing
     // among the ones it did reach establishes nothing either way. Without this, a
-    // common symbol name in a large repository refutes whatever is asked about it.
-    // Measured 2026-09-21 on Martian case-005: `handler` has more declarations than the
-    // search returns, the pattern the claim named sits in one the search never reached,
-    // and a true High-severity concurrency finding was refuted at high confidence with
-    // no limitation recorded. The claim's own location named the right file.
+    // common symbol name in a large repository, such as `handler`, refutes whatever is
+    // asked about it when the pattern sits in a declaration the search never reached.
     if (!containing.length && truncated) {
       return inconclusive(label, `the search truncated before it could reach every declaration of \`${check.symbol}\`, so this says nothing about the ones it did not read`);
     }
@@ -274,9 +263,8 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
     // which is a different claim and one nobody made.
     // One case does settle: the pattern is nowhere in this revision at all. Then no file
     // has it, this one included, wherever the model thought it lived. That is how "this
-    // was introduced by the change" is stated about a file the change adds, and it went
-    // unsettled on every such claim: seen 2026-09-24 on pilot PR #4590, where a real
-    // label bug was emitted in 4 of 9 runs and never shipped for this alone.
+    // was introduced by the change" is stated about a file the change adds, which would
+    // otherwise never settle.
     if (revision.slice(check.path, 1, 1) === null) {
       const anywhere = expect === 'absent' ? revision.search(check.pattern) : undefined;
       if (anywhere && !anywhere.matches.length && !anywhere.truncated) {
@@ -308,13 +296,11 @@ export function runCheck(revision: Revision, check: SymbolicCheck): CheckOutcome
 // Where a symbol check looks, so rung 3 can be shown it: in the claim's own file, the
 // declaration there whose signature or body has the pattern, else the only one there. Rung 3
 // sees a window of each file, and a body far from the claim's line is text that window never
-// holds. Seen 2026-09-25 on pilot PR #4590: grep established that the mapper's fallback sets
-// `retryAfterMs: 5000`, 700 lines below the claim in the same file, Jev was shown only the
-// claim's window and answered 0.22, and a real Major was held back as a contradicted check.
-// Another file's declaration is taken only when it is the symbol's one declaration: taking
-// the first one anywhere showed Jev an unrelated `handler` or another class's method, and on
-// 80 labelled claims 3 real ones stopped shipping (2026-09-25). A defect that crosses files,
-// new code throwing into an unchanged mapper, needs the other file.
+// holds, so rung 3 would contradict a fact grep established hundreds of lines away and hold
+// back a real finding. Another file's declaration is taken only when the check matched it or
+// it is the symbol's one declaration: taking the first one anywhere shows rung 3 an unrelated
+// `handler` or another class's method, which costs real findings. A defect that crosses
+// files, new code throwing into an unchanged handler, needs the other file.
 export function checkedSite(revision: Revision, check: SymbolicCheck, path: string): { path: string; line: number } | null {
   if (check.assertion !== 'body_contains' && check.assertion !== 'declaration_contains') return null;
   if (!searchable(check.symbol)) return null;
@@ -323,9 +309,7 @@ export function checkedSite(revision: Revision, check: SymbolicCheck, path: stri
   const has = (site: Declaration) => check.assertion === 'declaration_contains' ? site.text.includes(check.pattern)
     : bodyOf(revision, site.path, site.line, site.span)?.text.includes(check.pattern) ?? false;
   // Elsewhere, the declaration whose body the check matched is the one it read, so that is
-  // not a guess. Seen 2026-10-07 on pilot PR #4887 and #4890: two claims with every
-  // proposition established were held back because a symbol declared twice in another
-  // file was never shown to rung 3, which then contradicted the check.
+  // not a guess, even for a symbol declared more than once.
   const site = here.find(has) ?? (here.length === 1 ? here[0]
     : !here.length ? found.find(has) ?? (found.length === 1 && !truncated ? found[0] : undefined) : undefined);
   return site ? { path: site.path, line: site.line } : null;
@@ -341,8 +325,8 @@ export function definitionOf(revision: Revision, symbol: string, from: string,
   const { found: all, truncated } = declaredAs(revision, symbol);
   const found = all.filter(declaration => accept(declaration.path));
   const local = found.filter(declaration => declaration.path === from);
-  // A truncated search cannot show a declaration to be the only one: on the pilot repository the one
-  // `errorMessage` it reached was a local variable in an unrelated file.
+  // A truncated search cannot show a declaration to be the only one: the one it reached may
+  // be a local variable in an unrelated file.
   const chosen = local.length === 1 ? local[0] : !local.length && !truncated && found.length === 1 ? found[0] : undefined;
   if (!chosen) return null;
   const body = bodyOf(revision, chosen.path, chosen.line, chosen.span);

@@ -91,9 +91,9 @@ export function validateEvidence(packet: Packet, result: Result): void {
     validateFix(finding);
     checkRefs(finding.evidenceIds);
     // A change can break code it did not touch: a caller left calling a function whose
-    // contract changed. Seen live 2026-09-24, seven confirmed P1s on callers that this rule
-    // could only report as limitations, under a check that read "no issues". Such a finding
-    // anchors to the head revision, where the broken caller is; loadReview checks the line.
+    // contract changed. Requiring a changed path would demote such findings to limitations
+    // under a check that reads "no issues". They anchor to the head revision, where the
+    // broken caller is; loadReview checks the line.
     if (!inventory.has(finding.anchor.path) && finding.anchor.side !== 'head') throw new Error('A finding outside the changed paths must anchor to the head revision');
     if ((finding.priority === 'P4') !== (finding.kind === 'improvement')) throw new Error('P4 is an optional improvement; P0–P3 are defects');
     if (!finding.evidenceIds.some(id => evidence.get(id)?.anchors.some(a => a.path === finding.anchor.path && a.side === finding.anchor.side))) {
@@ -110,10 +110,9 @@ export function validateEvidence(packet: Packet, result: Result): void {
 
 export function assess(packet: Packet, result: Result, freshness: Freshness = unverified(), ci: ValidationCheck[] = []): Assessment {
   validateEvidence(packet, result);
-  // Binary files are listed as not reviewed but do not hold the scope open: the model reads
-  // text, so a PR adding an icon or a font could never be rated (Lors chose this on
-  // 2026-09-28). Lock files likewise, since 2026-10-08. A change made only of those had nothing
-  // reviewed, so it stays partial.
+  // Binary and lock files are listed as not reviewed but do not hold the scope open: the model
+  // reads source text, so a PR adding an icon or a font could otherwise never be rated. A
+  // change made only of such files had nothing reviewed, so it stays partial.
   const kinds = new Map(packet.changedFiles.map(file => [file.path, file.kind]));
   const readable = result.coverage.filter(c => kinds.get(c.path) !== 'binary' && !lockFile(c.path));
   const scope = result.status === 'not-started' ? 'unavailable'

@@ -186,10 +186,10 @@ function bareRepository(path: string, repository: string): void {
   git(path, ['remote', 'add', 'origin', `https://github.com/${repository}.git`]);
 }
 // One copy of a repository's history, kept for all its reviews, so a review downloads only the
-// commits the copy lacks (a pilot-repository copy is 164-175 MB). Git offers the server only commits a
-// ref points at, so each fetch moves a ref; commits a ref no longer reaches, as after a
-// force-push, must never be collected as garbage. The copy is built aside and renamed into
-// place, so a crash cannot leave a half-made one behind.
+// commits the copy lacks; a large repository's copy runs to hundreds of megabytes. Git offers
+// the server only commits a ref points at, so each fetch moves a ref; commits a ref no longer
+// reaches, as after a force-push, must never be collected as garbage. The copy is built aside
+// and renamed into place, so a crash cannot leave a half-made one behind.
 function sourceCache(cache: string, repository: string): string {
   if (!existsSync(cache)) {
     const building = mkdtempSync(`${cache}.building-`);
@@ -282,9 +282,7 @@ export function sourcePaths(repository: string, revision: string): string[] {
 // `within` narrows the search to one path. A file-scoped check that greps the whole
 // repository and filters afterwards cannot answer its own question: the 50-match cap is
 // reached by matches in other files, and the check returns inconclusive although the
-// answer was one grep away. Measured 2026-09-21 on Martian case-046, where
-// `file_contains(assignment_source.py, "isoformat", expect: 'absent')` could not settle
-// because `isoformat` appears throughout Sentry — which cost a correct finding.
+// answer was one grep away.
 export function searchSource(repository: string, revision: string, query: string, within?: string) {
   requireValue(shaPattern.test(revision), 'Invalid immutable revision');
   requireValue(query.length > 0 && query.length <= 200 && !/[\0\r\n]/.test(query), 'Search requires a single literal line of 1–200 characters');
@@ -292,9 +290,9 @@ export function searchSource(repository: string, revision: string, query: string
   // Native Git searches frozen blobs without a checkout, text conversion or repository scripts.
   // The shared command deadline and 16 MiB output cap also bound broad searches.
   const args = ['grep', '-I', '-n', '-z', '-F', '--no-textconv', '-e', query, revision, '--', ...(within === undefined ? [] : [within])];
-  // Before 2026-09-23 an overflow threw, and a check naming `self` or `import` in Sentry
-  // ended verification and lost every claim in the run. Keep the whole records printed
-  // before the cap and report the search as truncated, which every caller already handles.
+  // A common word in a large repository can print more than the output cap. Throwing there
+  // would end verification and lose every claim in the run, so keep the whole records
+  // printed before the cap and report the search as truncated, which every caller handles.
   let raw: Buffer, overflowed = false;
   try { raw = git(repository, args, true, true); } catch (error) {
     if (!(error instanceof OutputOverflow)) throw error;
@@ -303,7 +301,7 @@ export function searchSource(repository: string, revision: string, query: string
   }
   // Only each match's path and line number are decoded. The matched line's own text is
   // never used, and `-I` skips binary files, not Latin-1 ones: decoding it with the rest
-  // threw on the pilot repository (2026-09-24) and ended the search over one accented byte.
+  // would end the search over one accented byte.
   const matches: { path: string; line: number }[] = [];
   // Each record is path NUL line NUL text LF; the path itself may hold a newline.
   for (let start = 0; start < raw.length;) {

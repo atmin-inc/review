@@ -3,7 +3,7 @@ import { ProviderRequestError, type ProviderFailure } from './provider-error.js'
 import type { Claim } from './claim.js';
 import type { Model, ModelReply, TurnInput } from './investigation.js';
 
-// Short titles for confirmed findings, written after verification (Lors, 2026-09-24).
+// Short titles for confirmed findings, written after verification.
 // A claim's description is two or three sentences, and publishing it as the title made
 // every finding heading a paragraph. This step sees only claims that already shipped, so
 // it cannot change what is found, verified or rated: its whole effect is a heading. It

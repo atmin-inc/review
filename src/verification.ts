@@ -82,7 +82,8 @@ export async function verifyReview(directory: string, checks: LocalCheck[], sign
     if (process.platform !== 'linux') throw new Error('Isolated worker requires Linux');
     checkout(join(directory, 'source.git'), packet.headSha, workspace);
     report.checks = await run();
-    // ponytail: at most three independent patches; combined/multi-file fixes need a separate plan.
+    // At most three patches, each applied and checked on its own; a fix that needs edits
+    // in several places is not attempted here.
     for (const finding of result.findings.filter(f => f.fix).slice(0, 3)) {
       if (signal.aborted) break;
       const fix = finding.fix!, path = join(workspace, finding.anchor.path), original = readFileSync(path, 'utf8');

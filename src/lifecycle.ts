@@ -24,11 +24,10 @@ export interface Verification { chains: Chain[]; decision: Decision; limitations
 // was meant to die on rung 1 for nothing. A flag rather than a change so the two can be
 // compared over the same claims, which is the only way to say what it is worth.
 // `withhold` names the severities a confirmed claim is not shown at. P3 by default:
-// measured 2026-09-23 over the 80 blind-labelled runs, findings the emitter itself rated
-// P3 were 74% harmful, and withholding them cut harmful findings per run from 1.85 to
-// 0.96 while acceptable ones went 0.95 to 0.79 and no golden comment was lost. It is the
-// model's own rating at emission, not a later judgement of the claim, which is why it
-// separates where every after-the-fact scorer failed. See AGENTS.md.
+// in blind-labelled benchmark runs most findings the emitter itself rated P3 were noise,
+// and withholding them roughly halved harmful findings per run without losing one that
+// matched a human reviewer. It is the model's own rating at emission, not a later
+// judgement of the claim, which is why it separates where after-the-fact scoring did not.
 export interface VerifyOptions { questionRefutations?: boolean; questionConclusion?: boolean; withhold?: Priority[] }
 export const DEFAULT_WITHHOLD: Priority[] = ['P3'];
 // Every question the cross-family rung was asked and what it answered. Recording them
@@ -52,14 +51,11 @@ export interface PropositionOutcome {
 // to a helper, or be spelled another way.
 //
 // So a present miss refutes nothing: it is downgraded to unsettled and handed to a later
-// rung, which is what an unreached proposition has always meant. This began narrower,
-// for misses whose pattern is on the other side of the change (the miss IS the change;
-// measured 2026-09-20 on PR #2, body_contains(renameAccount, "ownerId") at head refuted a
-// correct auth_bypass). Replayed 2026-10-09 over the 96 refuted claims in 141 pilot-repository
-// production runs, the rule for every present miss shipped 14 more P1/P2 findings: 4
-// matching defects the authors fixed (#4883, #4887, #4890, #4899), 1 a deliberate removal
-// (#4896), 9 with no verdict. On the 15 Martian development cases it took distinct golden
-// findings from 7 to 9 and shipped findings from 37 to 44.
+// rung, which is what an unreached proposition means. The plainest case is a miss whose
+// pattern sits on the other side of the change, where the miss IS the change:
+// body_contains(renameAccount, "ownerId") at head refutes a correct auth_bypass. Replayed
+// over recorded production and benchmark reviews, applying the rule to every present miss
+// shipped more defects the authors went on to fix than it added noise.
 export function settleProposition(revisions: Revisions, item: Proposition): PropositionOutcome {
   // Resolved once, here, and carried on the outcome, so rung 1 and rung 3 cannot end up
   // asking about different sides of the change. A check that omits the side inherits the
@@ -77,12 +73,11 @@ export function settleProposition(revisions: Revisions, item: Proposition): Prop
   if (status === 'refuted' && (check.expect ?? 'present') === 'present') {
     // The miss is dropped from the evidence, not just downgraded here, because
     // `composeChain` reads any symbolic miss as a refutation and returns `refuted` at
-    // high confidence before it ever looks at the proposition records. Leaving it in let
-    // this rule be silently overruled one line later: measured 2026-09-20, two runs in
-    // ten had every proposition established, rung 3 agreeing at 0.97, and a chain
-    // verdict of `refuted` — one of them costing the run its finding. A check that ran
-    // and settled nothing belongs in `limitations`, which is where `inconclusive()` in
-    // symbolic.ts puts every other one, and the limitation carries the whole label.
+    // high confidence before it ever looks at the proposition records. Left in, it would
+    // overrule this rule one line later, refuting a chain whose every proposition record
+    // reads established. A check that ran and settled nothing belongs in `limitations`,
+    // which is where `inconclusive()` in symbolic.ts puts every other one, and the
+    // limitation carries the whole label.
     limitations.push(`${outcome.evidence[0]!.check}: a literal text that is not found does not show the property is absent, so this miss refutes nothing.`);
     return { proposition: item.proposition, revision, status: 'unsettled', evidence: [], limitations };
   }
@@ -106,11 +101,11 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
   // Except that refutation is the strongest verdict available and, by that rule, the
   // least protected one. `suspectChecks` exists to catch a check that does not mean what
   // its proposition says, and returning here means it only ever guards propositions a
-  // check ESTABLISHED. A mismatched check is just as wrong when it refutes. Measured
-  // 2026-09-20: "there is no other function or middleware that enforces ownership" was
-  // checked with referenced_outside(renameAccount, expect: 'absent'), which asks whether
-  // the function is called at all; the test file calls it, so the check missed and a
-  // correct auth_bypass died with no rung able to see the mismatch.
+  // check ESTABLISHED. A mismatched check is just as wrong when it refutes. For example,
+  // "there is no other function or middleware that enforces ownership" checked with
+  // referenced_outside(renameAccount, expect: 'absent') asks whether the function is called
+  // at all; the test file calls it, so the check misses and a correct auth_bypass dies with
+  // no rung able to see the mismatch.
   //
   // `questionRefutations` asks rung 3 before letting that happen, and is off by default
   // because it reverses the rule above and costs a call. It is narrow on purpose: only
@@ -158,10 +153,9 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
   // does not ship and the check is recorded for tightening.
   //
   // Except a check that searched the whole revision and found the pattern nowhere: it is
-  // not a proxy, so a contradiction there is the model's error. Rung 3 is asked at the
-  // merge base about a file the change adds and sees no such file. On the pilot repository, 2026-10-07
-  // to 08, that alone held back 16 claims with every proposition established: 11 of them P2,
-  // 3 matching defects the authors fixed (#4890, #4893), none matching a declined finding.
+  // not a proxy, so a contradiction there is the model's error: asked at the merge base
+  // about a file the change adds, rung 3 sees no such file and disagrees with a fact the
+  // whole-revision search established.
   const contradicted = asked.filter(item => item.status === 'established' && item.signal === 'disagrees'
     && !(item.evidence.length && item.evidence.every(one => one.exhaustive)));
   if (contradicted.length) {
@@ -185,17 +179,15 @@ export function verifyClaim(claim: Claim, revisions: Revisions, crossFamily?: Cr
       ...unsettled.map(record => `Unsettled: ${JSON.stringify(record.proposition)}`)]);
   }
 
-  // Every step holds -- and that is not the same as the claim holding. Measured
-  // 2026-09-21 over 45 runs on the Martian cases: the noisy claims and the real ones are
-  // confirmed for the same reason, because their propositions restate the diff. "It had
-  // margin-top at base" and "it does not at head" are both true, the checking pass
-  // confirms them every time, and "therefore the layout breaks" was never asked of
-  // anything. Nothing here tested the conclusion, only the premises.
+  // Every step holds -- and that is not the same as the claim holding. Noisy claims and
+  // real ones are often confirmed for the same reason: their propositions restate the
+  // diff. "It had margin-top at base" and "it does not at head" are both true, the checking
+  // pass confirms them every time, and "therefore the layout breaks" is never asked of
+  // anything. The checks above test the premises, not the conclusion.
   //
-  // So ask it. This is a different question from the ones above, which is why the three
-  // filters measured against the recorded runs could not separate the two groups: they
-  // all re-read answers already given. Rung 3 exists to answer narrow typed questions
-  // about the code, and the claim's own assertion is one.
+  // So ask it. This is a different question from the ones above, which is why filters
+  // that re-read answers already given cannot separate the two groups. Rung 3 exists to
+  // answer narrow typed questions about the code, and the claim's own assertion is one.
   //
   // The gate is agreement, not the absence of disagreement: a conclusion no rung affirms
   // is not established, and a hedged claim is exactly the one that draws a neutral
