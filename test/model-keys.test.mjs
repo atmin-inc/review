@@ -153,7 +153,9 @@ test('a model key is checked with one tool call before it is saved, and a refusa
   assert.deepEqual([seen[0].model, seen[0].tool_choice, seen[0].tools.map(tool => tool.name)], ['us.openai.gpt-6-luna', 'required', ['ok']]);
   const denied = await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'You don\'t have access to the model', code: 'access_denied' } }, { status: 403 }));
   assert.match(denied, /refused the key\. Use a Bedrock API key whose IAM policy allows bedrock:InvokeModel on the us\.openai\.gpt-6-luna inference profile and on the account's default project/);
-  assert.match(await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'bad' } }, { status: 400 })), /did not run the check call \(request, HTTP 400\)\. The key was not saved/);
-  assert.match(await checkModelKey('bedrock', key, async () => { throw new TypeError('fetch failed'); }), /could not be reached|did not run the check call/);
-  for (const message of [denied]) assert.ok(!message.includes(key));
+  const rejected = await checkModelKey('bedrock', key, async () => Response.json({ error: { message: 'bad' } }, { status: 400 }));
+  assert.match(rejected, /did not run the check call \(request, HTTP 400\)\. The key was not saved/);
+  const unreachable = await checkModelKey('bedrock', key, async () => { throw new TypeError('fetch failed'); });
+  assert.match(unreachable, /could not be reached|did not run the check call/);
+  for (const message of [denied, rejected, unreachable]) assert.ok(!message.includes(key));
 });
