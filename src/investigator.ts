@@ -153,6 +153,9 @@ export interface ClaimLimits {
   focus?: 'failure_paths' | 'contracts';
   // Waits before each retry of a failed request; its length is the number of retries.
   retryDelaysMs?: number[];
+  // How long one request may take before it is abandoned and sent again. Without it a request
+  // the provider never answers holds the whole review until the review's deadline.
+  callTimeoutMs?: number;
 }
 // Everything here is controller-owned: counts, an allowlisted finish reason, and the
 // structured `ProviderFailure`, which exists precisely because it is safe to persist.
@@ -177,7 +180,12 @@ export interface ClaimTelemetry {
   reads: { side: 'head' | 'base'; path: string; startLine: number; count: number }[];
   // Each request that was sent again, and why: an interrupted reply, or a rate limit or
   // outage with no reply. A retry that also fails leaves its reason in `failure`.
-  retries: { turn: number; reason: 'interrupted' | 'rate-limit' | 'unavailable'; status: number | null }[];
+  retries: { turn: number; reason: 'interrupted' | 'rate-limit' | 'unavailable' | 'timeout'; status: number | null }[];
+  // Where the time went: the pass from start to end, the part of it spent waiting on the
+  // model, and the longest single request, so a slow review can be root-caused afterwards.
+  wallMs: number;
+  modelMs: number;
+  slowestCallMs: number;
   // The ids of claims the failure-path pass recorded, including any the main pass also
   // recorded, so what that pass adds can be measured on its own. Combined record only.
   failurePathClaimIds?: string[];
@@ -185,12 +193,14 @@ export interface ClaimTelemetry {
   // without it. Combined record only.
   failurePathSpentUsd?: number;
   failurePathTurns?: number;
+  failurePathWallMs?: number;
   // Error-handling lines the pass was shown; 0 means it did not run.
   failurePathSites?: number;
   // The same three for the contract pass, which runs only when asked for.
   contractClaimIds?: string[];
   contractSpentUsd?: number;
   contractTurns?: number;
+  contractWallMs?: number;
 }
 export interface ClaimInvestigation {
   claims: Claim[];
@@ -207,6 +217,10 @@ export interface ClaimInvestigation {
   transcript?: unknown[];
 }
 
+// A normal request answers in about ten seconds; one that has not answered in five minutes
+// is treated as lost and sent again.
+export const DEFAULT_CALL_TIMEOUT_MS = 300_000;
+
 export async function investigateClaims(revisions: Revisions, sourceOf: (path: string) => string | null,
   context: unknown, model: Model, limits: ClaimLimits, signal: AbortSignal = new AbortController().signal): Promise<ClaimInvestigation> {
   const drafts: ClaimDraft[] = [];
@@ -215,7 +229,8 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   const calling = Array.isArray((context as { calledCode?: unknown }).calledCode);
   const outcome: ClaimInvestigation = { claims: [], complete: false, limitations: [], toolErrors: [], stopReason: null, spentUsd: 0, unsettledCalls: 0,
     telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
-      finishReason: null, failure: null, reads: [], retries: [] } };
+      finishReason: null, failure: null, reads: [], retries: [], wallMs: 0, modelMs: 0, slowestCallMs: 0 } };
+  const started = Date.now();
   const transcript: unknown[] = [...(limits.priorTranscript ?? [])];
   // Where each turn's entries begin, so the transcript can be trimmed a whole turn at a
   // time rather than mid-exchange. Kept in step with `transcript` by the splice below.
@@ -229,6 +244,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   let settled = 0;
   let reservation = 0;
   const delays = limits.retryDelaysMs ?? [10_000, 30_000];
+  const callTimeoutMs = limits.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   try {
     for (let turn = 0; turn < limits.maxTurns && !done; turn++) {
       outcome.telemetry.turns = turn + 1;
@@ -282,7 +298,7 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
       // is unknown stays charged at its reservation, so an unknown spend is never
       // mistaken for zero.
       const next = limits.costOf(inputTokens, limits.maxOutputTokens);
-      // A stream that dies, a rate limit or an outage would otherwise end the whole review
+      // A stream that dies, a request left unanswered, a rate limit or an outage would otherwise end the whole review
       // on one request, so the same request is sent again after a wait. Funding,
       // authentication and rejected requests are not retried, since sending again cannot
       // fix them.
@@ -295,16 +311,24 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
           outcome.telemetry.retries.push({ turn: turn + 1, reason, status });
           await sleep(delays[attempt]!, undefined, { signal });
         };
+        const call = AbortSignal.timeout(callTimeoutMs), sent = Date.now();
+        const timed = () => {
+          const took = Date.now() - sent;
+          outcome.telemetry.modelMs += took;
+          outcome.telemetry.slowestCallMs = Math.max(outcome.telemetry.slowestCallMs, took);
+        };
         try {
-          reply = await model.respond(input, limits.maxOutputTokens, signal);
+          reply = await model.respond(input, limits.maxOutputTokens, AbortSignal.any([signal, call]));
+          timed();
         } catch (error) {
-          const kind = error instanceof ProviderRequestError ? error.failure.kind : null;
-          if (signal.aborted || attempt >= delays.length || (kind !== 'rate-limit' && kind !== 'unavailable')) throw error;
+          timed();
+          const kind = !signal.aborted && call.aborted ? 'timeout' : error instanceof ProviderRequestError ? error.failure.kind : null;
+          if (signal.aborted || attempt >= delays.length || (kind !== 'rate-limit' && kind !== 'unavailable' && kind !== 'timeout')) throw error;
           // Sent but unanswered, so it may still be billed: its reservation stays spent.
           outcome.unsettledCalls++;
           settled += reservation;
           reservation = 0;
-          await retry(kind, (error as ProviderRequestError).failure.status);
+          await retry(kind, error instanceof ProviderRequestError ? error.failure.status : null);
           continue;
         }
         const charge = limits.charged(reply);
@@ -431,5 +455,6 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
   // verifier, not this pass, decides what they are worth.
   outcome.claims = assignClaimIds(drafts, sourceOf);
   if (recorded) outcome.transcript = recorded;
+  outcome.telemetry.wallMs = Date.now() - started;
   return outcome;
 }

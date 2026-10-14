@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Changes on `main` since 0.1.0-alpha.4 ship with the next version bump; see the git log.
+- Reviews finish sooner: the failure-path pass runs beside the main pass, and a model request
+  unanswered after 5 minutes is sent again instead of holding the review to its deadline.
 
 ## 0.1.0-alpha.4 — 2026-10-03
 

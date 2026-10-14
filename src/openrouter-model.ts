@@ -89,11 +89,13 @@ export function openRouterModel(profile: Profile, apiKey = process.env.OPENROUTE
     async respond(input, maxOutputTokens, signal) {
       traceEvent('provider.request', { model: profile.model, route, toolChoice: 'required', parallelToolCalls: 'default',
         availableTools: input.tools.map(tool => tool.name), maxOutputTokens }, 2);
-      const waitMs = Math.max(0, nextRequestAt - Date.now());
+      // The slot is taken before waiting, so passes running side by side still send 5 s apart.
+      const sendAt = Math.max(Date.now(), nextRequestAt);
+      nextRequestAt = sendAt + 5000;
+      const waitMs = sendAt - Date.now();
       traceEvent('provider.throttle', { waitMs }, 2);
       await pause(waitMs, undefined, { signal });
       signal.throwIfAborted();
-      nextRequestAt = Date.now() + 5000;
       const data = await getJson(`${root}/chat/completions`, { method: 'POST', signal,
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-OpenRouter-Title': 'atmin review' },
         body: JSON.stringify({ ...payload(input), max_tokens: maxOutputTokens }),

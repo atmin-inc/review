@@ -318,8 +318,10 @@ test('unchanged code the change calls is in the context, and what the model read
 
 // The main pass reliably misses defects on failure paths, so failure paths get a pass
 // of their own. What it records is verified with everything
-// else, and a claim both passes record counts once.
-test('the failure-path pass runs after the main pass and its claims are verified with the rest', async t => {
+// else, and a claim both passes record counts once. It runs beside the main pass, not
+// after it, because a review that waits for one pass to end before the next starts takes
+// the sum of both, and Mason's reviewers wait on that.
+test('the failure-path pass runs beside the main pass and its claims are verified with the rest', async t => {
   const fixture = repository(t);
   const end = action('end_investigation', { complete: true, limitations: [] });
   const fake = recording([[action('record_claim', TRUE_CLAIM)], end],
@@ -329,7 +331,8 @@ test('the failure-path pass runs after the main pass and its claims are verified
   const { claims, investigation, verification } = await runClaimReview(directory, profile, fake);
 
   const focused = fake.inputs.map(input => input.instructions.includes(failurePathInstruction));
-  assert.deepEqual(focused, [false, false, true, true]);
+  assert.equal(focused.filter(Boolean).length, 2);
+  assert.ok(focused.indexOf(true) < focused.lastIndexOf(false), 'the failure-path pass starts before the main pass ends');
   assert.equal(claims.length, 2);
   assert.deepEqual(verification.chains.map(chain => chain.verdict), ['confirmed', 'refuted']);
   assert.equal(investigation.complete, true);

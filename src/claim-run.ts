@@ -185,6 +185,8 @@ function combined(main: ClaimInvestigation, focus: ClaimInvestigation, pass: str
       failure: main.telemetry.failure ?? focus.telemetry.failure,
       reads: [...main.telemetry.reads, ...focus.telemetry.reads],
       retries: [...main.telemetry.retries, ...focus.telemetry.retries],
+      modelMs: main.telemetry.modelMs + focus.telemetry.modelMs,
+      slowestCallMs: Math.max(main.telemetry.slowestCallMs, focus.telemetry.slowestCallMs),
       ...own,
     },
     ...(transcript ? { transcript } : {}),
@@ -220,14 +222,20 @@ function acrossParts(parts: ClaimInvestigation[]): ClaimInvestigation {
       failure: parts.find(part => part.telemetry.failure)?.telemetry.failure ?? null,
       reads: parts.flatMap(part => part.telemetry.reads),
       retries: parts.flatMap(part => part.telemetry.retries),
+      // Parts run side by side, so the review took as long as its longest part.
+      wallMs: Math.max(...parts.map(part => part.telemetry.wallMs)),
+      modelMs: sum(part => part.telemetry.modelMs),
+      slowestCallMs: Math.max(...parts.map(part => part.telemetry.slowestCallMs)),
       failurePathClaimIds: parts.flatMap(part => part.telemetry.failurePathClaimIds ?? []),
       failurePathSpentUsd: sum(part => part.telemetry.failurePathSpentUsd),
       failurePathTurns: sum(part => part.telemetry.failurePathTurns),
       failurePathSites: sum(part => part.telemetry.failurePathSites),
+      failurePathWallMs: Math.max(...parts.map(part => part.telemetry.failurePathWallMs ?? 0)),
       ...(parts.some(part => part.telemetry.contractClaimIds) ? {
         contractClaimIds: parts.flatMap(part => part.telemetry.contractClaimIds ?? []),
         contractSpentUsd: sum(part => part.telemetry.contractSpentUsd),
         contractTurns: sum(part => part.telemetry.contractTurns),
+        contractWallMs: Math.max(...parts.map(part => part.telemetry.contractWallMs ?? 0)),
       } : {}),
     },
     ...(transcripts.every(Boolean) ? { transcript: transcripts.flatMap(transcript => transcript!) } : {}),
@@ -236,7 +244,7 @@ function acrossParts(parts: ClaimInvestigation[]): ClaimInvestigation {
 
 const idle = (): ClaimInvestigation => ({ claims: [], complete: true, limitations: [], toolErrors: [], stopReason: 'finished',
   spentUsd: 0, unsettledCalls: 0, telemetry: { turns: 0, toolCalls: 0, toolCallsByName: {}, droppedTurns: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0,
-    finishReason: null, failure: null, reads: [], retries: [] } });
+    finishReason: null, failure: null, reads: [], retries: [], wallMs: 0, modelMs: 0, slowestCallMs: 0 } });
 
 // Reservations use the rate card at its dearest; settlement uses what the call cost.
 export function charges(profile: Profile) {
@@ -309,21 +317,27 @@ export async function runClaimReview(directory: string, profile: Profile,
     const { called, omitted: uncalled } = calledCode(diff, revisions.head);
     const context = contextFor(diff, note(index), called);
     const budget = profile.maxUsd / parts.length;
-    const main = await investigateClaims(revisions, sourceOf, context, model, limits(budget), signal);
-    // A second pass on failure paths alone, within what the first left of the budget, shown
-    // only the diff around error handling; a change with none gets no second pass. See
-    // failurePathInstruction for why it is a pass of its own, failureExcerpt for the cost.
+    // A second pass on failure paths alone, shown only the diff around error handling; a
+    // change with none gets no second pass. See failurePathInstruction for why it is a pass
+    // of its own, failureExcerpt for the cost. It runs beside the first, since neither reads
+    // the other's claims, so a review takes as long as its longer pass rather than both; each
+    // gets a fixed share of the budget, the first two thirds.
     const failure = failureExcerpt(diff);
-    const failurePaths = !failure.excerpt ? idle()
-      : await investigateClaims(revisions, sourceOf, { ...context, diff: failure.excerpt }, model, { ...limits(budget - main.spentUsd), focus: 'failure_paths' }, signal);
+    const [main, failurePaths] = await Promise.all([
+      investigateClaims(revisions, sourceOf, context, model, limits(failure.excerpt ? budget * 2 / 3 : budget), signal),
+      !failure.excerpt ? idle()
+        : investigateClaims(revisions, sourceOf, { ...context, diff: failure.excerpt }, model, { ...limits(budget / 3), focus: 'failure_paths' }, signal),
+    ]);
     const both = combined(main, failurePaths, 'Failure-path pass', { failurePathClaimIds: failurePaths.claims.map(claim => claim.claimId),
-      failurePathSpentUsd: failurePaths.spentUsd, failurePathTurns: failurePaths.telemetry.turns, failurePathSites: failure.sites });
+      failurePathSpentUsd: failurePaths.spentUsd, failurePathTurns: failurePaths.telemetry.turns, failurePathSites: failure.sites,
+      failurePathWallMs: failurePaths.telemetry.wallMs, wallMs: Math.max(main.telemetry.wallMs, failurePaths.telemetry.wallMs) });
     // A third pass, only when asked for: values crossing into code the change does not
     // touch, on the whole diff, within what the first two left. See contractInstruction.
     if (!passes.contracts) return { investigation: both, uncalled };
     const contracts = await investigateClaims(revisions, sourceOf, context, model, { ...limits(budget - both.spentUsd), focus: 'contracts' }, signal);
     return { investigation: combined(both, contracts, 'Contract pass', { contractClaimIds: contracts.claims.map(claim => claim.claimId),
-      contractSpentUsd: contracts.spentUsd, contractTurns: contracts.telemetry.turns }), uncalled };
+      contractSpentUsd: contracts.spentUsd, contractTurns: contracts.telemetry.turns, contractWallMs: contracts.telemetry.wallMs,
+      wallMs: both.telemetry.wallMs + contracts.telemetry.wallMs }), uncalled };
   };
   // Nothing to read, as in a PR with no changes or a push that only moved the target
   // branch: no model is asked. Asked anyway, a model can only call the review incomplete.
@@ -364,10 +378,13 @@ export async function runClaimReview(directory: string, profile: Profile,
   // one where every claim was merely inconclusive. The reason is not, because provider text
   // can carry repository content.
   let unreached: string[] = [];
+  let crossFamilyMs = 0;
   if (!rung && crossFamilySource === 'jev' && claims.length) {
+    const started = Date.now();
     const asked = await askJev(claims, revisions, full.toString('utf8'), { signal, verify });
     rung = recordedRung(asked.log);
     unreached = [...new Set(asked.skippedClaims)];
+    crossFamilyMs = Date.now() - started;
   }
   const verification = verifyClaims(claims, revisions, BALANCED, rung, undefined, verify);
   if (unreached.length) {
@@ -375,7 +392,7 @@ export async function runClaimReview(directory: string, profile: Profile,
       ? `The cross-family rung answered nothing: all ${unreached.length} claim(s) failed to reach it, so any proposition only it could settle is unsettled.`
       : `The cross-family rung did not reach ${unreached.length} of ${claims.length} claim(s), so any proposition only it could settle is unsettled for those.`);
   }
-  persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd });
+  persist('verification.json', { ...verification, stopReason: investigation.stopReason, spentUsd: investigation.spentUsd, crossFamilyMs });
   return { claims, investigation, verification, parts: parts.length, unread, unfinished };
 }
 

@@ -68,7 +68,10 @@ A review is a **claim pipeline** over an immutable snapshot of one PR:
    through bounded tools (`read_file`, `search_repository`) and records **claims**
    (`src/claim.ts`): one falsifiable assertion about one location, with propositions
    and the checks that would test them. A second pass looks only at failure paths
-   (`src/failure-excerpt.ts`). Large diffs are reviewed in parts that share one budget.
+   (`src/failure-excerpt.ts`); it runs beside the first, on a third of the budget, so a
+   review takes as long as its longer pass. A request unanswered after 5 minutes is sent
+   again. Large diffs are reviewed in parts that share one budget. `telemetry.json` records
+   each pass's `wallMs`, `modelMs` and `slowestCallMs`; `verification.json` `crossFamilyMs`.
 3. **Verification** (`src/lifecycle.ts`, `src/evidence.ts`): each proposition is settled
    against the frozen revision by an ordered ladder of rungs, with none of the emitter's
    reasoning in scope. Rung 1 (`src/symbolic.ts`) is deterministic search over Git

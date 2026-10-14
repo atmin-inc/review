@@ -272,6 +272,32 @@ test('a dropped reply or an outage is sent again, and the review carries on', as
   assert.ok(emitted.spentUsd > 3 * LIMITS.charged({ inputTokens: 1000, outputTokens: 50 }));
 });
 
+// A request the provider never answers would otherwise hold the review until its 30-minute
+// deadline and end it with nothing; three Mason reviews on 2026-10-13/14 ran 30 minutes and
+// reported "Review incomplete". The request is abandoned after callTimeoutMs and sent again,
+// and the run record says so, along with where the time went.
+test('a request that never answers is abandoned and sent again, and the time is recorded', async t => {
+  const { revisions, sourceOf } = corpus(t);
+  const script = model([action('record_claim', GUARD_CLAIM), end()]);
+  let sent = 0;
+  const hanging = { ...script, async respond(input, maxOutputTokens, signal) {
+    // A hung request holds its socket open; the interval stands in for it, since the timeout
+    // timer alone does not keep the process alive.
+    if (++sent === 1) return new Promise((_, reject) => {
+      const socket = setInterval(() => {}, 1000);
+      signal.addEventListener('abort', () => { clearInterval(socket); reject(new ProviderRequestError('inference')); });
+    });
+    return script.respond(input);
+  } };
+  const emitted = await investigateClaims(revisions, sourceOf, {}, hanging, { ...LIMITS, callTimeoutMs: 50 });
+  assert.equal(emitted.stopReason, 'finished');
+  assert.equal(emitted.claims.length, 1);
+  assert.deepEqual(emitted.telemetry.retries, [{ turn: 1, reason: 'timeout', status: null }]);
+  assert.ok(emitted.telemetry.slowestCallMs >= 50, 'the abandoned request is the slowest');
+  assert.ok(emitted.telemetry.modelMs >= emitted.telemetry.slowestCallMs);
+  assert.ok(emitted.telemetry.wallMs >= emitted.telemetry.modelMs);
+});
+
 // Each request is reserved at the dearest listed rate, and the budget holds only while no
 // bill exceeds its reservation. Since reviews settle at what OpenRouter reports, a bill can:
 // a stale rate card or an undercounted input would then spend past the review's ceiling one
