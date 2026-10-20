@@ -21,7 +21,7 @@ const clip = (value: string, limit = 16000): string => value.length <= limit ? v
 
 export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: string; rule: string; limitations: string[];
   complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; parts?: number; unread?: string[];
-  unfinished?: string[] }
+  unfinished?: string[]; earlier?: { since: string; unchanged: string[] } }
 
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
@@ -41,11 +41,17 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   const unread = new Set(run.unread ?? []);
   const unfinished = new Set(run.unfinished ?? []);
   const read = (file: Packet['changedFiles'][number]) => file.kind === 'text' && !lockFile(file.path) && !unread.has(file.path);
-  const covered = (file: Packet['changedFiles'][number]) => read(file) && (completed
+  // A push review stands on an earlier review that covered every file (previousReview), so a
+  // file the push did not change stays reviewed even when the push review stops unfinished:
+  // only what the push changed was left unread.
+  const unchanged = new Set(run.earlier?.unchanged ?? []);
+  const covered = (file: Packet['changedFiles'][number]) => read(file) && (completed || unchanged.has(file.path)
     || (run.unfinished !== undefined && run.stopReason === 'finished' && !unfinished.has(file.path)));
   if ((run.parts ?? 1) > 1) limitations.push(`The diff is over the ${MAX_DIFF_BYTES / 1024} KB one investigation reads, so it was reviewed in ${run.parts} parts, files in path order, each investigated on its own; a defect visible only across two parts is less likely to be found.`);
   if (unread.size) limitations.push(`The diff is over the parts of ${PART_BYTES / 1024} KB this review's budget covers, or a file's own diff is over ${MAX_DIFF_BYTES / 1024} KB, so ${unread.size} changed file(s) were not read: deleted files were read first, then source files before tests, docs and generated files, smallest first, until the parts were full.`);
   if (!completed && unfinished.size) limitations.push(`${unfinished.size} changed file(s) were in parts whose investigation did not finish, so they are not counted as reviewed.`);
+  const kept = packet.changedFiles.filter(file => !completed && read(file) && unchanged.has(file.path)).length;
+  if (kept) limitations.push(`This review did not finish, so only the ${kept} changed file(s) the push did not touch count as reviewed, from the earlier review at ${run.earlier!.since.slice(0, 12)}.`);
   const text = packet.changedFiles.filter(covered);
   if (text.length) evidence.push({ id: 'change-diff', kind: 'source-reasoning', provenance: 'declared',
     summary: 'The change diff for this path was in the claim pass context; a deleted file\'s as its deletion, without its old content.',
@@ -208,6 +214,7 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
     claims: review.claims, chains: review.verification.chains, verdict: review.verification.decision.verdict,
     rule: review.verification.decision.rule, limitations, complete: review.investigation.complete,
     stopReason: review.investigation.stopReason, model: profile.model, titles: titling.titles,
-    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.` } : {}), parts: review.parts, unread: review.unread, ...(review.parts > 1 ? { unfinished: review.unfinished } : {}) }));
+    ...(scope ? { scope: `Incremental review since ${scope.since.slice(0, 12)}.`,
+      earlier: { since: scope.since, unchanged: packet.changedFiles.map(file => file.path).filter(path => !scope.changed.includes(path)) } } : {}), parts: review.parts, unread: review.unread, ...(review.parts > 1 ? { unfinished: review.unfinished } : {}) }));
   return review;
 }

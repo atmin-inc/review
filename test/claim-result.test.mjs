@@ -447,6 +447,27 @@ test('a push review builds on an earlier run whose repository copy was deleted',
   assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
 });
 
+// A push review that stops unfinished left only the pushed files unread; the files it did not
+// touch were covered by the earlier review, which previousReview accepts only when complete.
+// Without this, one unfinished push review showed a six-file change as 0 of 6 files reviewed.
+// It still is not a complete review, so it stays unrated and is not built on by the next push.
+test('a push review that does not finish keeps the earlier coverage of files the push did not touch', async t => {
+  withoutJev(t);
+  const fixture = repository(t);
+  const first = persist(fixture);
+  await runClaimReviewAsResult(first, profile, undefined, model([done()]));
+  const second = secondPush(t, fixture);
+  writeFileSync(join(second, 'previous.json'), JSON.stringify(previousReview(first)));
+  await runClaimReviewAsResult(second, profile, undefined,
+    model([action('end_investigation', { complete: false, limitations: ['The earlier version is not readable.'] })]));
+  const { packet, result } = loadReview(second);
+  assert.equal(result.status, 'partial');
+  assert.deepEqual(Object.fromEntries(result.coverage.map(c => [c.path, c.status])), { 'notes.ts': 'unreviewed', 'update.ts': 'reviewed' });
+  assert.match(result.limitations.join(' '), /only the 1 changed file\(s\) the push did not touch count as reviewed/);
+  assert.equal(assess(packet, result, current()).scope, 'partial');
+  assert.equal(previousReview(second), null);
+});
+
 // A push can fix a defect with a guard that none of the claim's recorded propositions mention,
 // so re-verifying them would confirm the fixed defect again. Here the fix
 // calls a helper instead of writing `owner !== account`, so the recorded check (that text is
