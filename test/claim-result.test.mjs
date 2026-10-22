@@ -112,6 +112,21 @@ test('two confirmed claims on one line are one finding at the higher priority', 
   assert.equal(assess(packet, result, current()).findings.filter(f => f.priority === 'P1').length, 1);
 });
 
+// The titling call can give two claims on nearby lines one title. A finding is keyed by
+// file and title (outcomes.ts), so both would post as the same finding twice.
+test('two confirmed claims with one title in one file are one finding', async t => {
+  withoutJev(t);
+  const directory = persist(repository(t));
+  await runClaimReviewAsResult(directory, profile, undefined, model([
+    [action('record_claim', claim('P2')),
+      action('record_claim', claim('P2', { location: 'update.ts:1', description: 'update() accepts any account for any owner.' }))],
+    done(), titled]));
+
+  const { result } = loadReview(directory);
+  assert.deepEqual(result.findings.map(f => [f.title, f.anchor.line]), [['Update skips the ownership check', 2]]);
+  assert.equal(result.findings[0].evidenceIds.length, 2);
+});
+
 test('a withheld minor finding is listed, not published, and a run that stops claims no coverage', async t => {
   withoutJev(t);
   const minor = persist(repository(t));

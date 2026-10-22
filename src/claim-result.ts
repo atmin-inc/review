@@ -83,10 +83,13 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     evidence.push({ id, kind: 'source-reasoning', provenance: 'declared', anchors: [anchor],
       summary: clip(`Verified at ${chain.verifierConfidence} confidence. ${established.length} of ${chain.propositions.length} proposition(s) established: `
         + established.map(item => `${item.proposition} [${item.settledBy ?? 'unsettled'}]`).join('; ')) });
-    const same = onLine.get(`${anchor.path}:${anchor.line}`);
+    const title = clip(run.titles?.[claim.claimId] ?? claim.description, 400);
+    // The same title in the same file is the same defect too: it would share one finding key
+    // (outcomes.ts), so posting both would show the reader one finding twice.
+    const same = onLine.get(`${anchor.path}:${anchor.line}`) ?? onLine.get(`${anchor.path}\0${title}`);
     if (same) { same.evidenceIds.push(id); merged++; return; }
     const finding: Finding = { id, priority: claim.severity, kind: claim.severity === 'P4' ? 'improvement' : 'defect',
-      category: CATEGORY[claim.type], title: clip(run.titles?.[claim.claimId] ?? claim.description, 400), trigger: clip(claim.suspectedCondition),
+      category: CATEGORY[claim.type], title, trigger: clip(claim.suspectedCondition),
       consequence: clip(claim.description),
       priorityReason: `Rated ${claim.severity} by the reviewer when it made the claim; type ${claim.type}.`,
       counterEvidence: clip(`Each proposition was checked against the frozen revision: ${chain.propositions
@@ -95,6 +98,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
       anchor, evidenceIds: [id] };
     findings.push(finding);
     onLine.set(`${anchor.path}:${anchor.line}`, finding);
+    onLine.set(`${anchor.path}\0${title}`, finding);
   });
   for (const item of outside) limitations.push(clip(`Confirmed, but its location does not resolve at this revision: ${item}`));
   const withheld = run.chains.filter(chain => chain.verdict === 'withheld').map(chain => byId.get(chain.claimId)?.location).filter(Boolean);
@@ -106,7 +110,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     schemaVersion: 1, headSha: packet.headSha, baseSha: packet.baseSha, policyHash: packet.policyHash,
     status: completed ? 'completed' : 'partial',
     reviewer: { name: 'atmin claim review', model: run.model, context: 'independent' },
-    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${merged ? `${merged} merged into a finding on the same line, ` : ''}${withheld.length} withheld as minor, `
+    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${merged ? `${merged} merged into a finding on the same line or with the same title, ` : ''}${withheld.length} withheld as minor, `
       + `${counts.refuted} refuted, ${counts.inconclusive} inconclusive. Policy verdict ${run.verdict} (rule ${run.rule}).`,
     coverage: packet.changedFiles.map(file => ({ path: file.path,
       status: covered(file) ? 'reviewed' : 'unreviewed', evidenceIds: covered(file) ? ['change-diff'] : [] })),
