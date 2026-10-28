@@ -53,8 +53,13 @@ function command(program: string, args: string[], cwd?: string, operation = args
       && 'stdout' in error && Buffer.isBuffer(error.stdout) && error.stdout.length === 0) return Buffer.alloc(0);
     if (allowOverflow && error && typeof error === 'object' && 'code' in error && error.code === 'ENOBUFS'
       && 'stdout' in error && Buffer.isBuffer(error.stdout)) throw new OutputOverflow(error.stdout);
-    // Child-process exceptions include arguments/output. Do not echo private data.
-    throw new Error(`${program} ${operation} failed or exceeded its time/output limit. Check access and the requested revision.`);
+    // Child-process exceptions include arguments/output. Do not echo private data. The cause
+    // is named, since a run that ran out of time otherwise reads as a git or access failure.
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code === 'ETIMEDOUT' && timeout < 120000) throw new Error(`Review deadline reached while ${program} ${operation} ran.`);
+    if (code === 'ETIMEDOUT') throw new Error(`${program} ${operation} exceeded its 120 s limit.`);
+    if (code === 'ENOBUFS') throw new Error(`${program} ${operation} output exceeded ${MAX_BYTES / 1024 / 1024} MiB.`);
+    throw new Error(`${program} ${operation} failed. Check access and the requested revision.`);
   }
 }
 export function git(repository: string, args: string[], allowNoMatch = false, allowOverflow = false): Buffer {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, renameSync, unlinkSync, symlinkSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { capture, loadReview, parsePullUrl, readPull, refPath, compareCurrent, prepare, sourceText, searchSource, changedSourceRanges } from '../dist/snapshot.js';
+import { capture, loadReview, withGitDeadline, parsePullUrl, readPull, refPath, compareCurrent, prepare, sourceText, searchSource, changedSourceRanges } from '../dist/snapshot.js';
 import { defaultPolicy } from '../dist/contracts.js';
 import { repository, completed, finding, persist } from './helpers.mjs';
 
@@ -360,4 +360,17 @@ test('repository diff attributes cannot conceal changed text from coverage', t =
   assert.match(f.run('diff', baseSha, headSha), /Binary files/);
   assert.deepEqual(changedSourceRanges(f.source, packet, packet.changedFiles[0]).map(r => [r.side, r.startLine, r.endLine]),
     [['base', 12, 18], ['head', 12, 18]]);
+});
+
+// A run that runs out of time must say so. Reported as a git failure, it sends whoever reads
+// the failure to check access and revisions instead of the review's deadline.
+test('a git command cut short by the review deadline names the deadline', t => {
+  const { root, source, state } = repository(t);
+  // A git that never answers: the first command is killed by the deadline, not refused before it.
+  mkdirSync(join(root, 'slow-bin'));
+  writeFileSync(join(root, 'slow-bin', 'git'), '#!/bin/sh\nsleep 5\n', { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${join(root, 'slow-bin')}:${path}`;
+  t.after(() => { process.env.PATH = path; });
+  assert.throws(() => withGitDeadline(300, () => capture(source, state)), /^Error: Review deadline reached while git merge-base ran/);
 });

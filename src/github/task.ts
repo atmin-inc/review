@@ -8,7 +8,7 @@ import { runClaimReviewAsResult } from '../claim-result.js';
 
 const [phase, input, output, cache] = process.argv.slice(2);
 // Failure messages this code writes about the review's input or limits (snapshot.ts, claim-run.ts).
-const ownReason = /^(Diff exceeds \d+ KB|Diff parts do not match the changed paths|Review deadline reached|Invalid inventory or more than 1000 changed paths|File exceeds the 16 MiB capture limit|PR changed during capture|Only open pull requests can be prepared|No valid common ancestor|Unsupported change type|Review JSON exceeds the 16 MiB limit|(git|gh) [a-z-]+ failed or exceeded its time\/output limit)/;
+const ownReason = /^(Diff exceeds \d+ KB|Diff parts do not match the changed paths|Review deadline reached|Invalid inventory or more than 1000 changed paths|File exceeds the 16 MiB capture limit|PR changed during capture|Only open pull requests can be prepared|No valid common ancestor|Unsupported change type|Review JSON exceeds the 16 MiB limit|(git|gh) [a-z-]+ (failed|exceeded its 120 s limit|output exceeded \d+ MiB))/;
 const abort = new AbortController();
 const parent = process.ppid;
 const parentMonitor = setInterval(() => { if (process.ppid !== parent) abort.abort(); }, 1000);
@@ -20,7 +20,9 @@ try {
   else if (phase === 'investigate') {
     // The claim pipeline: the configuration the benchmark numbers were measured on.
     await runClaimReviewAsResult(input, readProfile(output), abort.signal);
-    withGitDeadline(30_000, () => loadReview(input));
+    // Reloading re-captures every changed file, as capture does, so it gets capture's time:
+    // a 483-file change takes about 8 s on an idle machine, too close to 30 s on a busy runner.
+    withGitDeadline(120_000, () => loadReview(input));
   } else if (phase === 'verify') await verifyReview(input, JSON.parse(readFileSync(output, 'utf8')), abort.signal);
   else throw new Error('Invalid child phase');
 } catch (error) {
