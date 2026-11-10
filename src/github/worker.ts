@@ -50,12 +50,14 @@ export function ownKeyUsage(artifact: string): string {
   try {
     const calls = JSON.parse(readFileSync(join(artifact, 'receipt.json'), 'utf8')).calls;
     if (!Array.isArray(calls) || !calls.length) return '';
-    let input = 0, cached = 0, output = 0, usd = 0, unsettled = false;
+    // The cache share is over the calls that report one; a call that does not (titling) is left out of it.
+    let input = 0, cached = 0, reported = 0, output = 0, usd = 0, unsettled = false;
     for (const call of calls) {
-      input += Number(call?.inputTokens) || 0; cached += Number(call?.cachedInputTokens) || 0; output += Number(call?.outputTokens) || 0;
+      input += Number(call?.inputTokens) || 0; output += Number(call?.outputTokens) || 0;
+      if (typeof call?.cachedInputTokens === 'number') { cached += call.cachedInputTokens; reported += Number(call.inputTokens) || 0; }
       if (typeof call?.meteredUsd === 'number' && Number.isFinite(call.meteredUsd)) usd += call.meteredUsd; else unsettled = true;
     }
-    const tokens = `${count(input)} input tokens${input ? ` (${Math.round(cached / input * 100)}% cached)` : ''} and ${count(output)} output tokens`;
+    const tokens = `${count(input)} input tokens${reported ? ` (${Math.round(cached / reported * 100)}% cached)` : ''} and ${count(output)} output tokens`;
     return `This review used ${tokens}${unsettled ? '' : `, about $${usd.toFixed(3)} at Bedrock's list prices`}. `;
   } catch { return ''; }
 }

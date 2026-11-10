@@ -195,6 +195,10 @@ test('Luna direct from OpenAI is priced with its cache writes and long-prompt ra
   // 1,000 prompt tokens: 600 read from the cache, 300 written to it, 100 plain; 50 output.
   assert.ok(Math.abs(JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8')).calls.at(-1).meteredUsd
     - (100 * 0.1 + 600 * 0.01 + 300 * 0.125 + 50 * 0.5) / 1e6) < 1e-15);
+  // The receipt carries the review's cache reads, which the own-key PR comment reports; they were
+  // recorded as null on every Mason receipt, so its cache share could not be read back.
+  const { calls } = JSON.parse(readFileSync(join(paid, 'receipt.json'), 'utf8'));
+  assert.deepEqual(calls.map(call => call.cachedInputTokens), [3 * 600, null], "three review turns of 600 cached tokens; titling reports none");
   assert.ok(Math.abs(price(300_000, 1000, 100_000, 'gpt-6-luna', 50_000) - ((150_000 * 0.1 + 100_000 * 0.01 + 50_000 * 0.125) * 2 + 1000 * 0.75) / 1e6) < 1e-15);
   assert.equal(price(272_000, 0, 0, 'gpt-6-luna'), 272_000 * 0.1 / 1e6);
   // The budget reserves the dearest case, every prompt token written to the cache.

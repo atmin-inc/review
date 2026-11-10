@@ -175,8 +175,8 @@ export function claimReceipt(profile: Profile, review: ClaimReview, startedAt: s
   const { investigation } = review;
   return { schemaVersion: 1, pipeline: 'claims', profile, startedAt, finishedAt, stopReason: investigation.stopReason,
     providerFailure: investigation.telemetry.failure, toolCalls: investigation.telemetry.toolCalls, toolErrors: investigation.toolErrors,
-    calls: [{ inputTokens: investigation.telemetry.inputTokens, outputTokens: investigation.telemetry.outputTokens, cachedInputTokens: null,
-      reservedUsd: investigation.spentUsd, meteredUsd: investigation.unsettledCalls ? null : investigation.spentUsd, model: profile.model },
+    calls: [{ inputTokens: investigation.telemetry.inputTokens, outputTokens: investigation.telemetry.outputTokens,
+      cachedInputTokens: investigation.telemetry.cachedInputTokens, reservedUsd: investigation.spentUsd, meteredUsd: investigation.unsettledCalls ? null : investigation.spentUsd, model: profile.model },
     // The titling call, when one was made: metered only when its charge is known.
     ...(titling && (titling.spentUsd || titling.failure) ? [{ purpose: 'titles', inputTokens: titling.inputTokens, outputTokens: titling.outputTokens,
       cachedInputTokens: null, reservedUsd: titling.spentUsd, meteredUsd: titling.unsettled ? null : titling.spentUsd, model: profile.model }] : [])] };

@@ -1289,10 +1289,12 @@ test('an own-key review comment states its tokens and price from the receipt', a
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const write = calls => writeFileSync(join(dir, 'receipt.json'), JSON.stringify({ calls }));
   write([{ inputTokens: 1_200_000, cachedInputTokens: 1_140_000, outputTokens: 8_100, meteredUsd: 0.0251 },
-    { inputTokens: 40_000, cachedInputTokens: 0, outputTokens: 900, meteredUsd: 0.0049 }]);
-  assert.equal(ownKeyUsage(dir), 'This review used 1.2M input tokens (92% cached) and 9K output tokens, about $0.030 at Bedrock\'s list prices. ');
-  write([{ inputTokens: 5_000, cachedInputTokens: 0, outputTokens: 100, meteredUsd: null }]);
-  assert.equal(ownKeyUsage(dir), 'This review used 5K input tokens (0% cached) and 100 output tokens. ');
+    { purpose: 'titles', inputTokens: 40_000, cachedInputTokens: null, outputTokens: 900, meteredUsd: 0.0049 }]);
+  // The titling call reports no cache, so the share is over the review call alone (1.14M of 1.2M).
+  assert.equal(ownKeyUsage(dir), 'This review used 1.2M input tokens (95% cached) and 9K output tokens, about $0.030 at Bedrock\'s list prices. ');
+  write([{ inputTokens: 5_000, cachedInputTokens: null, outputTokens: 100, meteredUsd: null }]);
+  // No call reports a cache share: none is claimed, rather than a false 0%.
+  assert.equal(ownKeyUsage(dir), 'This review used 5K input tokens and 100 output tokens. ');
   writeFileSync(join(dir, 'receipt.json'), 'not json');
   assert.equal(ownKeyUsage(dir), '');
 });
