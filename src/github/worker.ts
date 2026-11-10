@@ -41,7 +41,24 @@ export interface Dispatcher {
   open(): string[];
 }
 const ranOn = (job: Job) => job.runner ? `\nRan on ${job.runner}, with the author's own subscription. atmin charged nothing for this review.\n`
-  : job.modelKey === 'bedrock' ? `\nRan on this organization's own Amazon Bedrock key. atmin charged nothing for this review.\n` : '';
+  : job.modelKey === 'bedrock' ? `\nRan on this organization's own Amazon Bedrock key. ${job.artifact ? ownKeyUsage(job.artifact) : ''}atmin charged nothing for this review.\n` : '';
+const count = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}K` : String(n);
+// What a review on the organization's own key used, from its receipt. Bedrock bills them, so
+// neither they nor we see a per-review figure otherwise. The price is atmin's estimate at the
+// receipt's rate card; a call with no settled cost leaves the price out rather than understating it.
+export function ownKeyUsage(artifact: string): string {
+  try {
+    const calls = JSON.parse(readFileSync(join(artifact, 'receipt.json'), 'utf8')).calls;
+    if (!Array.isArray(calls) || !calls.length) return '';
+    let input = 0, cached = 0, output = 0, usd = 0, unsettled = false;
+    for (const call of calls) {
+      input += Number(call?.inputTokens) || 0; cached += Number(call?.cachedInputTokens) || 0; output += Number(call?.outputTokens) || 0;
+      if (typeof call?.meteredUsd === 'number' && Number.isFinite(call.meteredUsd)) usd += call.meteredUsd; else unsettled = true;
+    }
+    const tokens = `${count(input)} input tokens${input ? ` (${Math.round(cached / input * 100)}% cached)` : ''} and ${count(output)} output tokens`;
+    return `This review used ${tokens}${unsettled ? '' : `, about $${usd.toFixed(3)} at Bedrock's list prices`}. `;
+  } catch { return ''; }
+}
 // The target branch moving on is not a change to the PR: a review is of the head against its
 // merge base, which a new target commit does not alter. On a busy target branch, comparing its
 // tip would cancel reviews mid-run.

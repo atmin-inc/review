@@ -41,7 +41,7 @@ async function harness(t, findings = []) {
     files: async () => [{ filename: 'update.ts', patch: fixture.diff.toString().slice(fixture.diff.toString().indexOf('@@')) }],
     findReview: async (_pr, head, marker) => reviews.find(r => r.head === head && r.body.startsWith(`${marker}\n`))?.id ?? null,
     createReview: async (pr, head, body, comments) => { const id = reviews.length + 1; reviews.push({ id, pr, head, body, comments }); return id; },
-    reviewComments: async () => reviews.flatMap(r => r.comments.map((c, i) => ({ id: r.id * 100 + i, reviewId: r.id, replyTo: null, human: false, body: c.body, up: 0, down: 0 }))),
+    reviewComments: async () => reviews.flatMap(r => r.comments.map((c, i) => ({ id: r.id * 100 + i, reviewId: r.id, replyTo: null, human: false, body: c.body, up: 0, down: 0, path: c.path, line: c.line }))),
     file: async (path, ref) => { const shown = spawnSync('git', ['-C', fixture.source, 'show', `${ref}:${path}`]); return shown.status === 0 ? shown.stdout.toString('utf8') : null; },
     validation: async () => [],
     findCheck: async (head, externalId) => checks.find(c => c.head === head && c.externalId === externalId)?.id ?? null,
@@ -804,7 +804,7 @@ test('a finding already posted inline on the PR is not posted again by a later r
   // A person pasting a finding's marker does not hide that finding.
   const third = { ...finding(), id: 'third', title: 'A third defect' }, listed = h.github.reviewComments;
   h.github.reviewComments = async pr => [...await listed(pr),
-    { id: 1, reviewId: null, replyTo: null, human: true, body: `<!-- atmin-finding:${findingKey(third)} -->`, up: 0, down: 0 }];
+    { id: 1, reviewId: null, replyTo: null, human: true, body: `<!-- atmin-finding:${findingKey(third)} -->`, up: 0, down: 0, path: null, line: null }];
   h.setLive({ headSha: 'b'.repeat(40) }); findings.push(third);
   h.store.enqueue('pasted', 1); await h.worker.tick();
   assert.equal(h.reviews.length, 3);
@@ -912,8 +912,8 @@ test('GitHub API reads a file at a commit, review comment reactions and whether 
   await assert.rejects(api.file('big.bin', head), /not readable through the contents API \(2000000 bytes\)/);
   for (const [path, ref] of [['../secrets', head], ['a//b', head], ['a.ts', 'main']]) await assert.rejects(api.file(path, ref), /Invalid file request/);
   assert.deepEqual(await api.reviewComments(1), [
-    { id: 5, reviewId: 3, replyTo: null, human: false, body: 'finding', up: 2, down: 0 },
-    { id: 6, reviewId: 8, replyTo: 5, human: true, body: 'reply', up: 0, down: 0 },
+    { id: 5, reviewId: 3, replyTo: null, human: false, body: 'finding', up: 2, down: 0, path: null, line: null },
+    { id: 6, reviewId: 8, replyTo: 5, human: true, body: 'reply', up: 0, down: 0, path: null, line: null },
   ]);
 });
 
@@ -1278,4 +1278,45 @@ test('/atmin accept takes a finding out of the check and summary without another
   h.store.enqueue('closed', 1); await h.worker.tick();
   assert.deepEqual(h.store.db.prepare('SELECT title, accepted FROM outcomes ORDER BY title').all().map(row => [row.title, row.accepted]),
     [['Account owner guard removed', 1], ['Failed copy leaves copied files behind', 1]]);
+});
+
+// A review on the organization's own Bedrock key is billed to them by AWS, so the PR comment is
+// the only place either side sees what one review used. An unsettled call must not show a price
+// lower than the bill; the tokens are still shown.
+test('an own-key review comment states its tokens and price from the receipt', async t => {
+  const { ownKeyUsage } = await import('../dist/github/worker.js');
+  const dir = mkdtempSync(join(tmpdir(), 'own-key-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const write = calls => writeFileSync(join(dir, 'receipt.json'), JSON.stringify({ calls }));
+  write([{ inputTokens: 1_200_000, cachedInputTokens: 1_140_000, outputTokens: 8_100, meteredUsd: 0.0251 },
+    { inputTokens: 40_000, cachedInputTokens: 0, outputTokens: 900, meteredUsd: 0.0049 }]);
+  assert.equal(ownKeyUsage(dir), 'This review used 1.2M input tokens (92% cached) and 9K output tokens, about $0.030 at Bedrock\'s list prices. ');
+  write([{ inputTokens: 5_000, cachedInputTokens: 0, outputTokens: 100, meteredUsd: null }]);
+  assert.equal(ownKeyUsage(dir), 'This review used 5K input tokens (0% cached) and 100 output tokens. ');
+  writeFileSync(join(dir, 'receipt.json'), 'not json');
+  assert.equal(ownKeyUsage(dir), '');
+});
+
+// An author who answered a finding ("by design, not changing") must not get it again on the next
+// push under a new title: authors on a large customer repository called 13 findings in one week
+// repeats of a thread they had already answered. Unanswered findings elsewhere still post.
+test('a finding a person already answered is not posted again in other words at the same place', async t => {
+  const findings = [finding()];
+  const h = await harness(t, findings);
+  h.store.enqueue('first', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 1);
+  const listed = h.github.reviewComments;
+  const answer = async pr => { const found = await listed(pr);
+    return [...found, { id: 9001, reviewId: null, replyTo: found[0].id, human: true, body: 'By design, not changing.', up: 0, down: 0, path: found[0].path, line: found[0].line }]; };
+  h.github.reviewComments = answer;
+  findings.splice(0, 1, { ...finding(), id: 'reworded', title: 'Ownership check missing before update' });
+  h.setLive({ headSha: 'a'.repeat(40) });
+  h.store.enqueue('push', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 1, 'the reworded finding at the answered place posted no new inline review');
+  // Without the reply, the same reworded finding is new to the author and is posted.
+  h.github.reviewComments = listed;
+  h.setLive({ headSha: 'b'.repeat(40) });
+  h.store.enqueue('unanswered', 1); await h.worker.tick();
+  assert.equal(h.reviews.length, 2);
+  assert.match(h.reviews[1].comments[0].body, /Ownership check missing before update/);
 });

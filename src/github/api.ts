@@ -7,7 +7,7 @@ import type { PullState } from '../snapshot.js';
 export interface LivePull extends PullState { draft: boolean; merged: boolean; author: { id: number; login: string }; }
 export interface Comment { id: number; body: string; user: { login: string; type: string }; }
 // A comment on a PR's diff, with its thumbs-up and thumbs-down counts; `human` is false for bots.
-export interface ReviewComment { id: number; reviewId: number | null; replyTo: number | null; human: boolean; body: string; up: number; down: number; }
+export interface ReviewComment { id: number; reviewId: number | null; replyTo: number | null; human: boolean; body: string; up: number; down: number; path: string | null; line: number | null; }
 export interface PullFile { filename: string; previous_filename?: string; patch?: string; }
 export interface InlineComment { path: string; line: number; side: 'LEFT' | 'RIGHT'; body: string; start_line?: number; start_side?: 'RIGHT'; }
 export interface CheckOutput { status: 'in_progress' | 'completed'; conclusion?: 'success' | 'failure' | 'cancelled'; output: { title: string; summary: string }; details_url?: string; }
@@ -175,7 +175,8 @@ export class AppGitHub implements GitHub {
         if (!Number.isSafeInteger(comment.id) || typeof comment.body !== 'string' || typeof comment.user?.type !== 'string') throw new Error('Invalid review comment');
         found.push({ id: comment.id, reviewId: Number.isSafeInteger(comment.pull_request_review_id) ? comment.pull_request_review_id : null,
           replyTo: Number.isSafeInteger(comment.in_reply_to_id) ? comment.in_reply_to_id : null, human: comment.user.type === 'User', body: comment.body,
-          up: count(comment.reactions?.['+1']), down: count(comment.reactions?.['-1']) });
+          up: count(comment.reactions?.['+1']), down: count(comment.reactions?.['-1']),
+          path: typeof comment.path === 'string' ? comment.path : null, line: count(comment.line ?? comment.original_line) || null });
       }
       if (data.length < 100) return found;
     }

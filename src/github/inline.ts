@@ -64,6 +64,7 @@ export function inlineComments(packet: Packet, findings: Finding[], files: PullF
   return comments;
 }
 
+const ANSWERED_LINES = 3;
 export class InlineReviews {
   constructor(private store: Store, private github: GitHub) {
     store.db.exec('CREATE TABLE IF NOT EXISTS inline_reviews (job TEXT PRIMARY KEY, head TEXT NOT NULL, id INTEGER)');
@@ -80,9 +81,16 @@ export class InlineReviews {
       // A finding already on the PR from an earlier review (same path and title, on any head)
       // is not posted again, since each push review would otherwise repeat it; it stays in the
       // summary. Only bot comments count, so a person cannot hide a finding by pasting its marker.
-      const posted = new Set((await this.github.reviewComments(job.pr))
-        .flatMap(comment => comment.human ? [] : markedFinding(comment.body) ?? []));
-      const comments = inlineComments(packet, findings.filter(finding => !posted.has(findingKey(finding))),
+      const listed = await this.github.reviewComments(job.pr);
+      const posted = new Set(listed.flatMap(comment => comment.human ? [] : markedFinding(comment.body) ?? []));
+      // A finding a person has already answered is settled for this PR. A later push often words
+      // the same claim differently, so it is matched by place, not title: a bot finding with a
+      // reply from a person, in the same file within ANSWERED_LINES lines. It stays in the summary.
+      const replied = new Set(listed.filter(comment => comment.human && comment.replyTo !== null).map(comment => comment.replyTo));
+      const answered = listed.filter(comment => !comment.human && replied.has(comment.id) && markedFinding(comment.body) && comment.path && comment.line);
+      const settled = (finding: Finding) => answered.some(comment => comment.path === finding.anchor.path
+        && finding.anchor.line !== null && Math.abs(comment.line! - finding.anchor.line) <= ANSWERED_LINES);
+      const comments = inlineComments(packet, findings.filter(finding => !posted.has(findingKey(finding)) && !settled(finding)),
         await this.github.files(job.pr), verification);
       if (!comments.length || !await current()) return;
       this.store.db.prepare('INSERT INTO inline_reviews(job,head) VALUES(?,?)').run(job.id, packet.headSha);
