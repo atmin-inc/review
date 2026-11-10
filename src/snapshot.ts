@@ -27,6 +27,10 @@ export interface PullState {
   baseSha: string;
   baseRef: string;
   state: 'open' | 'closed';
+  // What the author says the change is for. Reviewer context only: never part of the packet,
+  // its hash or the freshness check, so editing the description does not supersede a review.
+  title?: string;
+  body?: string;
 }
 function requireValue(condition: unknown, message: string): asserts condition {
   if (!condition) throw new ReviewInputError(message);
@@ -113,7 +117,8 @@ export function readPull(repository: string, pr: number, request: Request = api)
   requireValue(object.type === 'commit' && typeof object.sha === 'string' && shaPattern.test(object.sha), 'Cannot resolve current target commit');
   requireValue(typeof head.sha === 'string' && shaPattern.test(head.sha), 'Cannot resolve PR head');
   requireValue(pull.state === 'open' || pull.state === 'closed', 'Unknown PR state');
-  return { repository: baseRepo.full_name, pr, headSha: head.sha, baseSha: object.sha, baseRef: base.ref, state: pull.state };
+  return { repository: baseRepo.full_name, pr, headSha: head.sha, baseSha: object.sha, baseRef: base.ref, state: pull.state,
+    title: typeof pull.title === 'string' ? pull.title : '', body: typeof pull.body === 'string' ? pull.body : '' };
 }
 export function compareCurrent(packet: Packet, current: PullState): Freshness {
   const same = current.state === 'open' && current.repository.toLowerCase() === packet.repository.toLowerCase()
@@ -209,6 +214,8 @@ function sourceCache(cache: string, repository: string): string {
 }
 // With `cache`, the snapshot borrows the cached repository's objects instead of holding its
 // own; the worker runs one review at a time, so fetches into a cache never overlap.
+// A description longer than this is cut; the rest is the author's to restate in the code.
+export const MAX_DESCRIPTION_CHARS = 8000;
 export function prepare(url: string, output?: string, cache?: string): { directory: string; packet: Packet } {
   const parsed = parsePullUrl(url);
   const current = readPull(parsed.repository, parsed.pr);
@@ -236,6 +243,7 @@ export function prepare(url: string, output?: string, cache?: string): { directo
   writeFileSync(join(directory, 'change.diff'), diff, { mode: 0o600, flag: 'wx' });
   saveJson(join(directory, 'packet.json'), packet);
   saveJson(join(directory, 'result.json'), initialResult(packet));
+  saveJson(join(directory, 'pull.json'), { title: (current.title ?? '').slice(0, 300), body: (current.body ?? '').slice(0, MAX_DESCRIPTION_CHARS) });
   return { directory, packet };
 }
 function jsonFile(path: string): unknown {

@@ -237,6 +237,8 @@ test('current target ref is fetched separately from stale PR base metadata', t =
       : { object: { type: 'commit', sha: f.state.baseSha } };
   });
   assert.equal(state.baseSha, f.state.baseSha);
+  // A PR with no description reads as empty text, not a failure.
+  assert.deepEqual([state.title, state.body], ['', '']);
   // The slash separates path segments; GitHub rejects it encoded as %2F, so encoding it
   // would fail to prepare every PR targeting a branch with a slash in its name.
   assert.equal(requests[1], 'repos/test/review-fixture/git/ref/heads/release/next');

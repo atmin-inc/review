@@ -156,6 +156,40 @@ export function targetGuidance(repository: string, packet: Packet): { guidance: 
   return { guidance, omitted };
 }
 
+// The author's title and description, as captured (pull.json), and the repository files the
+// description names, read from the target branch so a change cannot add the record that excuses
+// it. A wrong finding most often argues with a choice the author already made and wrote down;
+// shown it, the reviewer can tell a deliberate choice from a slip. Runs captured without
+// pull.json (older snapshots, benchmarks) get no pullRequest and the prompt they had before.
+export const MAX_LINKED_FILES = 5;
+export const MAX_LINKED_BYTES = 16 * 1024;
+export function pullContext(directory: string, repository: string, packet: Packet): PullContext | null {
+  let pull: { title?: unknown; body?: unknown };
+  try { pull = JSON.parse(readFileSync(join(directory, 'pull.json'), 'utf8')); } catch { return null; }
+  const title = typeof pull.title === 'string' ? pull.title : '';
+  const description = typeof pull.body === 'string' ? pull.body : '';
+  if (!title && !description) return null;
+  const blob = new RegExp(`^https://github\\.com/${packet.repository.replace(/[.]/g, '\\.')}/blob/[^/]+/`, 'i');
+  const named = new Set<string>();
+  for (const token of description.match(/[\w:/.-]*[\w-]\.(?:md|mdx)\b/g) ?? []) {
+    const path = token.replace(blob, '').replace(/^\.?\//, '');
+    if (!/^https?:/.test(path) && !path.split('/').includes('..')) named.add(path);
+  }
+  const linkedFiles: { path: string; text: string }[] = [];
+  const omitted: string[] = [];
+  let bytes = 0;
+  for (const path of named) {
+    let text: string | null = null;
+    try { text = sourceText(repository, packet.baseSha, path); } catch { continue; }
+    if (text === null) continue;
+    if (linkedFiles.length >= MAX_LINKED_FILES || bytes + Buffer.byteLength(text) > MAX_LINKED_BYTES) { omitted.push(path); continue; }
+    bytes += Buffer.byteLength(text);
+    linkedFiles.push({ path, text });
+  }
+  return { pullRequest: { title, description, ...(linkedFiles.length ? { linkedFiles } : {}) }, omitted };
+}
+export interface PullContext { pullRequest: { title: string; description: string; linkedFiles?: { path: string; text: string }[] }; omitted: string[] }
+
 // Two passes as one investigation: a claim either recorded counts once, the run is
 // complete only if both were, and the focused pass's limitations say which pass they are from.
 // `own` is the focused pass's share of the telemetry, so what it adds is measured on its own.
@@ -295,8 +329,10 @@ export async function runClaimReview(directory: string, profile: Profile,
   const changed = new Set(incremental?.changed ?? []);
   const recheck = (incremental?.carried ?? []).filter(claim => touchedBy(claim, changed));
   const { guidance, omitted } = targetGuidance(repository, packet);
+  const described = pullContext(directory, repository, packet);
   const contextFor = (diff: string, part: string, called: ReturnType<typeof calledCode>['called']) => {
-    const guided = { ...(guidance.length ? { targetGuidance: guidance } : {}), ...(called.length ? { calledCode: called } : {}) };
+    const guided = { ...(guidance.length ? { targetGuidance: guidance } : {}), ...(described ? { pullRequest: described.pullRequest } : {}),
+      ...(called.length ? { calledCode: called } : {}) };
     return incremental
       ? { packet, ...guided, diff, incrementalSince: incremental.since,
         scope: `This diff holds only the commits pushed since an earlier review at ${incremental.since}. The whole change is listed in packet.changedFiles, and the earlier review's other findings are re-checked separately. Claim defects that these new commits introduce or expose; revision "base" still means the merge base.${part}`
@@ -351,6 +387,7 @@ export async function runClaimReview(directory: string, profile: Profile,
   const emitted = new Set(investigation.claims.map(claim => claim.claimId));
   const carried = (incremental?.carried ?? []).filter(claim => !emitted.has(claim.claimId) && !touchedBy(claim, changed));
   if (uncalled.length) investigation.limitations.push(`Code the change calls over ${MAX_CALLED_CODE_BYTES / 1024} KB was left out, so these definitions were not shown: ${uncalled.join(', ')}.`);
+  if (described?.omitted.length) investigation.limitations.push(`Files the description names beyond ${MAX_LINKED_FILES} or ${MAX_LINKED_BYTES / 1024} KB were not shown: ${described.omitted.join(', ')}.`);
   if (omitted.length) investigation.limitations.push(`Repository guidance over ${MAX_GUIDANCE_BYTES / 1024} KB was left out, so these rules were not shown: ${omitted.join(', ')}.`);
   if (recheck.length) investigation.limitations.push(`${recheck.length} earlier finding(s) were in files this push changed, so they were re-asked rather than carried; ${recheck.filter(claim => emitted.has(claim.claimId)).length} were recorded again.`);
   const claims = [...carried, ...investigation.claims];
