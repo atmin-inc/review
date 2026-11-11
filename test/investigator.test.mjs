@@ -459,17 +459,3 @@ test('a first turn over the window still stops the run', async t => {
   const outcome = await investigateClaims(revisions, sourceOf, {}, huge, LIMITS);
   assert.match(outcome.stopReason, /Input token count unavailable or exceeds the configured limit/);
 });
-
-// A read over 200 lines used to fail as invalid arguments, and the model spent a turn asking
-// again: 449 of the tool errors in 59 replayed Mason runs were exactly that. It now returns the
-// first 200 lines and says where to continue, so the turn reads code instead of retrying.
-test('a read asking for more than 200 lines returns 200 and says where to continue', async t => {
-  const { revisions, sourceOf } = corpus(t);
-  const reader = model([action('read_file', { side: 'head', path: 'update.ts', startLine: 1, count: 500 }), end()]);
-  const emitted = await investigateClaims(revisions, sourceOf, {}, reader, LIMITS);
-  assert.deepEqual(emitted.toolErrors, []);
-  assert.deepEqual(emitted.telemetry.reads, [{ side: 'head', path: 'update.ts', startLine: 1, count: 200 }]);
-  const shown = JSON.stringify(reader.inputs[1].transcript);
-  assert.match(shown, /export function update/);
-  assert.match(shown, /at most 200 lines; read again from startLine 201/);
-});

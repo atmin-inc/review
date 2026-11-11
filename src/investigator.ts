@@ -49,15 +49,11 @@ export const claimSchema = {
 const obj = (properties: Record<string, object>) =>
   ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 
-// A read returns at most this many lines. A larger count is read as this many, and the output
-// says where to continue: rejecting it cost Mason runs about 8 wasted turns each (449 of the
-// tool errors in 59 replayed runs were a count over 200).
-export const MAX_READ_LINES = 200;
 export const claimToolDefinitions = [
   { name: 'search_repository', description: 'Find a literal string across one immutable revision. side is head or base, where base is the merge base. Returns at most 50 paths and line numbers, with truncation indicated. Navigation only; read the matching range to see the code.',
     parameters: obj({ side, query: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\u0000\\r\\n]+$' } }) },
-  { name: 'read_file', description: `Read up to ${MAX_READ_LINES} lines of an immutable text file. side is head or base, where base is the merge base.`,
-    parameters: obj({ side, path: str, startLine: { type: 'integer', minimum: 1, maximum: 10000000 }, count: { type: 'integer', minimum: 1, maximum: 10000000 } }) },
+  { name: 'read_file', description: 'Read 1–200 lines of an immutable text file. side is head or base, where base is the merge base.',
+    parameters: obj({ side, path: str, startLine: { type: 'integer', minimum: 1, maximum: 10000000 }, count: { type: 'integer', minimum: 1, maximum: 200 } }) },
   { name: 'record_claim', description: 'Emit one falsifiable claim about one location. Claims are cheap: emit a claim you are unsure of rather than staying silent, because a later verification pass settles it against the code and a wrong claim never reaches a user. Do not decide whether the claim is true.',
     parameters: claimSchema },
   { name: 'end_investigation', description: 'End emission, alone in its response. complete=false with limitations when work is unresolved.',
@@ -389,13 +385,11 @@ export async function investigateClaims(revisions: Revisions, sourceOf: (path: s
             output = revisions[args.side].search(args.query);
           } else if (tool.name === 'read_file') {
             const args = data as { side: 'head' | 'base'; path: string; startLine: number; count: number };
-            const count = Math.min(args.count, MAX_READ_LINES);
-            const text = revisions[args.side].slice(args.path, args.startLine, count);
+            const text = revisions[args.side].slice(args.path, args.startLine, args.count);
             if (text === null) throw new ReviewInputError('Path does not exist at this revision');
-            output = { side: args.side, path: args.path, startLine: args.startLine, text,
-              ...(count < args.count ? { note: `A read returns at most ${MAX_READ_LINES} lines; read again from startLine ${args.startLine + count} for more.` } : {}) };
+            output = { side: args.side, path: args.path, startLine: args.startLine, text };
             if (Buffer.byteLength(JSON.stringify(output)) > 32000) throw new ReviewInputError('Encoded source range exceeds 32 KB; request fewer lines');
-            outcome.telemetry.reads.push({ side: args.side, path: args.path, startLine: args.startLine, count });
+            outcome.telemetry.reads.push({ side: args.side, path: args.path, startLine: args.startLine, count: args.count });
           } else if (tool.name === 'record_claim') {
             const draft = data as ClaimDraft;
             // Rule 5 of spec/claim-schema.md, enforced rather than requested. Wide
