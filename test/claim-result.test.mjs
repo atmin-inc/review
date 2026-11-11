@@ -108,7 +108,7 @@ test('two confirmed claims on one line are one finding at the higher priority', 
   const { packet, result } = loadReview(directory);
   assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.path, f.anchor.line]), [['P1', 'update.ts', 2]]);
   assert.equal(result.findings[0].evidenceIds.length, 2);
-  assert.match(result.summary, /1 confirmed and shown, 1 merged into a finding on the same line/);
+  assert.match(result.summary, /1 shown, 1 merged into a finding on the same line/);
   assert.equal(assess(packet, result, current()).findings.filter(f => f.priority === 'P1').length, 1);
 });
 
@@ -634,4 +634,24 @@ test('confirmed findings get a short title and no placeholder fix; a failed titl
   const fallback = loadReview(failed).result;
   assert.equal(fallback.findings[0].title, 'update() returns without comparing owner to account.');
   assert.match(fallback.limitations.join(' '), /titles were not written \(invalid-reply\)/);
+});
+
+// The verifier drops a claim when any one step goes unsettled, and on 20 past Mason PRs those
+// one-step-short claims held 8 defects the author later fixed that the run never showed, against
+// 1 the author declined. Such a claim is shown, at P2 at most, naming the unchecked step; one
+// with two steps unsettled is still left out, as is one any step refutes.
+test('a claim short of confirmation by one unchecked step is shown at P2, naming the step', async t => {
+  withoutJev(t);
+  const unchecked = 'No caller checks ownership before calling update().';
+  const directory = persist(repository(t));
+  await runClaimReviewAsResult(directory, profile, undefined, model([
+    [action('record_claim', claim('P1', { evidenceToCheck: [...claim('P1').evidenceToCheck, { proposition: unchecked }] })),
+      action('record_claim', claim('P1', { location: 'update.ts:1', suspectedCondition: 'Any account renames a record.',
+        evidenceToCheck: [...claim('P1').evidenceToCheck, { proposition: unchecked }, { proposition: 'No test covers it.' }] }))],
+    action('end_investigation', { complete: true, limitations: [] })]));
+  const { result } = loadReview(directory);
+  assert.deepEqual(result.findings.map(f => [f.priority, f.anchor.line]), [['P2', 2]], 'the two-step-short claim stays out');
+  assert.ok(result.findings[0].counterEvidence.startsWith(`Not verified: ${unchecked} Check this before acting`));
+  assert.match(result.findings[0].priorityReason, /Rated P1 by the reviewer, shown at P2 at most/);
+  assert.match(result.summary, /1 shown \(1 with one step not verified\)/);
 });

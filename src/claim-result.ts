@@ -23,6 +23,16 @@ export interface ClaimRunSummary { claims: Claim[]; chains: Chain[]; verdict: st
   complete: boolean; stopReason: string | null; model: string; scope?: string; titles?: Record<string, string>; parts?: number; unread?: string[];
   unfinished?: string[]; earlier?: { since: string; unchanged: string[] } }
 
+// A claim every step of which held but one the verifier could not settle either way. Replayed
+// on 20 past Mason PRs three times, these were 36 claims in 60 runs: 8 at a defect the author
+// later fixed that the run had not otherwise shown, 1 at a finding the author declined. They are
+// shown at P2 at most, saying which step was not checked, rather than dropped. A P3 or P4 one
+// stays out, as a confirmed minor one is withheld.
+export function oneStepShort(chain: Chain, claim: Claim | undefined): boolean {
+  const steps = chain.propositions ?? [];
+  return chain.verdict === 'inconclusive' && !!claim && (claim.severity === 'P0' || claim.severity === 'P1' || claim.severity === 'P2')
+    && steps.length >= 2 && steps.filter(step => step.status === 'unsettled').length === 1 && steps.every(step => step.status !== 'refuted');
+}
 export function claimResult(packet: Packet, repository: string, run: ClaimRunSummary): Result {
   const byId = new Map(run.claims.map(claim => [claim.claimId, claim]));
   const changed = new Map(packet.changedFiles.map(file => [file.path, file]));
@@ -62,12 +72,17 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
   // (the main and failure-path passes word it differently, so their claim ids differ).
   // The most severe is shown and carries the other's evidence; the summary counts the merge.
   const onLine = new Map<string, Finding>();
-  let merged = 0;
-  const confirmed = run.chains.filter(chain => chain.verdict === 'confirmed')
-    .sort((a, b) => (byId.get(a.claimId)?.severity ?? 'P4').localeCompare(byId.get(b.claimId)?.severity ?? 'P4'));
+  let merged = 0, unverified = 0;
+  // Confirmed first, so a confirmed claim on the same line is the finding the other merges into.
+  const severityOf = (chain: Chain) => byId.get(chain.claimId)?.severity ?? 'P4';
+  const confirmed = [...run.chains.filter(chain => chain.verdict === 'confirmed').sort((a, b) => severityOf(a).localeCompare(severityOf(b))),
+    ...run.chains.filter(chain => oneStepShort(chain, byId.get(chain.claimId))).sort((a, b) => severityOf(a).localeCompare(severityOf(b)))];
   confirmed.forEach((chain, index) => {
-    const claim = byId.get(chain.claimId);
-    if (!claim) return;
+    const found = byId.get(chain.claimId);
+    if (!found) return;
+    const short = chain.verdict !== 'confirmed';
+    const unchecked = short ? chain.propositions.find(item => item.status === 'unsettled')!.proposition : '';
+    const claim = short && found.severity !== 'P2' ? { ...found, severity: 'P2' as const } : found;
     let anchor: Anchor | undefined;
     try {
       const { path, line } = parseLocation(claim.location);
@@ -81,7 +96,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     const id = `claim-${index + 1}`;
     const established = chain.propositions.filter(item => item.status === 'established');
     evidence.push({ id, kind: 'source-reasoning', provenance: 'declared', anchors: [anchor],
-      summary: clip(`Verified at ${chain.verifierConfidence} confidence. ${established.length} of ${chain.propositions.length} proposition(s) established: `
+      summary: clip(`${short ? 'Not fully verified: one step could not be checked. ' : ''}Verified at ${chain.verifierConfidence} confidence. ${established.length} of ${chain.propositions.length} proposition(s) established: `
         + established.map(item => `${item.proposition} [${item.settledBy ?? 'unsettled'}]`).join('; ')) });
     const title = clip(run.titles?.[claim.claimId] ?? claim.description, 400);
     // The same title in the same file is the same defect too: it would share one finding key
@@ -91,12 +106,14 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     const finding: Finding = { id, priority: claim.severity, kind: claim.severity === 'P4' ? 'improvement' : 'defect',
       category: CATEGORY[claim.type], title, trigger: clip(claim.suspectedCondition),
       consequence: clip(claim.description),
-      priorityReason: `Rated ${claim.severity} by the reviewer when it made the claim; type ${claim.type}.`,
-      counterEvidence: clip(`Each proposition was checked against the frozen revision: ${chain.propositions
+      priorityReason: short ? `Rated ${found.severity} by the reviewer, shown at ${claim.severity} at most because one step was not verified; type ${claim.type}.`
+        : `Rated ${claim.severity} by the reviewer when it made the claim; type ${claim.type}.`,
+      counterEvidence: clip(`${short ? `Not verified: ${unchecked} Check this before acting on the finding. ` : ''}Each proposition was checked against the frozen revision: ${chain.propositions
         .map(item => `${item.proposition} (${item.status})`).join('; ')}`),
       ...(claim.shouldBe ? { suggestion: clip(claim.shouldBe.text) } : {}),
       anchor, evidenceIds: [id] };
     findings.push(finding);
+    if (short) unverified++;
     onLine.set(`${anchor.path}:${anchor.line}`, finding);
     onLine.set(`${anchor.path}\0${title}`, finding);
   });
@@ -110,7 +127,7 @@ export function claimResult(packet: Packet, repository: string, run: ClaimRunSum
     schemaVersion: 1, headSha: packet.headSha, baseSha: packet.baseSha, policyHash: packet.policyHash,
     status: completed ? 'completed' : 'partial',
     reviewer: { name: 'atmin claim review', model: run.model, context: 'independent' },
-    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} confirmed and shown, ${merged ? `${merged} merged into a finding on the same line or with the same title, ` : ''}${withheld.length} withheld as minor, `
+    summary: `${run.scope ? `${run.scope} ` : ''}Claim review: ${run.claims.length} claim(s) checked, ${findings.length + outside.length} shown${unverified ? ` (${unverified} with one step not verified)` : ''}, ${merged ? `${merged} merged into a finding on the same line or with the same title, ` : ''}${withheld.length} withheld as minor, `
       + `${counts.refuted} refuted, ${counts.inconclusive} inconclusive. Policy verdict ${run.verdict} (rule ${run.rule}).`,
     coverage: packet.changedFiles.map(file => ({ path: file.path,
       status: covered(file) ? 'reviewed' : 'unreviewed', evidenceIds: covered(file) ? ['change-diff'] : [] })),
@@ -200,8 +217,9 @@ export async function runClaimReviewAsResult(directory: string, profile: Profile
   // The claim record keeps its own name, because verification.json belongs to the local
   // fix checks the worker may run next, which would overwrite it.
   renameSync(join(directory, 'verification.json'), join(directory, 'claim-verification.json'));
-  // Titles for the confirmed findings only, from what the claim pass left of the budget.
-  const confirmed = new Set(review.verification.chains.filter(chain => chain.verdict === 'confirmed').map(chain => chain.claimId));
+  // Titles for the findings shown only, from what the claim pass left of the budget.
+  const claimsById = new Map(review.claims.map(claim => [claim.claimId, claim]));
+  const confirmed = new Set(review.verification.chains.filter(chain => chain.verdict === 'confirmed' || oneStepShort(chain, claimsById.get(chain.claimId))).map(chain => chain.claimId));
   const titling = await titleClaims(review.claims.filter(claim => confirmed.has(claim.claimId) && !earlierTitles[claim.claimId]), modelFor(profile, injectedModel),
     charges(profile).costOf, charges(profile).charged,
     profile.maxUsd - review.investigation.spentUsd, signal ? AbortSignal.any([signal, deadline]) : deadline);
