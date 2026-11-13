@@ -73,14 +73,40 @@ test('reviews of a repository share one copy of its history, and a push download
   // Keep what the next fetch receives as a pack, so it can be counted.
   assert.equal(spawnSync(remote.realGit, ['-C', cache, 'config', 'fetch.unpackLimit', '1']).status, 0);
   f.write('notes.ts', 'export const note = "added later";\n');
+  const total = () => objects(cache).count + objects(cache)['in-pack'];
+  const before = total();
   remote.push(f.commit('second push'));
   const second = prepare('https://github.com/test/review-fixture/pull/1', join(f.root, 'second'), cache);
-  assert.equal(objects(cache)['in-pack'], 3, 'the push brought one commit, one tree and one file, not the history again');
+  assert.equal(total() - before, 3, 'the push brought one commit, one tree and one file, not the history again');
   const source = join(second.directory, 'source.git');
   assert.equal(sourceText(source, second.packet.headSha, 'notes.ts'), 'export const note = "added later";\n');
   assert.equal(spawnSync(remote.realGit, ['-C', source, 'merge-base', '--is-ancestor', first.packet.headSha, second.packet.headSha]).status, 0,
     'a push review can still reach the head the earlier review saw');
   assert.equal(loadReview(second.directory).packet.baseSha, baseSha);
+});
+
+// Every fetch adds a pack and nothing else merges them, so a mason-v1 copy reached 333 packs and
+// 1.6 GB for a 696 MB repository, and the disk ran under the review floor. Merging must still
+// keep a head a force-push left behind, which a push review diffs against.
+test('a shared copy merges what each push fetched and keeps heads a force-push left behind', t => {
+  const f = repository(t);
+  const remote = fakeGitHub(t, f, { headSha: f.state.headSha, baseSha: f.state.baseSha });
+  const cache = join(f.root, 'source-cache.git');
+  const counts = () => Object.fromEntries(spawnSync(remote.realGit, ['-C', cache, 'count-objects', '-v'], { encoding: 'utf8' }).stdout
+    .trim().split('\n').map(line => line.split(': ')).map(([k, v]) => [k, Number(v)]));
+  const first = prepare('https://github.com/test/review-fixture/pull/1', join(f.root, 'review-0'), cache);
+  assert.equal(spawnSync(remote.realGit, ['-C', cache, 'config', 'fetch.unpackLimit', '1']).status, 0);
+  f.run('reset', '--hard', f.state.baseSha);
+  for (let i = 1; i <= 12; i++) {
+    f.write(`push-${i}.ts`, `export const push = ${i};\n`);
+    remote.push(f.commit(`push ${i}`));
+    prepare('https://github.com/test/review-fixture/pull/1', join(f.root, `review-${i}`), cache);
+  }
+  const after = counts();
+  assert.equal(after.count, 0, 'no loose objects stay behind');
+  assert.ok(after.packs <= 4, `12 fetches left ${after.packs} packs`);
+  assert.equal(spawnSync(remote.realGit, ['-C', cache, 'cat-file', '-e', `${first.packet.headSha}^{commit}`]).status, 0,
+    'the head before the force-push is still in the copy');
 });
 
 test('capture reads immutable objects despite a dirty checkout', t => {

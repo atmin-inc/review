@@ -224,6 +224,10 @@ export function prepare(url: string, output?: string, cache?: string): { directo
     ? [`+${current.headSha}:refs/atmin/pull/${current.pr}`, `+${current.baseSha}:refs/atmin/base`]
     : [current.headSha, current.baseSha])]);
   if (cache) {
+    // Each fetch adds a pack or loose objects and nothing else merges them (gc is off), so a
+    // copy grew to twice its repository's size. A geometric repack rolls the small packs and
+    // loose objects together while keeping every object they hold, reachable or not.
+    git(store, ['repack', '--geometric=2', '-d', '-q']);
     mkdirSync(join(source, 'objects', 'info'), { recursive: true });
     writeFileSync(join(source, 'objects', 'info', 'alternates'), `${join(store, 'objects')}\n`, { mode: 0o600 });
   }
