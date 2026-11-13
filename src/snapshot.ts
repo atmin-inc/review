@@ -154,11 +154,16 @@ export function capture(repository: string, identity: PullState): { packet: Pack
   const inventory = gitText(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', '-z', mergeBaseSha, identity.headSha, '--']).split('\0');
   requireValue(inventory.pop() === '', 'Incomplete diff inventory');
   requireValue(inventory.length % 2 === 0 && inventory.length <= 2000, 'Invalid inventory or more than 1000 changed paths');
+  // Git marks a binary file's line counts "-". Such a file is never text-reviewed, so its bytes
+  // are not read: a deleted 26 MB PDF made capture refuse a whole PR over the 16 MiB limit.
+  const numstat = gitText(repository, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', mergeBaseSha, identity.headSha, '--']).split('\0');
+  const binaries = new Set(numstat.filter(line => line.startsWith('-\t-\t')).map(line => line.slice(4)));
   const changedFiles: ChangedFile[] = [];
   for (let i = 0; i < inventory.length; i += 2) {
     const status = inventory[i]!;
     const path = inventory[i + 1]!;
     requireValue(['A', 'M', 'D', 'T'].includes(status), 'Unsupported change type');
+    if (binaries.has(path)) { changedFiles.push({ path, change: status === 'A' ? 'added' : status === 'D' ? 'deleted' : 'modified', kind: 'binary' }); continue; }
     const before = fileAt(repository, mergeBaseSha, path);
     const after = fileAt(repository, identity.headSha, path);
     requireValue(before || after, 'Changed path has no captured object');

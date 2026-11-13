@@ -197,6 +197,25 @@ test('deletions, renames, binary paths and symlinks are explicitly inventoried',
   assert.equal(byPath.link.kind, 'symlink');
 });
 
+// mason-v1#6171 only deleted a 26 MB PDF, and capture refused the whole PR at the 16 MiB read
+// limit. A binary is never text-reviewed, so its size must not matter; an oversized text file
+// still refuses, since it would otherwise pass as reviewed without being read.
+test('a binary file over the capture limit is inventoried, an oversized text file still refuses', t => {
+  const f = repository(t);
+  const big = Buffer.alloc(17 * 1024 * 1024, 1); big[0] = 0;
+  f.write('Change Order.pdf', big);
+  const baseSha = f.commit('large binary');
+  unlinkSync(join(f.source, 'Change Order.pdf'));
+  const headSha = f.commit('delete large binary');
+  const { packet } = capture(f.source, { ...f.state, baseSha, headSha });
+  const pdf = packet.changedFiles.find(v => v.path === 'Change Order.pdf');
+  assert.deepEqual([pdf.change, pdf.kind], ['deleted', 'binary']);
+
+  f.write('data.json', 'x'.repeat(17 * 1024 * 1024));
+  const textSha = f.commit('large text');
+  assert.throws(() => capture(f.source, { ...f.state, baseSha: headSha, headSha: textSha }), /16 MiB capture limit/);
+});
+
 test('filenames are literal, including newlines and pathspec syntax', t => {
   const f = repository(t);
   f.write(':(glob)*.txt', 'literal\n');
