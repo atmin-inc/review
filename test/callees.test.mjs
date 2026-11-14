@@ -48,3 +48,21 @@ test('definitions past the budget are named, not silently dropped', t => {
   assert.deepEqual(omitted, ['second']);
   assert.deepEqual(called.map(c => c.symbol), ['first', 'mapError']);
 });
+
+// A vendored bundle's calls are not the change's: the same call from a vendored copy brings
+// nothing, while from the change's own code it brings the definition. Resolving every short
+// name a bundle calls is a repository search each, and once ran a review past its deadline.
+test('calls from vendored or minified code are not resolved', t => {
+  const { called } = change(t, { head: {
+    'packages/slides/vendor/chunk.js': 'export function run(e) {\n  throw mapError(e);\n}\n',
+    'lib/viewer.min.js': 'function go(e){throw mapError(e)}\n' } });
+  assert.deepEqual(called, []);
+});
+
+// A symbol the change itself declares is shown in the diff, so it is never fetched again,
+// wherever in the added lines the declaration sits.
+test('a symbol the change declares on any added line is not fetched', t => {
+  const { called } = change(t, { head: { 'api.ts':
+    'export function run(e) {\n  throw mapError(e);\n}\nconst other = 1;\nconst mapError = (e) => e;\n' } });
+  assert.deepEqual(called, []);
+});
